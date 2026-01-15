@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kochabx/kit/transport/http/response"
+	"github.com/kochabx/kit/transport/http"
 )
 
 type AuthConfig struct {
@@ -26,7 +26,7 @@ func AuthWithConfig(config AuthConfig) gin.HandlerFunc {
 		// validate
 		result, err := config.Validate(c)
 		if err != nil {
-			response.GinJSONE(c, err)
+			http.GinJSONE(c, err)
 			return
 		}
 

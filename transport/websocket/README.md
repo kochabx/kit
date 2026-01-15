@@ -16,7 +16,7 @@
 ## 安装
 
 ```bash
-go get github.com/your-org/kit/core/net/websocket
+go get github.com/kochabx/kit/transport/websocket
 ```
 
 ## 快速开始
@@ -31,7 +31,7 @@ import (
     "log"
     "time"
     
-    "github.com/your-org/kit/core/net/websocket"
+    "github.com/kochabx/kit/transport/websocket"
 )
 
 func main() {

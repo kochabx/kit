@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/kochabx/kit/transport/http/response"
+	"github.com/kochabx/kit/transport/http"
 )
 
 type SignatureConfig struct {
@@ -27,7 +27,7 @@ func SignatureWithConfig(config SignatureConfig) gin.HandlerFunc {
 		header := c.GetHeader("Signature")
 		if header == "" {
 			log.Error().Msg("signature header is missing")
-			response.GinJSONE(c, ErrorSignature)
+			http.GinJSONE(c, ErrorSignature)
 			return
 		}
 
@@ -57,7 +57,7 @@ func SignatureWithConfig(config SignatureConfig) gin.HandlerFunc {
 			body, err := c.GetRawData()
 			if err != nil {
 				log.Error().Err(err).Msg("signature get raw data")
-				response.GinJSONE(c, ErrorSignature)
+				http.GinJSONE(c, ErrorSignature)
 				return
 			}
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
@@ -78,7 +78,7 @@ func SignatureWithConfig(config SignatureConfig) gin.HandlerFunc {
 		signature := computeHMACSHA256(config.Secret, toCompute.String())
 		if signature != header {
 			log.Error().Msg("verify signature failed")
-			response.GinJSONE(c, ErrorSignature)
+			http.GinJSONE(c, ErrorSignature)
 			return
 		}
 

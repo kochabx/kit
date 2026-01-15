@@ -10,8 +10,8 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/kochabx/kit/log"
+	httpmetrics "github.com/kochabx/kit/metrics/http"
 	"github.com/kochabx/kit/transport"
-	"github.com/kochabx/kit/transport/http/metrics"
 )
 
 var _ transport.Server = (*Server)(nil)
@@ -116,13 +116,13 @@ func additionalHandlers(s *Server) {
 func handleMetrics(s *Server, r *gin.Engine) {
 	if s.options.Metrics.Enabled {
 		if s.options.Metrics.EnabledGoCollector {
-			metrics.Prom.WithGoCollectorRuntimeMetrics()
+			httpmetrics.Prom.WithGoCollectorRuntimeMetrics()
 		}
 		if s.options.Metrics.EnabledBuildInfoCollector {
-			metrics.Prom.WithBuildInfoCollector()
+			httpmetrics.Prom.WithBuildInfoCollector()
 		}
 
-		r.GET(s.options.Metrics.Path, gin.WrapH(promhttp.HandlerFor(metrics.Prom.Registry(), promhttp.HandlerOpts{
+		r.GET(s.options.Metrics.Path, gin.WrapH(promhttp.HandlerFor(httpmetrics.Prom.Registry(), promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
 		})))
 	}
