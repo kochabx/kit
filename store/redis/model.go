@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kochabx/kit/core/stag"
+	"github.com/kochabx/kit/core/tag"
 )
 
 // ClientType Redis 客户端类型
@@ -57,7 +57,7 @@ func (c *SingleConfig) ClientType() ClientType {
 }
 
 func (c *SingleConfig) Init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *SingleConfig) GetPoolSize() int {
@@ -116,7 +116,7 @@ func (c *ClusterConfig) ClientType() ClientType {
 }
 
 func (c *ClusterConfig) Init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *ClusterConfig) GetPoolSize() int {

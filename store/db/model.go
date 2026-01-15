@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kochabx/kit/core/stag"
+	"github.com/kochabx/kit/core/tag"
 )
 
 // 数据库驱动类型
@@ -81,7 +81,7 @@ func (c *MysqlConfig) Driver() Driver {
 }
 
 func (c *MysqlConfig) Init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *MysqlConfig) Dsn() string {
@@ -140,7 +140,7 @@ func (c *PostgresConfig) Driver() Driver {
 }
 
 func (c *PostgresConfig) Init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *PostgresConfig) Dsn() string {
@@ -194,7 +194,7 @@ func (c *SQLiteConfig) Driver() Driver {
 }
 
 func (c *SQLiteConfig) Init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *SQLiteConfig) Dsn() string {

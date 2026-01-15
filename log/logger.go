@@ -8,7 +8,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/pkgerrors"
 
-	"github.com/kochabx/kit/core/stag"
+	"github.com/kochabx/kit/core/tag"
 	"github.com/kochabx/kit/log/desensitize"
 	"github.com/kochabx/kit/log/writer"
 )
@@ -79,7 +79,7 @@ func New(opts ...Option) *Logger {
 // NewFile 创建文件输出的 Logger
 func NewFile(c FileConfig, opts ...Option) (*Logger, error) {
 	// 应用默认配置
-	if err := stag.ApplyDefaults(&c); err != nil {
+	if err := tag.ApplyDefaults(&c); err != nil {
 		return nil, fmt.Errorf("failed to apply defaults: %w", err)
 	}
 
@@ -102,7 +102,7 @@ func NewFile(c FileConfig, opts ...Option) (*Logger, error) {
 // NewMulti 创建同时输出到文件和控制台的 Logger
 func NewMulti(c FileConfig, opts ...Option) (*Logger, error) {
 	// 应用默认配置
-	if err := stag.ApplyDefaults(&c); err != nil {
+	if err := tag.ApplyDefaults(&c); err != nil {
 		return nil, fmt.Errorf("failed to apply defaults: %w", err)
 	}
 

@@ -9,10 +9,10 @@ import (
 
 // RotateConfig 日志轮转配置
 type RotateConfig struct {
-	Mode       RotateMode
-	Filepath   string
-	Filename   string
-	FileExt    string
+	Mode             RotateMode
+	Filepath         string
+	Filename         string
+	FileExt          string
 	TimeRotateConfig TimeRotateConfig
 	SizeRotateConfig SizeRotateConfig
 }

@@ -2,7 +2,7 @@ package jwt
 
 import (
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/kochabx/kit/core/stag"
+	"github.com/kochabx/kit/core/tag"
 )
 
 // Config holds JWT configuration
@@ -19,7 +19,7 @@ type Config struct {
 }
 
 func (c *Config) init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *Config) signingMethod() jwt.SigningMethod {

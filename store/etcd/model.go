@@ -1,6 +1,6 @@
 package etcd
 
-import "github.com/kochabx/kit/core/stag"
+import "github.com/kochabx/kit/core/tag"
 
 // Config ETCD 配置
 type Config struct {
@@ -18,5 +18,5 @@ type Config struct {
 }
 
 func (c *Config) init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }

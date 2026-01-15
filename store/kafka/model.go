@@ -3,7 +3,7 @@ package kafka
 import (
 	"github.com/segmentio/kafka-go"
 
-	"github.com/kochabx/kit/core/stag"
+	"github.com/kochabx/kit/core/tag"
 )
 
 type Balancer int
@@ -27,7 +27,7 @@ type Config struct {
 }
 
 func (c *Config) init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }
 
 func (c *Config) balancer() kafka.Balancer {

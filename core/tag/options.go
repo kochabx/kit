@@ -1,4 +1,4 @@
-package stag
+package tag
 
 import "reflect"
 

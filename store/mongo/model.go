@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/kochabx/kit/core/stag"
+	"github.com/kochabx/kit/core/tag"
 )
 
 // Config MongoDB 配置结构体
@@ -43,5 +43,5 @@ func (c *Config) uri() string {
 
 // init 初始化配置，设置默认值
 func (c *Config) init() error {
-	return stag.ApplyDefaults(c)
+	return tag.ApplyDefaults(c)
 }

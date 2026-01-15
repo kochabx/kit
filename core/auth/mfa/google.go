@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kochabx/kit/core/util"
+	"github.com/kochabx/kit/core/util/qrcode"
 )
 
 const (
@@ -245,7 +245,7 @@ func (ga *GoogleAuthenticator) GenerateQRCode(label, issuer, secret string) (str
 	}
 
 	qrData := ga.generateQRData(label, issuer, secret)
-	qrCode, err := util.QRCode(qrData, ga.QrCodeSize)
+	qrCode, err := qrcode.Generate(qrData, ga.QrCodeSize)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrQRCodeGeneration, err)
 	}

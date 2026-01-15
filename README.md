@@ -1,26 +1,57 @@
-# Kit - Go微服务工具包
+# Kit - 企业级 Go 微服务工具包
 
-Kit是一个功能丰富的Go语言微服务工具包，提供了构建生产级微服务所需的各种组件和工具。
+[![Go Version](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kochabx/kit)](https://goreportcard.com/report/github.com/kochabx/kit)
 
-## 项目特性
+**Kit** 是一个功能完备、生产就绪的 Go 微服务工具包，提供了构建现代化分布式系统所需的全套基础组件。采用模块化设计，遵循 Go 最佳实践，助力快速构建高性能、高可靠的企业级应用。
 
-- 🚀 **应用框架**: 优雅的服务生命周期管理，支持多服务器运行和优雅关闭
-- 🏗️ **IoC容器**: 轻量级依赖注入，支持多命名空间和生命周期管理
-- ⚙️ **配置管理**: 基于Viper，支持热加载、环境变量覆盖和配置验证
-- 🔐 **认证授权**: JWT、MFA多因子认证支持
-- 🔒 **加密算法**: ECIES、HMAC等加密工具
-- 📊 **监控指标**: Prometheus集成，完整的可观测性支持
-- 🗄️ **存储支持**: GORM、Redis、MongoDB、Etcd、Kafka
-- ⚡ **限流器**: 令牌桶、滑动窗口算法
-- 🌐 **HTTP/gRPC**: 基于Gin的HTTP服务器和gRPC支持
-- 🔌 **WebSocket**: 功能丰富的WebSocket客户端，支持自动重连和心跳
-- 📝 **日志系统**: 结构化日志与脱敏功能
-- 🔍 **参数验证**: 通用验证器支持
-- 🎯 **任务调度**: 基于Redis的分布式任务调度器，支持Cron任务、延迟任务
-- 📦 **对象存储**: MinIO客户端，支持分片上传和断点续传
-- 🛠️ **工具集**: 上下文工具、类型转换、标签解析等实用工具
+## ✨ 核心特性
 
-## 快速开始
+### 🏗️ 应用框架层
+- **[App](app/)** - 优雅的应用生命周期管理，支持多服务器运行、信号处理和优雅关闭
+- **[IoC](ioc/)** - 轻量级类型安全的依赖注入容器，支持多命名空间和生命周期管理
+- **[Config](config/)** - 基于 Viper 的智能配置管理，支持热加载、环境变量覆盖和结构验证
+
+### 🔐 安全认证
+- **[JWT](core/auth/jwt/)** - 完整的 JWT 认证方案，支持 Token 刷新、JTI 管理和 Redis 缓存
+- **[MFA](core/auth/mfa/)** - Google Authenticator TOTP 多因子认证
+- **[ECIES](core/crypto/ecies/)** - 基于椭圆曲线的集成加密方案（P-256 + AES-256-GCM）
+- **[HMAC](core/crypto/hmac/)** - 消息认证码，用于签名验证和数据完整性校验
+
+### 🗄️ 数据存储
+- **[GORM](store/db/)** - 支持 MySQL/PostgreSQL/SQLite 的 ORM 封装，含连接池管理
+- **[Redis](store/redis/)** - 单机和集群模式支持，优化的连接池配置
+- **[MongoDB](store/mongo/)** - MongoDB 客户端封装
+- **[Etcd](store/etcd/)** - 分布式配置和服务发现
+- **[Kafka](store/kafka/)** - 消息队列生产者/消费者
+
+### 🌐 网络传输
+- **[HTTP Server](transport/http/)** - 基于 Gin 的高性能 HTTP 服务器，集成 Swagger、Prometheus、健康检查
+- **[gRPC Server](transport/grpc/)** - gRPC 服务器封装
+- **[WebSocket](transport/websocket/)** - 功能完备的 WebSocket 客户端：自动重连、心跳检测、消息队列
+- **[HTTP Client](core/httpclient/)** - 优化的 HTTP 客户端，含对象池和自动内容协商
+
+### 🎯 分布式特性
+- **[Scheduler](core/scheduler/)** - 基于 Redis Stream 的分布式任务调度系统
+  - 延迟任务、Cron 周期任务、优先级队列
+  - 分布式锁、故障转移、死信队列
+  - 完全类型安全的泛型 API
+- **[Rate Limiter](core/rate/)** - 高性能限流器（令牌桶、滑动窗口算法）
+- **[OSS](core/oss/minio/)** - MinIO 对象存储客户端，支持分片上传和断点续传
+
+### 📊 可观测性
+- **[Logger](log/)** - 基于 Zerolog 的高性能日志库，支持数据脱敏和日志轮转
+- **[Metrics](metrics/)** - Prometheus 指标采集（HTTP/gRPC 中间件集成）
+- **[Middleware](middleware/)** - 丰富的 HTTP/gRPC 中间件：认证、日志、限流、恢复、CORS 等
+
+### 🛠️ 核心工具
+- **[Validator](core/validator/)** - 基于 validator.v10 的多语言验证器（支持中英文）
+- **[Errors](errors/)** - 结构化错误处理，支持错误链和元数据
+- **[Tag Parser](core/tag/)** - 智能结构体标签解析器，支持默认值注入
+- **[Utilities](core/util/)** - 上下文工具、类型转换、ID 生成、二维码、树形结构等
+
+## 🚀 快速开始
 
 ### 安装
 
@@ -28,11 +59,36 @@ Kit是一个功能丰富的Go语言微服务工具包，提供了构建生产级
 go get github.com/kochabx/kit
 ```
 
-### App模块 - 创建和管理服务
+### 最小化示例 - 创建 HTTP 服务
 
-App模块是Kit工具包的核心，提供了完整的应用生命周期管理，支持多服务器运行、优雅关闭和资源清理。
+```go
+package main
 
-#### 基本使用
+import (
+    "github.com/gin-gonic/gin"
+    "github.com/kochabx/kit/app"
+    "github.com/kochabx/kit/transport/http"
+)
+
+func main() {
+    // 创建 Gin 路由
+    engine := gin.Default()
+    engine.GET("/ping", func(c *gin.Context) {
+        c.JSON(200, gin.H{"message": "pong"})
+    })
+
+    // 创建应用并启动
+    application := app.New(
+        app.WithServer(http.NewServer(":8080", engine)),
+    )
+
+    if err := application.Start(); err != nil {
+        panic(err)
+    }
+}
+```
+
+### 完整示例 - 生产级应用
 
 ```go
 package main
@@ -43,268 +99,363 @@ import (
 
     "github.com/gin-gonic/gin"
     "github.com/kochabx/kit/app"
+    "github.com/kochabx/kit/config"
+    "github.com/kochabx/kit/ioc"
+    "github.com/kochabx/kit/log"
+    "github.com/kochabx/kit/store/db"
+    "github.com/kochabx/kit/store/redis"
     "github.com/kochabx/kit/transport/http"
 )
 
 func main() {
-    // 创建Gin引擎
+    // 1. 初始化配置
+    cfg := &Config{}
+    if err := config.New(cfg).Load(); err != nil {
+        panic(err)
+    }
+
+    // 2. 初始化日志
+    logger := log.New()
+    log.SetGlobal(logger)
+
+    // 3. 创建 IoC 容器
+    container := ioc.NewApplicationContainer()
+
+    // 4. 初始化数据库
+    gormDB, err := db.NewGorm(&db.MySQLConfig{
+        Host:     cfg.DB.Host,
+        Port:     cfg.DB.Port,
+        User:     cfg.DB.User,
+        Password: cfg.DB.Password,
+        Database: cfg.DB.Database,
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    // 5. 初始化 Redis
+    rdb, err := redis.NewClient(&redis.SingleConfig{
+        Host:     cfg.Redis.Host,
+        Port:     cfg.Redis.Port,
+        Password: cfg.Redis.Password,
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    // 6. 创建 HTTP 服务器
     engine := gin.New()
+    engine.Use(gin.Recovery())
+    
+    // 注册路由
     engine.GET("/health", func(c *gin.Context) {
         c.JSON(200, gin.H{"status": "ok"})
     })
 
-    // 创建HTTP服务器
     httpServer := http.NewServer(":8080", engine)
 
-    // 创建应用实例
+    // 7. 创建应用并配置资源清理
     application := app.New(
         app.WithServer(httpServer),
         app.WithShutdownTimeout(30*time.Second),
-    )
-
-    // 启动应用
-    if err := application.Start(); err != nil {
-        panic(err)
-    }
-}
-```
-
-#### 高级配置
-
-```go
-package main
-
-import (
-    "context"
-    "database/sql"
-    "time"
-
-    "github.com/gin-gonic/gin"
-    "github.com/kochabx/kit/app"
-    "github.com/kochabx/kit/transport/http"
-)
-
-func main() {
-    // 创建多个服务
-    adminEngine := gin.New()
-    adminEngine.GET("/admin/health", func(c *gin.Context) {
-        c.JSON(200, gin.H{"service": "admin"})
-    })
-    adminServer := http.NewServer(":8081", adminEngine)
-
-    apiEngine := gin.New()
-    apiEngine.GET("/api/v1/health", func(c *gin.Context) {
-        c.JSON(200, gin.H{"service": "api"})
-    })
-    apiServer := http.NewServer(":8080", apiEngine)
-
-    // 模拟数据库连接
-    var db *sql.DB // 实际项目中需要初始化
-
-    // 创建应用实例，支持多服务器和资源清理
-    application := app.New(
-        // 添加多个服务器
-        app.WithServers(adminServer, apiServer),
-        
-        // 设置自定义上下文
-        app.WithContext(context.Background()),
-        
-        // 配置关闭超时
-        app.WithShutdownTimeout(30*time.Second),
-        app.WithCloseTimeout(10*time.Second),
-        
-        // 添加资源清理函数
         app.WithClose("database", func(ctx context.Context) error {
-            if db != nil {
-                return db.Close()
-            }
-            return nil
+            return gormDB.Close()
         }, 5*time.Second),
-        
-        app.WithClose("cache", func(ctx context.Context) error {
-            // 清理缓存逻辑
-            return nil
+        app.WithClose("redis", func(ctx context.Context) error {
+            return rdb.Close()
         }, 3*time.Second),
     )
 
-    // 运行时添加服务器
-    metricsEngine := gin.New()
-    metricsEngine.GET("/metrics", func(c *gin.Context) {
-        c.String(200, "metrics data")
-    })
-    metricsServer := http.NewServer(":9090", metricsEngine)
-    
-    if err := application.AddServer(metricsServer); err != nil {
-        panic(err)
-    }
-
-    // 运行时添加清理函数
-    if err := application.RegisterClose("metrics", func(ctx context.Context) error {
-        // 清理指标收集器
-        return nil
-    }, 2*time.Second); err != nil {
-        panic(err)
-    }
-
-    // 启动应用
+    // 8. 启动应用
+    log.Info().Msg("Starting application...")
     if err := application.Start(); err != nil {
-        panic(err)
+        log.Fatal().Err(err).Msg("Failed to start application")
     }
 }
-```
 
-#### App模块特性
-
-- **多服务器支持**: 同时运行多个HTTP/gRPC服务器
-- **优雅关闭**: 接收系统信号自动优雅关闭所有服务
-- **资源清理**: 支持注册清理函数，确保资源正确释放
-- **超时控制**: 可配置服务关闭和清理函数的超时时间
-- **并发安全**: 线程安全的服务器和清理函数管理
-- **错误处理**: 完整的错误处理和日志记录
-
-#### 配置选项
-
-| 选项 | 说明 | 默认值 |
-|------|------|--------|
-| `WithContext` | 设置应用根上下文 | `context.Background()` |
-| `WithServer` | 添加单个服务器 | - |
-| `WithServers` | 添加多个服务器 | - |
-| `WithShutdownTimeout` | 设置服务关闭超时时间 | `30s` |
-| `WithCloseTimeout` | 设置清理函数默认超时时间 | `10s` |
-| `WithSignals` | 设置自定义关闭信号 | `SIGINT, SIGTERM, SIGQUIT` |
-| `WithClose` | 添加资源清理函数 | - |
-
-#### 运行时管理
-
-```go
-// 获取应用信息
-info := application.Info()
-fmt.Printf("服务器数量: %d\n", info.ServerCount)
-fmt.Printf("清理函数数量: %d\n", info.CleanupCount)
-fmt.Printf("是否已启动: %t\n", info.Started)
-
-// 手动停止应用
-application.Stop()
-```
-
-### 其他模块示例
-
-#### 分布式任务调度器
-
-```go
-import "github.com/kochabx/kit/core/scheduler"
-
-// 创建调度器
-s, err := scheduler.New(
-    scheduler.WithRedisAddr("localhost:6379"),
-    scheduler.WithNamespace("myapp"),
-    scheduler.WithWorkerCount(10),
-)
-
-// 注册任务处理器
-type EmailPayload struct {
-    To      string `json:"to"`
-    Subject string `json:"subject"`
+type Config struct {
+    DB struct {
+        Host     string `json:"host" default:"localhost"`
+        Port     int    `json:"port" default:"3306"`
+        User     string `json:"user" default:"root"`
+        Password string `json:"password"`
+        Database string `json:"database" default:"mydb"`
+    } `json:"db"`
+    Redis struct {
+        Host     string `json:"host" default:"localhost"`
+        Port     int    `json:"port" default:"6379"`
+        Password string `json:"password"`
+    } `json:"redis"`
 }
-
-s.RegisterHandler("send_email", scheduler.HandlerFunc[EmailPayload](
-    func(ctx context.Context, task *scheduler.Task[EmailPayload]) error {
-        // 处理邮件发送
-        return nil
-    },
-))
-
-// 提交任务
-s.Submit(ctx, "send_email", EmailPayload{
-    To:      "user@example.com",
-    Subject: "Hello",
-}, scheduler.WithPriority(scheduler.PriorityHigh))
-
-// 提交Cron任务
-s.SubmitCron(ctx, "daily_report", "0 0 * * *", ReportPayload{})
 ```
 
-#### IoC容器
+## 📖 详细文档
 
-```go
-import "github.com/kochabx/kit/ioc"
+### 核心模块
 
-// 创建应用容器
-container := ioc.NewApplicationContainer()
+#### 1. 应用框架
 
-// 注册组件
-container.RegisterConfig(&MyConfigComponent{})
-container.RegisterDatabase(&MyDatabaseComponent{})
+- **[App 模块](app/)** - 应用生命周期管理
+  - 多服务器并发运行
+  - 优雅关闭和资源清理
+  - 信号处理和超时控制
 
-// 初始化
-ctx := context.Background()
-container.Initialize(ctx)
+- **[IoC 容器](ioc/)** - 依赖注入容器 ([查看文档](ioc/README.md))
+  - 类型安全的组件注册
+  - 多命名空间管理
+  - 自动依赖注入和初始化
+  - 健康检查和度量
 
-// 获取组件
-config := container.GetConfig("myConfig")
-db := container.GetDatabase("myDatabase")
+- **[Config 配置](config/)** - 配置管理 ([查看文档](config/README.md))
+  - 支持 YAML/JSON/TOML
+  - 环境变量自动覆盖
+  - 热加载和验证
+  - 默认值和类型安全
+
+#### 2. 网络与传输
+
+- **[HTTP Server](transport/http/)** - HTTP 服务器
+  - 基于 Gin 框架
+  - 集成 Swagger 文档
+  - Prometheus 指标采集
+  - 健康检查端点
+
+- **[gRPC Server](transport/grpc/)** - gRPC 服务器
+  - 协议缓冲区支持
+  - 流式 RPC
+  - 拦截器链
+
+- **[WebSocket Client](transport/websocket/)** - WebSocket 客户端
+  - 自动重连机制
+  - 心跳保活
+  - 事件驱动架构
+  - 消息队列
+
+- **[HTTP Client](core/httpclient/)** - HTTP 客户端
+  - 对象池优化
+  - 请求/响应拦截器
+  - 自动序列化/反序列化
+
+#### 3. 数据存储
+
+- **[GORM](store/db/)** - ORM 数据库
+  - MySQL, PostgreSQL, SQLite
+  - 连接池管理
+  - 事务支持
+
+- **[Redis](store/redis/)** - Redis 客户端
+  - 单机/集群模式
+  - 管道和批量操作
+  - 连接池优化
+
+- **[MongoDB](store/mongo/)** - MongoDB 客户端
+- **[Etcd](store/etcd/)** - Etcd 客户端  
+- **[Kafka](store/kafka/)** - Kafka 客户端
+
+#### 4. 分布式系统
+
+- **[Scheduler](core/scheduler/)** - 分布式任务调度 ([查看文档](core/scheduler/README.md))
+  - 延迟任务和 Cron 任务
+  - 优先级队列
+  - 分布式锁和去重
+  - 失败重试和死信队列
+  - 完全类型安全的泛型 API
+
+- **[Rate Limiter](core/rate/)** - 限流器
+  - 令牌桶算法
+  - 滑动窗口算法
+  - 基于 Redis Lua 脚本
+
+#### 5. 安全认证
+
+- **[JWT](core/auth/jwt/)** - JWT 认证
+  - Token 生成和验证
+  - 刷新 Token 支持
+  - Redis 缓存集成
+  - JTI 管理
+
+- **[MFA](core/auth/mfa/)** - 多因子认证
+  - Google Authenticator
+  - TOTP 时间同步
+
+- **[ECIES](core/crypto/ecies/)** - 椭圆曲线加密
+  - NIST P-256 曲线
+  - AES-256-GCM 认证加密
+  - 密钥持久化
+
+- **[HMAC](core/crypto/hmac/)** - 消息认证码
+
+#### 6. 可观测性
+
+- **[Logger](log/)** - 日志系统 ([查看文档](log/README.md))
+  - 基于 Zerolog 高性能
+  - 结构化日志
+  - 数据脱敏
+  - 日志轮转（按时间/大小）
+
+- **[Metrics](metrics/)** - 指标采集
+  - Prometheus 集成
+  - HTTP/gRPC 指标
+  - 自定义指标
+
+#### 7. 中间件
+
+- **[HTTP Middleware](middleware/http/)** - HTTP 中间件
+  - 认证 (Auth)
+  - CORS 跨域
+  - 加密/解密
+  - 日志记录
+  - 权限检查
+  - 恢复 (Recovery)
+  - 签名验证
+  - XSS 防护
+
+- **[gRPC Middleware](middleware/grpc/)** - gRPC 中间件
+
+#### 8. 工具库
+
+- **[Validator](core/validator/)** - 数据验证
+  - 多语言支持（中文/英文）
+  - 自定义验证规则
+  - 详细错误信息
+
+- **[Errors](errors/)** - 错误处理
+  - 结构化错误
+  - 错误链和元数据
+  - HTTP 状态码映射
+
+- **[Tag Parser](core/tag/)** - 标签解析 ([查看文档](core/tag/README.md))
+  - 结构体默认值注入
+  - 嵌套结构支持
+  - 自定义解析器
+
+- **[OSS](core/oss/minio/)** - 对象存储
+  - MinIO 客户端
+  - 分片上传
+  - 断点续传
+
+- **[Utilities](core/util/)** - 实用工具
+  - 上下文辅助函数
+  - 类型转换
+  - UUID/雪花 ID 生成
+  - 二维码生成
+  - 树形结构处理
+
+## 🎯 设计理念
+
+### 模块化设计
+每个模块都是独立的，可以单独使用，也可以组合使用。遵循单一职责原则，保持代码清晰和可维护。
+
+### 类型安全
+充分利用 Go 泛型（Go 1.18+），提供编译时类型检查，减少运行时错误。
+
+### 性能优先
+- 零分配或少分配设计
+- 对象池复用
+- 并发安全的高性能实现
+
+### 生产就绪
+- 完整的错误处理
+- 结构化日志
+- 健康检查和指标
+- 优雅关闭和资源清理
+
+### 易于测试
+- 接口驱动设计
+- 依赖注入
+- Mock 友好
+
+## 🏗️ 项目结构
+
+```
+kit/
+├── app/              # 应用框架
+├── config/           # 配置管理
+├── ioc/              # IoC 容器
+├── log/              # 日志系统
+├── errors/           # 错误处理
+├── metrics/          # 指标采集
+├── middleware/       # 中间件
+│   ├── http/        # HTTP 中间件
+│   └── grpc/        # gRPC 中间件
+├── transport/        # 传输层
+│   ├── http/        # HTTP 服务器
+│   ├── grpc/        # gRPC 服务器
+│   └── websocket/   # WebSocket 客户端
+├── store/            # 存储层
+│   ├── db/          # 数据库（GORM）
+│   ├── redis/       # Redis
+│   ├── mongo/       # MongoDB
+│   ├── etcd/        # Etcd
+│   └── kafka/       # Kafka
+└── core/             # 核心工具
+    ├── auth/        # 认证（JWT, MFA）
+    ├── crypto/      # 加密（ECIES, HMAC）
+    ├── httpclient/  # HTTP 客户端
+    ├── oss/         # 对象存储（MinIO）
+    ├── rate/        # 限流器
+    ├── scheduler/   # 任务调度器
+    ├── tag/         # 标签解析器
+    ├── util/        # 实用工具
+    └── validator/   # 数据验证器
 ```
 
-#### 配置管理
+## 🔧 开发工具
 
-```go
-import "github.com/kochabx/kit/config"
+### Makefile 命令
 
-type AppConfig struct {
-    Server struct {
-        Host string `json:"host" default:"localhost"`
-        Port int    `json:"port" default:"8080" validate:"min=1,max=65535"`
-    } `json:"server"`
-}
+```bash
+# 代码质量
+make fmt          # 格式化代码
+make vet          # 静态分析
+make lint         # Lint 检查
 
-cfg := &AppConfig{}
-c := config.New(cfg)
-c.Load()
+# 测试
+make test         # 运行测试
+make coverage     # 生成覆盖率报告
 
-// 启动热加载
-c.Watch()
+# 代码生成
+make proto        # 生成 gRPC 代码
+make wire         # 生成 Wire 依赖注入代码
+make swag         # 生成 Swagger 文档
+
+# 依赖管理
+make install      # 安装开发工具
+make upgrade      # 升级依赖
+make mod-tidy     # 整理依赖
+
+# 安全
+make security     # 安全扫描
 ```
 
-#### WebSocket客户端
+## 📦 依赖版本
 
-```go
-import "github.com/kochabx/kit/transport/websocket"
+- **Go**: 1.25.0+
+- **Gin**: v1.11.0
+- **Zerolog**: latest
+- **GORM**: v1.25+
+- **Redis**: go-redis/v9
+- **Viper**: v1.19+
+- **Prometheus**: client_golang
 
-client := websocket.NewClient()
+## 🤝 贡献指南
 
-client.OnEvent(websocket.EventMessage, func(event websocket.Event) {
-    if msg, ok := event.Data.(websocket.Message); ok {
-        log.Printf("收到消息: %s", string(msg.Data))
-    }
-})
+欢迎贡献代码！请遵循以下步骤：
 
-ctx := context.Background()
-client.Connect(ctx, "wss://echo.websocket.org")
-client.SendText("Hello WebSocket!")
-```
+1. Fork 本仓库
+2. 创建特性分支 (`git checkout -b feature/amazing-feature`)
+3. 提交更改 (`git commit -m 'Add some amazing feature'`)
+4. 推送到分支 (`git push origin feature/amazing-feature`)
+5. 创建 Pull Request
 
-#### MinIO对象存储
+### 代码规范
 
-```go
-import "github.com/kochabx/kit/core/oss/minio"
+- 遵循 [Effective Go](https://go.dev/doc/effective_go)
+- 使用 `gofmt` 格式化代码
+- 保持测试覆盖率 > 80%
+- 添加必要的文档注释
 
-client, err := minio.NewClient(
-    "localhost:9000",
-    "access-key",
-    "secret-key",
-    minio.WithUseSSL(false),
-)
-
-// 创建桶
-client.CreateBucket(ctx, "my-bucket")
-
-// 分片上传
-params := &minio.InitiateMultipartParams{
-    Bucket:     "my-bucket",
-    Object:     "large-file.bin",
-    ObjectSize: 100 * 1024 * 1024,
-    PartSize:   10 * 1024 * 1024,
-}
+---
 result, err := client.InitiateMultipartUpload(ctx, params)
 ```
 
@@ -345,239 +496,3 @@ client := redis.New(redis.Config{
     DB:   0,
 })
 ```
-
-## 项目结构
-
-```
-├── app/              # 应用框架和生命周期管理
-├── config/           # 配置管理（基于Viper，支持热加载）
-├── middleware/       # 中间件（HTTP、gRPC）
-│   ├── http/         # HTTP中间件（日志、认证、CORS等）
-│   └── grpc/         # gRPC拦截器
-├── metrics/          # 监控指标
-│   ├── http/         # HTTP指标收集
-│   └── grpc/         # gRPC指标收集
-├── core/             # 核心功能组件
-│   ├── auth/         # 认证相关（JWT、MFA）
-│   │   ├── jwt/      # JWT令牌管理
-│   │   └── mfa/      # 多因子认证（Google Authenticator）
-│   ├── crypto/       # 加密算法
-│   │   ├── ecies/    # ECIES椭圆曲线加密
-│   │   └── hmac/     # HMAC签名算法
-│   ├── oss/          # 对象存储
-│   │   └── minio/    # MinIO客户端
-│   ├── rate/         # 限流器（令牌桶、滑动窗口）
-│   ├── scheduler/    # 分布式任务调度器
-│   ├── stag/         # 结构体标签解析
-│   ├── util/         # 工具函数
-│   │   ├── convert/  # 类型转换
-│   │   └── tree/     # 树形结构
-│   └── validator/    # 参数验证
-├── errors/           # 错误处理
-├── ioc/              # IoC依赖注入容器
-├── log/              # 日志系统（结构化日志、脱敏）
-│   └── desensitize/  # 数据脱敏
-├── store/            # 存储适配器
-│   ├── db/           # 数据库（GORM、Ent）
-│   ├── redis/        # Redis客户端
-│   ├── mongo/        # MongoDB客户端
-│   ├── etcd/         # Etcd客户端
-│   └── kafka/        # Kafka客户端
-└── transport/        # 传输层
-    ├── http/         # HTTP服务器（Gin）
-    ├── grpc/         # gRPC服务器
-    └── websocket/    # WebSocket客户端
-```
-
-## 核心模块说明
-
-### 🚀 App - 应用框架
-优雅的应用生命周期管理，支持多服务器运行、优雅关闭和资源清理。
-
-**主要特性：**
-- 多服务器支持（HTTP/gRPC）
-- 自动信号监听和优雅关闭
-- 资源清理函数注册
-- 超时控制
-- 并发安全
-
-[查看详细文档](app/)
-
-### 🏗️ IoC - 依赖注入容器
-轻量级、类型安全的依赖注入容器，无反射设计。
-
-**主要特性：**
-- 多命名空间管理
-- 组件生命周期管理
-- 依赖注入和解析
-- 健康检查支持
-- Gin路由自动注册
-
-[查看详细文档](ioc/)
-
-### ⚙️ Config - 配置管理
-基于Viper的配置管理，支持多种格式和热加载。
-
-**主要特性：**
-- YAML/JSON/TOML支持
-- 环境变量自动覆盖
-- 配置热加载
-- 配置验证
-- 并发安全
-
-[查看详细文档](config/)
-
-### 🎯 Scheduler - 分布式任务调度器
-基于Redis的高性能分布式任务调度系统。
-
-**主要特性：**
-- 纯泛型设计，类型安全
-- 延迟任务、Cron任务、立即任务
-- 优先级队列（高/中/低）
-- 分布式锁和去重
-- 失败重试和死信队列
-- 限流和熔断保护
-- Prometheus监控
-
-[查看详细文档](core/scheduler/)
-
-### 🔌 WebSocket - WebSocket客户端
-功能丰富的WebSocket客户端库。
-
-**主要特性：**
-- 自动重连（指数退避）
-- 事件驱动架构
-- Ping/Pong心跳检测
-- 并发安全
-- TLS/WSS支持
-- 灵活配置
-
-[查看详细文档](transport/websocket/)
-
-### � Middleware - 中间件
-HTTP和gRPC的请求拦截和处理中间件。
-
-**HTTP中间件：**
-- 日志记录
-- 认证授权
-- CORS跨域
-- 异常恢复
-- 限流控制
-- XSS防护
-
-**gRPC拦截器：**
-- 日志拦截
-- 认证拦截
-- 异常恢复
-- 指标收集
-
-[查看详细文档](middleware/)
-
-### 📊 Metrics - 监控指标
-Prometheus集成的监控指标收集系统。
-
-**主要特性：**
-- HTTP请求指标
-- gRPC调用指标
-- 业务自定义指标
-- Go运行时指标
-- 构建信息指标
-
-[查看详细文档](metrics/)
-
-### �📦 MinIO - 对象存储客户端
-生产级MinIO对象存储客户端。
-
-**主要特性：**
-- 桶管理操作
-- 预签名URL上传
-- 分片上传支持
-- 断点续传
-- 并发控制
-- 完善的错误处理
-
-[查看详细文档](core/oss/minio/)
-
-### 🔐 Auth - 认证授权
-JWT令牌管理和多因子认证支持。
-
-**JWT特性：**
-- 令牌生成和验证
-- Token缓存
-- 刷新令牌支持
-
-**MFA特性：**
-- Google Authenticator
-- TOTP验证
-
-[查看详细文档](core/auth/)
-
-### ⚡ Rate - 限流器
-高性能限流器实现。
-
-**支持算法：**
-- 令牌桶算法
-- 滑动窗口算法
-- 基于Redis的分布式限流
-
-[查看详细文档](core/rate/)
-
-### 🗄️ Store - 存储适配器
-统一的存储层抽象。
-
-**支持的存储：**
-- **数据库**: GORM、Ent
-- **缓存**: Redis
-- **NoSQL**: MongoDB
-- **配置中心**: Etcd
-- **消息队列**: Kafka
-
-### 🌐 Transport - 传输层
-HTTP、gRPC和WebSocket服务器支持。
-
-**HTTP特性：**
-- 基于Gin框架
-- 统一响应格式
-- 优雅关闭
-
-**gRPC特性：**
-- 标准gRPC服务器
-- 地址验证
-- 优雅关闭
-
-**WebSocket特性：**
-- 自动重连（指数退避）
-- 事件驱动架构
-- Ping/Pong心跳检测
-
-[查看详细文档](transport/)
-
-### 📝 Log - 日志系统
-结构化日志和数据脱敏。
-
-**主要特性：**
-- 结构化日志输出
-- 数据脱敏（手机号、邮箱、身份证等）
-- 日志轮转
-- 多种输出方式（控制台、文件）
-- 高性能
-
-[查看详细文档](log/)
-
-### 🔍 Validator - 参数验证
-基于go-playground/validator的验证器封装。
-
-**主要特性：**
-- 结构体验证
-- 自定义验证规则
-- 国际化错误消息
-- 友好的错误提示
-
-### 🛠️ Util - 工具集
-实用工具函数集合。
-
-**包含工具：**
-- **Context**: 上下文工具函数
-- **Convert**: 类型转换工具
-- **Tree**: 树形结构处理
-- **Stag**: 结构体标签解析
