@@ -1,0 +1,10 @@
+number: 10
+
+apis:
+  - name: "GetUser"
+    url: "https://api.example.com/user"
+    headers:
+      Authorization: "Bearer token"
+
+server:
+  host: 12345
