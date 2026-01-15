@@ -20,28 +20,28 @@ func CryptoWithConfig(config CryptoConfig) gin.HandlerFunc {
 		body, err := c.GetRawData()
 		if err != nil {
 			log.Error().Err(err).Msg("read request body")
-			http.GinJSONE(c, ErrorCrypto)
+			http.GinJSONE(c, http.StatusInternalServerError, ErrorCrypto)
 			return
 		}
 		// Decrypt the request body
 		privateKey, err := ecies.LoadPrivateKey(config.PrivateKeyPath)
 		if err != nil {
 			log.Error().Err(err).Msg("crypto load private key")
-			http.GinJSONE(c, ErrorCrypto)
+			http.GinJSONE(c, http.StatusInternalServerError, ErrorCrypto)
 			return
 		}
 		// Decode the base64 encoded ciphertext
 		decodedCiphertext, err := base64.StdEncoding.DecodeString(string(body))
 		if err != nil {
 			log.Error().Err(err).Msg("crypto decode ciphertext")
-			http.GinJSONE(c, ErrorCrypto)
+			http.GinJSONE(c, http.StatusInternalServerError, ErrorCrypto)
 			return
 		}
 		// Decrypt the ciphertext
 		plaintext, err := ecies.Decrypt(privateKey, decodedCiphertext)
 		if err != nil {
 			log.Error().Err(err).Msg("crypto decrypt")
-			http.GinJSONE(c, ErrorCrypto)
+			http.GinJSONE(c, http.StatusInternalServerError, ErrorCrypto)
 			return
 		}
 		// Write the plaintext back to the request body

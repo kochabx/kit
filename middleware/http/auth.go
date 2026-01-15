@@ -26,7 +26,7 @@ func AuthWithConfig(config AuthConfig) gin.HandlerFunc {
 		// validate
 		result, err := config.Validate(c)
 		if err != nil {
-			http.GinJSONE(c, err)
+			http.GinJSONE(c, http.StatusUnauthorized, err)
 			return
 		}
 
