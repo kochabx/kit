@@ -456,7 +456,7 @@ make security     # 安全扫描
 - 添加必要的文档注释
 
 ---
-result, err := client.InitiateMultipartUpload(ctx, params)
+
 ```
 
 #### HTTP中间件
