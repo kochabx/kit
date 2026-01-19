@@ -17,7 +17,7 @@
 ## 安装
 
 ```bash
-go get github.com/kochabx/kit/core/oss/minio
+go get github.com/kochabx/kit/store/oss/minio
 ```
 
 ## 快速开始
@@ -25,7 +25,7 @@ go get github.com/kochabx/kit/core/oss/minio
 ### 创建客户端
 
 ```go
-import "github.com/kochabx/kit/core/oss/minio"
+import "github.com/kochabx/kit/store/oss/minio"
 
 // 使用默认配置
 client, err := minio.NewClient(

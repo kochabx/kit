@@ -38,7 +38,7 @@
   - 分布式锁、故障转移、死信队列
   - 完全类型安全的泛型 API
 - **[Rate Limiter](core/rate/)** - 高性能限流器（令牌桶、滑动窗口算法）
-- **[OSS](core/oss/minio/)** - MinIO 对象存储客户端，支持分片上传和断点续传
+- **[OSS](store/oss/minio/)** - MinIO 对象存储客户端，支持分片上传和断点续传
 
 ### 📊 可观测性
 - **[Logger](log/)** - 基于 Zerolog 的高性能日志库，支持数据脱敏和日志轮转
@@ -329,7 +329,7 @@ type Config struct {
   - 嵌套结构支持
   - 自定义解析器
 
-- **[OSS](core/oss/minio/)** - 对象存储
+- **[OSS](store/oss/minio/)** - 对象存储
   - MinIO 客户端
   - 分片上传
   - 断点续传
