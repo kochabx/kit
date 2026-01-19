@@ -7,12 +7,12 @@
 - ✅ **统一接口**：单机/集群/哨兵模式使用相同 API
 - ✅ **自动识别**：根据配置自动选择合适的模式
 - ✅ **类型安全**：无需类型转换和断言
-- ✅ **可观测性**：内置 Metrics、Tracing、日志支持
-- ✅ **健康检查**：定期探活和状态监控
-- ✅ **慢查询检测**：自动记录慢查询
-- ✅ **连接池管理**：连接池预热、统计信息
+- ✅ **可观测性**：内置 OpenTelemetry Metrics、Tracing、日志支持
+- ✅ **慢查询检测**：自动记录慢查询日志和告警
+- ✅ **连接池管理**：完善的连接池配置和统计信息
 - ✅ **优雅关闭**：安全释放资源
 - ✅ **生产就绪**：完善的错误处理和重试机制
+- ✅ **Hook 扩展**：支持自定义 Hooks 扩展功能
 
 ## 📦 安装
 
@@ -27,6 +27,7 @@ go get github.com/kochabx/kit/store/redis
 ```go
 import (
     "context"
+    "time"
     "github.com/kochabx/kit/store/redis"
 )
 
@@ -53,7 +54,6 @@ val, err := client.UniversalClient().Get(ctx, "key").Result()
 client, err := redis.New(ctx,
     redis.Cluster("node1:6379", "node2:6379", "node3:6379"),
     redis.WithPassword("mypassword"),
-    redis.WithReadOnly(), // 启用只读模式
 )
 ```
 
@@ -76,140 +76,232 @@ client, err := redis.New(ctx,
 ### 基础配置
 
 ```go
+// 认证配置
 redis.WithPassword("password")       // 设置密码
 redis.WithUsername("username")       // 设置用户名 (Redis 6.0+)
-redis.WithDB(0)                      // 设置数据库索引（单机/哨兵）
+redis.WithDB(0)                      // 设置数据库索引（单机/哨兵模式）
+
+// 连接池配置
 redis.WithPoolSize(100)              // 设置连接池大小
-redis.WithTimeout(5*s, 3*s, 3*s)    // 设置超时（连接/读/写）
-redis.WithTLS(tlsConfig)             // 启用 TLS
 ```
 
 ### 可观测性
 
 ```go
-redis.WithMetrics("myapp")                    // 启用 Metrics 收集
-redis.WithTracing("myservice")                // 启用分布式追踪
-redis.WithSlowQueryLog(100*time.Millisecond) // 启用慢查询日志
-redis.WithLogger(logger)                      // 设置日志记录器
-redis.WithLogging()                           // 启用命令级详细日志（需配合 WithLogger）
+// OpenTelemetry 集成
+redis.WithMetrics()                              // 启用 Metrics 收集
+redis.WithTracing()                              // 启用分布式追踪
+
+// 调试和日志
+redis.WithLogger(logger)                         // 设置日志记录器
+redis.WithDebug()                                // 启用调试模式（记录所有命令）
+redis.WithDebug(100*time.Millisecond)           // 启用调试模式并检测慢查询
+
+// Hooks 扩展
+redis.WithHooks(customHook1, customHook2)       // 添加自定义 Hooks
 ```
 
 **日志级别说明**：
-- `WithLogger(logger)` 设置日志记录器，记录以下信息：
-  - **DEBUG** 级别：客户端创建、关闭、连接池预热等生命周期日志
-  - **INFO** 级别：默认不输出客户端生命周期日志（已调整为 DEBUG）
-  - **WARN** 级别：高超时率告警、慢查询告警等
-  - **ERROR** 级别：连接失败、命令错误等
-- `WithLogging()` 会记录**每个** Redis 命令的详细信息，可能产生大量日志，仅建议在调试环境使用
+- `WithLogger(logger)` 设置日志记录器，记录客户端生命周期、连接错误等信息
+- `WithDebug()` 启用调试模式，会记录**每个** Redis 命令的详细信息，可能产生大量日志，仅建议在调试环境使用
+- `WithDebug(threshold)` 在调试模式下同时启用慢查询检测，超过阈值的查询会记录为 WARN 级别
 
-### 健康检查
+### 集群特有选项
+
+通过配置结构体设置：
 
 ```go
-redis.WithHealthCheck(30*time.Second)  // 每 30 秒检查一次
+cfg := redis.Cluster("node1:6379", "node2:6379", "node3:6379")
+cfg.ReadOnly = true        // 只读模式（读从节点）
+cfg.RouteByLatency = true  // 按延迟路由
+cfg.RouteRandomly = true   // 随机路由
+
+client, err := redis.New(ctx, cfg, redis.WithPassword("password"))
 ```
 
-### 连接池
+## 📋 完整配置说明
+
+通过配置结构体可以使用更多高级选项：
 
 ```go
-redis.WithPoolWarmup(10)  // 预热 10 个连接
-```
+cfg := &redis.Config{
+    // 连接地址
+    Addrs: []string{"localhost:6379"},
+    
+    // 认证信息
+    Username: "default",
+    Password: "password",
+    DB:       0,
+    
+    // 协议版本 (2: RESP2, 3: RESP3)
+    Protocol: 3,
+    
+    // 超时配置（毫秒）
+    DialTimeout:  5000,
+    ReadTimeout:  3000,
+    WriteTimeout: 3000,
+    
+    // 连接池配置
+    PoolSize:     100,
+    MinIdleConns: 10,
+    MaxIdleTime:  300000,  // 5分钟
+    MaxLifetime:  0,       // 永久重用
+    PoolTimeout:  4000,
+    
+    // 重试配置
+    MaxRetries:      3,
+    MinRetryBackoff: 8,
+    MaxRetryBackoff: 512,
+    
+    // TLS 配置
+    TLSConfig: tlsConfig,
+    
+    // 集群配置
+    MaxRedirects:   3,
+    ReadOnly:       false,
+    RouteByLatency: false,
+    RouteRandomly:  false,
+}
 
-### 集群选项
-
-```go
-redis.WithReadOnly()           // 只读模式（读从节点）
-redis.WithRouteByLatency()     // 按延迟路由
-redis.WithRouteRandomly()      // 随机路由
+client, err := redis.New(ctx, cfg)
 ```
 
 ## 🔧 完整示例
 
 ```go
-// 生产环境配置
-client, err := redis.New(ctx,
-    redis.Cluster("node1:6379", "node2:6379", "node3:6379"),
-    redis.WithPassword("production-password"),
-    redis.WithPoolSize(100),
-    redis.WithTimeout(5*time.Second, 3*time.Second, 3*time.Second),
-    redis.WithMetrics("myapp"),
-    redis.WithTracing("myservice"),
-    redis.WithSlowQueryLog(100*time.Millisecond),
-    redis.WithHealthCheck(30*time.Second),
-    redis.WithPoolWarmup(20),
-    redis.WithLogger(logger),
-    // redis.WithLogging(), // 仅调试时启用，会记录每个命令
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+    
+    "github.com/kochabx/kit/log"
+    "github.com/kochabx/kit/store/redis"
 )
-if err != nil {
-    panic(err)
-}
-defer client.Close()
 
-// 获取底层客户端执行命令
-rc := client.UniversalClient()
+func main() {
+    ctx := context.Background()
+    logger := log.G
+    
+    // 生产环境配置
+    cfg := redis.Cluster("node1:6379", "node2:6379", "node3:6379")
+    cfg.Password = "production-password"
+    cfg.PoolSize = 100
+    cfg.DialTimeout = 5000
+    cfg.ReadTimeout = 3000
+    cfg.WriteTimeout = 3000
+    
+    client, err := redis.New(ctx, cfg,
+        redis.WithMetrics(),                              // OpenTelemetry Metrics
+        redis.WithTracing(),                              // OpenTelemetry Tracing
+        redis.WithDebug(100*time.Millisecond),           // 调试 + 慢查询检测
+        redis.WithLogger(logger),
+    )
+    if err != nil {
+        panic(err)
+    }
+    defer client.Close()
 
-// String 操作
-rc.Set(ctx, "key", "value", time.Hour)
-rc.Get(ctx, "key")
+    // 获取底层客户端执行命令
+    rc := client.UniversalClient()
 
-// Hash 操作
-rc.HSet(ctx, "user:1", "name", "Alice")
-rc.HGetAll(ctx, "user:1")
+    // String 操作
+    rc.Set(ctx, "key", "value", time.Hour)
+    val, _ := rc.Get(ctx, "key").Result()
+    fmt.Println(val)
 
-// List 操作
-rc.LPush(ctx, "queue", "task1")
-rc.LRange(ctx, "queue", 0, -1)
+    // Hash 操作
+    rc.HSet(ctx, "user:1", "name", "Alice", "age", 25)
+    user, _ := rc.HGetAll(ctx, "user:1").Result()
+    fmt.Println(user)
 
-// Set 操作
-rc.SAdd(ctx, "tags", "go", "redis")
-rc.SMembers(ctx, "tags")
+    // List 操作
+    rc.LPush(ctx, "queue", "task1", "task2")
+    tasks, _ := rc.LRange(ctx, "queue", 0, -1).Result()
+    fmt.Println(tasks)
 
-// Pipeline
-pipe := rc.Pipeline()
-pipe.Set(ctx, "key1", "value1", time.Hour)
-pipe.Set(ctx, "key2", "value2", time.Hour)
-pipe.Exec(ctx)
+    // Set 操作
+    rc.SAdd(ctx, "tags", "go", "redis", "cache")
+    tags, _ := rc.SMembers(ctx, "tags").Result()
+    fmt.Println(tags)
 
-// 事务
-rc.Watch(ctx, func(tx *redis.Tx) error {
-    _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-        pipe.Set(ctx, "key", "value", time.Hour)
-        return nil
+    // Pipeline
+    pipe := rc.Pipeline()
+    pipe.Set(ctx, "key1", "value1", time.Hour)
+    pipe.Set(ctx, "key2", "value2", time.Hour)
+    pipe.Get(ctx, "key1")
+    cmds, _ := pipe.Exec(ctx)
+    fmt.Printf("Executed %d commands\n", len(cmds))
+
+    // 事务
+    rc.Watch(ctx, func(tx *redis.Tx) error {
+        val, err := tx.Get(ctx, "counter").Int()
+        if err != nil && err != redis.Nil {
+            return err
+        }
+        
+        _, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+            pipe.Set(ctx, "counter", val+1, 0)
+            return nil
+        })
+        return err
     })
-    return err
-})
+    
+    // 连接池统计
+    stats := client.Stats()
+    fmt.Printf("Pool stats - Total: %d, Idle: %d, Hits: %d\n",
+        stats.TotalConns, stats.IdleConns, stats.Hits)
+}
 ```
 
 ## 📊 监控
-
-### 获取 Metrics
-
-```go
-metrics := client.GetMetrics()
-fmt.Printf("Total commands: %d\n", metrics.CommandTotal)
-fmt.Printf("Success: %d\n", metrics.CommandSuccess)
-fmt.Printf("Errors: %d\n", metrics.CommandErrors)
-fmt.Printf("Avg duration: %v\n", metrics.AvgDuration)
-fmt.Printf("Slow queries: %d\n", metrics.SlowQueryCount)
-```
-
-### 健康状态
-
-```go
-status := client.GetHealthStatus()
-fmt.Printf("Healthy: %v\n", status.Healthy)
-fmt.Printf("Latency: %v\n", status.Latency)
-fmt.Printf("Last check: %v\n", status.LastCheck)
-```
 
 ### 连接池统计
 
 ```go
 stats := client.Stats()
-fmt.Printf("Total: %d\n", stats.TotalConns)
-fmt.Printf("Idle: %d\n", stats.IdleConns)
-fmt.Printf("Hits: %d\n", stats.Hits)
-fmt.Printf("Misses: %d\n", stats.Misses)
-fmt.Printf("Timeouts: %d\n", stats.Timeouts)
+fmt.Printf("Total connections: %d\n", stats.TotalConns)
+fmt.Printf("Idle connections: %d\n", stats.IdleConns)
+fmt.Printf("Pool hits: %d\n", stats.Hits)
+fmt.Printf("Pool misses: %d\n", stats.Misses)
+fmt.Printf("Pool timeouts: %d\n", stats.Timeouts)
+fmt.Printf("Stale connections: %d\n", stats.StaleConns)
+```
+
+### OpenTelemetry 集成
+
+客户端内置 OpenTelemetry 支持，使用 `redis/go-redis/extra/redisotel/v9` 实现：
+
+```go
+import (
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/sdk/metric"
+    "go.opentelemetry.io/otel/sdk/trace"
+)
+
+// 初始化 OpenTelemetry
+func initOTel() {
+    // 配置 Tracer Provider
+    tp := trace.NewTracerProvider(...)
+    otel.SetTracerProvider(tp)
+    
+    // 配置 Meter Provider  
+    mp := metric.NewMeterProvider(...)
+    otel.SetMeterProvider(mp)
+}
+
+func main() {
+    initOTel()
+    
+    // 创建客户端时自动启用追踪和指标
+    client, err := redis.New(ctx, cfg,
+        redis.WithTracing(),  // 启用追踪
+        redis.WithMetrics(),  // 启用指标
+    )
+    
+    // 所有 Redis 命令会自动记录 traces 和 metrics
+}
 ```
 
 ## 🎯 最佳实践
@@ -217,53 +309,96 @@ fmt.Printf("Timeouts: %d\n", stats.Timeouts)
 ### 1. 连接池配置
 
 ```go
-// 根据业务负载调整
-redis.WithPoolSize(10 * runtime.GOMAXPROCS(0))  // 默认
-redis.WithPoolSize(100)                          // 高并发
-redis.WithPoolSize(20)                           // 低并发
+import "runtime"
+
+// 默认：10 * GOMAXPROCS
+redis.WithPoolSize(10 * runtime.GOMAXPROCS(0))
+
+// 高并发场景
+redis.WithPoolSize(200)
+
+// 低并发场景
+redis.WithPoolSize(20)
+
+// 配置最小空闲连接
+cfg := redis.Single("localhost:6379")
+cfg.MinIdleConns = 10  // 保持最少 10 个空闲连接
+cfg.MaxIdleTime = 300000  // 空闲连接 5 分钟后关闭
 ```
 
 ### 2. 超时配置
 
 ```go
-// 推荐配置
-redis.WithTimeout(
-    5*time.Second,  // 连接超时
-    3*time.Second,  // 读超时
-    3*time.Second,  // 写超时
-)
+// 生产环境推荐配置（毫秒）
+cfg := redis.Single("localhost:6379")
+cfg.DialTimeout = 5000   // 连接超时 5 秒
+cfg.ReadTimeout = 3000   // 读超时 3 秒
+cfg.WriteTimeout = 3000  // 写超时 3 秒
+cfg.PoolTimeout = 4000   // 获取连接超时 4 秒
 ```
 
-### 3. 启用可观测性
+### 3. 重试配置
+
+```go
+cfg := redis.Single("localhost:6379")
+cfg.MaxRetries = 3              // 最多重试 3 次
+cfg.MinRetryBackoff = 8         // 最小退避 8ms
+cfg.MaxRetryBackoff = 512       // 最大退避 512ms
+
+// 禁用重试
+cfg.MaxRetries = -1
+```
+
+### 4. 启用可观测性
 
 ```go
 // 生产环境必备
-redis.WithLogger(logger)                      // 设置日志记录器（生命周期日志为 DEBUG 级别）
-redis.WithMetrics("myapp")                    // 启用 Metrics
-redis.WithTracing("myservice")                // 启用追踪
-redis.WithSlowQueryLog(100*time.Millisecond) // 慢查询检测（WARN 级别）
-redis.WithHealthCheck(30*time.Second)        // 健康检查
-// 不建议在生产环境启用 WithLogging()，会记录每个命令
+client, err := redis.New(ctx, cfg,
+    redis.WithLogger(logger),                     // 设置日志记录器
+    redis.WithMetrics(),                          // OpenTelemetry Metrics
+    redis.WithTracing(),                          // OpenTelemetry Tracing
+    redis.WithDebug(100*time.Millisecond),       // 慢查询检测（超过 100ms 告警）
+)
 
-// 调试环境（需要查看详细生命周期）
-redis.WithLogger(logger)  // 设置 logger 日志级别为 DEBUG 可查看客户端创建/关闭/预热等日志
-redis.WithLogging()       // 启用每个命令的详细日志
+// 调试环境（需要查看详细命令日志）
+client, err := redis.New(ctx, cfg,
+    redis.WithLogger(logger),
+    redis.WithDebug(),  // 记录每个命令
+)
 ```
 
-### 4. 优雅关闭
+### 4. 启用可观测性
+
+```go
+// 生产环境必备
+client, err := redis.New(ctx, cfg,
+    redis.WithLogger(logger),                     // 设置日志记录器
+    redis.WithMetrics(),                          // OpenTelemetry Metrics
+    redis.WithTracing(),                          // OpenTelemetry Tracing
+    redis.WithDebug(100*time.Millisecond),       // 慢查询检测（超过 100ms 告警）
+)
+
+// 调试环境（需要查看详细命令日志）
+client, err := redis.New(ctx, cfg,
+    redis.WithLogger(logger),
+    redis.WithDebug(),  // 记录每个命令
+)
+```
+
+### 5. 优雅关闭
 
 ```go
 // 确保资源释放
 defer client.Close()
 
-// 或使用 context
+// 使用 context 控制生命周期
 ctx, cancel := context.WithCancel(context.Background())
 defer cancel()
 
-client, _ := redis.New(ctx, config)
+client, _ := redis.New(ctx, cfg)
 ```
 
-### 5. 错误处理
+### 6. 错误处理
 
 ```go
 import "github.com/redis/go-redis/v9"
@@ -272,11 +407,48 @@ val, err := client.UniversalClient().Get(ctx, "key").Result()
 switch {
 case err == redis.Nil:
     // Key 不存在
+    fmt.Println("Key does not exist")
 case err != nil:
-    // 其他错误
+    // 其他错误（连接失败、超时等）
+    fmt.Printf("Error: %v\n", err)
 default:
     // 成功
+    fmt.Printf("Value: %s\n", val)
 }
+```
+
+### 7. 集群模式优化
+
+```go
+// 启用读写分离（读从节点）
+cfg := redis.Cluster("node1:6379", "node2:6379", "node3:6379")
+cfg.ReadOnly = true
+
+// 按延迟路由（选择延迟最低的节点）
+cfg.RouteByLatency = true
+
+// 或随机路由（负载均衡）
+cfg.RouteRandomly = true
+
+client, err := redis.New(ctx, cfg, redis.WithPassword("password"))
+```
+
+### 8. 使用 Pipeline 提升性能
+
+```go
+// 批量操作使用 Pipeline
+pipe := client.UniversalClient().Pipeline()
+
+for i := 0; i < 1000; i++ {
+    pipe.Set(ctx, fmt.Sprintf("key:%d", i), i, time.Hour)
+}
+
+// 一次性执行所有命令
+cmds, err := pipe.Exec(ctx)
+if err != nil {
+    fmt.Printf("Pipeline error: %v\n", err)
+}
+fmt.Printf("Executed %d commands\n", len(cmds))
 ```
 
 ## 🔍 故障排查
@@ -284,63 +456,161 @@ default:
 ### 连接失败
 
 ```go
-// 检查配置
-err := client.Ping(ctx)
-if err != nil {
+// 测试连接
+if err := client.Ping(ctx); err != nil {
     log.Printf("Connection failed: %v", err)
+    
+    // 检查配置
+    fmt.Printf("Mode: %s\n", client.getMode())
+    fmt.Printf("Addrs: %v\n", cfg.Addrs)
 }
 
-// 检查健康状态
-status := client.GetHealthStatus()
-if !status.Healthy {
-    log.Printf("Unhealthy: %s", status.ErrorMessage)
+// 检查客户端状态
+if client.IsClosed() {
+    log.Println("Client is already closed")
 }
 ```
 
 ### 性能问题
 
 ```go
-// 检查慢查询
-metrics := client.GetMetrics()
-if metrics.SlowQueryCount > 0 {
-    log.Printf("Detected %d slow queries", metrics.SlowQueryCount)
+// 1. 检查连接池状态
+stats := client.Stats()
+fmt.Printf("Total connections: %d\n", stats.TotalConns)
+fmt.Printf("Idle connections: %d\n", stats.IdleConns)
+fmt.Printf("Pool hits: %d\n", stats.Hits)
+fmt.Printf("Pool misses: %d\n", stats.Misses)
+
+// 连接池耗尽
+if stats.Timeouts > 0 {
+    log.Printf("Pool timeouts: %d (consider increasing PoolSize)", stats.Timeouts)
 }
 
-// 检查连接池
-stats := client.Stats()
-if stats.Timeouts > 0 {
-    log.Printf("Pool timeouts: %d", stats.Timeouts)
+// 连接命中率低
+hitRate := float64(stats.Hits) / float64(stats.Hits+stats.Misses)
+if hitRate < 0.9 {
+    log.Printf("Low hit rate: %.2f%% (consider increasing MinIdleConns)", hitRate*100)
 }
+
+// 2. 启用慢查询检测
+client, err := redis.New(ctx, cfg,
+    redis.WithDebug(100*time.Millisecond),  // 超过 100ms 记录警告
+)
+
+// 3. 使用 Pipeline 优化批量操作
+pipe := client.UniversalClient().Pipeline()
+for i := 0; i < 1000; i++ {
+    pipe.Get(ctx, fmt.Sprintf("key:%d", i))
+}
+pipe.Exec(ctx)  // 一次性执行
 ```
 
 ### 高并发优化
 
 ```go
+cfg := redis.Cluster("node1:6379", "node2:6379", "node3:6379")
+
 // 增加连接池大小
-redis.WithPoolSize(200)
+cfg.PoolSize = 200
+cfg.MinIdleConns = 50
 
-// 启用连接池预热
-redis.WithPoolWarmup(50)
+// 调整超时
+cfg.DialTimeout = 5000
+cfg.ReadTimeout = 3000
+cfg.WriteTimeout = 3000
+cfg.PoolTimeout = 4000
 
-// 集群模式启用读写分离
-redis.WithReadOnly()
+// 集群模式优化
+cfg.ReadOnly = true         // 读从节点
+cfg.RouteByLatency = true  // 按延迟路由
+
+client, err := redis.New(ctx, cfg)
+```
+
+### 内存泄漏排查
+
+```go
+// 定期检查连接数
+ticker := time.NewTicker(10 * time.Second)
+defer ticker.Stop()
+
+for range ticker.C {
+    stats := client.Stats()
+    log.Printf("Connections - Total: %d, Idle: %d, Stale: %d",
+        stats.TotalConns, stats.IdleConns, stats.StaleConns)
+    
+    // 异常情况告警
+    if stats.TotalConns > 1000 {
+        log.Printf("WARNING: Too many connections: %d", stats.TotalConns)
+    }
+}
 ```
 
 ## 📚 API 文档
 
 ### Client 方法
 
-- `UniversalClient() redis.UniversalClient` - 获取底层客户端
-- `Ping(ctx) error` - 测试连接
-- `Close() error` - 关闭客户端
-- `Stats() *redis.PoolStats` - 连接池统计
-- `HealthCheck(ctx) error` - 健康检查
-- `GetHealthStatus() *HealthStatus` - 获取健康状态
-- `GetMetrics() *Metrics` - 获取 Metrics
-- `IsClosed() bool` - 是否已关闭
+```go
+// 核心方法
+UniversalClient() redis.UniversalClient  // 获取底层客户端
+Ping(ctx) error                          // 测试连接
+Close() error                            // 关闭客户端并释放资源
+IsClosed() bool                          // 检查客户端是否已关闭
 
-### 配置方法
+// 统计信息
+Stats() *redis.PoolStats                 // 获取连接池统计信息
+```
 
-- `Single(addr) *Config` - 单机配置
-- `Cluster(addrs...) *Config` - 集群配置
-- `Sentinel(master, addrs...) *Config` - 哨兵配置
+### 配置构造方法
+
+```go
+// 创建配置
+Single(addr string) *Config                           // 单机模式
+Cluster(addrs ...string) *Config                      // 集群模式
+Sentinel(masterName string, addrs ...string) *Config  // 哨兵模式
+
+// 配置方法
+ApplyDefaults() error  // 应用默认值
+Validate() error       // 验证配置
+IsSingle() bool        // 是否单机模式
+IsCluster() bool       // 是否集群模式
+IsSentinel() bool      // 是否哨兵模式
+```
+
+### 配置选项
+
+```go
+// 基础选项
+WithPassword(password string) Option
+WithUsername(username string) Option
+WithDB(db int) Option
+WithPoolSize(size int) Option
+
+// 可观测性选项
+WithMetrics(opts ...redisotel.MetricsOption) Option
+WithTracing(opts ...redisotel.TracingOption) Option
+WithDebug(slowQueryThreshold ...time.Duration) Option
+WithLogger(logger *log.Logger) Option
+
+// Hooks 选项
+WithHooks(hooks ...redis.Hook) Option
+```
+
+### 连接池统计
+
+```go
+type PoolStats struct {
+    Hits        uint32  // 命中次数
+    Misses      uint32  // 未命中次数  
+    Timeouts    uint32  // 超时次数
+    TotalConns  uint32  // 总连接数
+    IdleConns   uint32  // 空闲连接数
+    StaleConns  uint32  // 过期连接数
+}
+```
+
+## 🔗 相关链接
+
+- [go-redis 文档](https://redis.uptrace.dev/)
+- [Redis 命令参考](https://redis.io/commands/)
+- [OpenTelemetry Go](https://opentelemetry.io/docs/languages/go/)

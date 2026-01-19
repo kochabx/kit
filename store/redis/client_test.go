@@ -99,7 +99,7 @@ func TestWithMetrics(t *testing.T) {
 
 	client, err := New(ctx, Single("localhost:6379"),
 		WithPassword("12345678"),
-		WithMetrics("test"),
+		WithMetrics(),
 	)
 	if err != nil {
 		t.Skipf("Skipping test (Redis not available): %v", err)
@@ -112,22 +112,8 @@ func TestWithMetrics(t *testing.T) {
 		client.UniversalClient().Ping(ctx)
 	}
 
-	// 获取 Metrics
-	metrics := client.GetMetrics()
-	if metrics == nil {
-		t.Error("Metrics should not be nil")
-	}
-
-	if metrics.CommandTotal < 10 {
-		t.Errorf("Expected at least 10 commands, got %d", metrics.CommandTotal)
-	}
-
-	t.Logf("Metrics: total=%d, success=%d, errors=%d, avg_duration=%v",
-		metrics.CommandTotal,
-		metrics.CommandSuccess,
-		metrics.CommandErrors,
-		metrics.AvgDuration,
-	)
+	// OpenTelemetry Metrics 通过 exporter 导出，这里只验证客户端正常工作
+	t.Log("Metrics enabled with OpenTelemetry redisotel")
 }
 
 // TestWithSlowQuery 测试慢查询检测
@@ -138,7 +124,7 @@ func TestWithSlowQuery(t *testing.T) {
 
 	client, err := New(ctx, Single("localhost:6379"),
 		WithPassword("12345678"),
-		WithSlowQueryLog(1*time.Microsecond), // 设置极小的阈值
+		WithDebug(1*time.Microsecond), // 设置极小的阈值
 		WithLogger(logger),
 	)
 	if err != nil {
@@ -149,39 +135,6 @@ func TestWithSlowQuery(t *testing.T) {
 
 	// 执行命令（应该触发慢查询日志）
 	client.UniversalClient().Ping(ctx)
-}
-
-// TestHealthCheck 测试健康检查
-func TestHealthCheck(t *testing.T) {
-	ctx := context.Background()
-
-	client, err := New(ctx, Single("localhost:6379"),
-		WithPassword("12345678"),
-		WithHealthCheck(1*time.Second),
-	)
-	if err != nil {
-		t.Skipf("Skipping test (Redis not available): %v", err)
-		return
-	}
-	defer client.Close()
-
-	// 等待健康检查执行
-	time.Sleep(2 * time.Second)
-
-	// 获取健康状态
-	status := client.GetHealthStatus()
-	if status == nil {
-		t.Error("Health status should not be nil")
-	}
-
-	if !status.Healthy {
-		t.Errorf("Expected healthy=true, got %v: %s", status.Healthy, status.ErrorMessage)
-	}
-
-	t.Logf("Health status: healthy=%v, latency=%v",
-		status.Healthy,
-		status.Latency,
-	)
 }
 
 // TestClose 测试关闭客户端
@@ -232,32 +185,6 @@ func TestInvalidConfig(t *testing.T) {
 	if err != ErrInvalidConfig {
 		t.Errorf("Expected ErrInvalidConfig, got %v", err)
 	}
-}
-
-// TestPoolWarmup 测试连接池预热
-func TestPoolWarmup(t *testing.T) {
-	ctx := context.Background()
-
-	client, err := New(ctx, Single("localhost:6379"),
-		WithPassword("12345678"),
-		WithPoolWarmup(5),
-	)
-	if err != nil {
-		t.Skipf("Skipping test (Redis not available): %v", err)
-		return
-	}
-	defer client.Close()
-
-	// 检查连接池统计
-	stats := client.Stats()
-	if stats == nil {
-		t.Error("Stats should not be nil")
-	}
-
-	t.Logf("Pool stats after warmup: total=%d, idle=%d",
-		stats.TotalConns,
-		stats.IdleConns,
-	)
 }
 
 // TestConcurrentAccess 测试并发访问

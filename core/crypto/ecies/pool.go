@@ -7,7 +7,7 @@ import (
 // bufferPool is a pool of byte slices used for temporary operations.
 // This reduces memory allocations during encryption/decryption.
 var bufferPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		// Allocate a reasonably sized buffer (1KB default)
 		buf := make([]byte, 0, 1024)
 		return &buf

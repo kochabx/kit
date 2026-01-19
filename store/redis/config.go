@@ -2,7 +2,8 @@ package redis
 
 import (
 	"crypto/tls"
-	"time"
+
+	"github.com/kochabx/kit/core/tag"
 )
 
 // Config Redis 统一配置（支持单机/集群/哨兵模式）
@@ -33,17 +34,17 @@ type Config struct {
 	// Protocol Redis 协议版本
 	// 2: RESP2 (默认)
 	// 3: RESP3 (Redis 6.0+)
-	Protocol int
+	Protocol int `default:"3"`
 
 	// ==================== 超时配置 ====================
-	// DialTimeout 连接超时时间
-	DialTimeout time.Duration
+	// DialTimeout 连接超时时间（毫秒）
+	DialTimeout int64 `default:"5000"`
 
-	// ReadTimeout 读操作超时时间
-	ReadTimeout time.Duration
+	// ReadTimeout 读操作超时时间（毫秒）
+	ReadTimeout int64 `default:"3000"`
 
-	// WriteTimeout 写操作超时时间
-	WriteTimeout time.Duration
+	// WriteTimeout 写操作超时时间（毫秒）
+	WriteTimeout int64 `default:"3000"`
 
 	// ==================== 连接池配置 ====================
 	// PoolSize 连接池最大连接数
@@ -53,16 +54,16 @@ type Config struct {
 	// MinIdleConns 最小空闲连接数
 	MinIdleConns int
 
-	// MaxIdleTime 空闲连接最大存活时间
+	// MaxIdleTime 空闲连接最大存活时间（毫秒）
 	// 超过此时间的空闲连接将被关闭
-	MaxIdleTime time.Duration
+	MaxIdleTime int64 `default:"300000"`
 
-	// MaxLifetime 连接最大生存时间
+	// MaxLifetime 连接最大生存时间（毫秒）
 	// 0 表示连接可以永久重用
-	MaxLifetime time.Duration
+	MaxLifetime int64
 
-	// PoolTimeout 从连接池获取连接的超时时间
-	PoolTimeout time.Duration
+	// PoolTimeout 从连接池获取连接的超时时间（毫秒）
+	PoolTimeout int64 `default:"4000"`
 
 	// ==================== 重试配置 ====================
 	// MaxRetries 命令失败后的最大重试次数
@@ -71,11 +72,11 @@ type Config struct {
 	// >0: 指定重试次数
 	MaxRetries int
 
-	// MinRetryBackoff 最小重试退避时间
-	MinRetryBackoff time.Duration
+	// MinRetryBackoff 最小重试退避时间（毫秒）
+	MinRetryBackoff int64 `default:"8"`
 
-	// MaxRetryBackoff 最大重试退避时间
-	MaxRetryBackoff time.Duration
+	// MaxRetryBackoff 最大重试退避时间（毫秒）
+	MaxRetryBackoff int64 `default:"512"`
 
 	// ==================== TLS 配置 ====================
 	// TLSConfig TLS 配置
@@ -84,7 +85,7 @@ type Config struct {
 
 	// ==================== 集群特有配置 ====================
 	// MaxRedirects 集群模式下的最大重定向次数
-	MaxRedirects int
+	MaxRedirects int `default:"3"`
 
 	// ReadOnly 是否启用只读模式
 	// 启用后读操作会路由到从节点
@@ -99,62 +100,30 @@ type Config struct {
 	RouteRandomly bool
 }
 
+// ApplyDefaults 应用默认值
+func (c *Config) ApplyDefaults() error {
+	return tag.ApplyDefaults(c)
+}
+
 // Single 创建单机模式配置
 func Single(addr string) *Config {
-	return &Config{
-		Addrs:           []string{addr},
-		Protocol:        3,
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     3 * time.Second,
-		WriteTimeout:    3 * time.Second,
-		PoolTimeout:     4 * time.Second,
-		MaxIdleTime:     5 * time.Minute,
-		MinRetryBackoff: 8 * time.Millisecond,
-		MaxRetryBackoff: 512 * time.Millisecond,
-	}
+	return &Config{Addrs: []string{addr}}
 }
 
 // Cluster 创建集群模式配置
 func Cluster(addrs ...string) *Config {
-	return &Config{
-		Addrs:           addrs,
-		Protocol:        3,
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     3 * time.Second,
-		WriteTimeout:    3 * time.Second,
-		PoolTimeout:     4 * time.Second,
-		MaxIdleTime:     5 * time.Minute,
-		MinRetryBackoff: 8 * time.Millisecond,
-		MaxRetryBackoff: 512 * time.Millisecond,
-		MaxRedirects:    3,
-	}
+	return &Config{Addrs: addrs}
 }
 
 // Sentinel 创建哨兵模式配置
 func Sentinel(masterName string, addrs ...string) *Config {
-	return &Config{
-		Addrs:           addrs,
-		MasterName:      masterName,
-		Protocol:        3,
-		DialTimeout:     5 * time.Second,
-		ReadTimeout:     3 * time.Second,
-		WriteTimeout:    3 * time.Second,
-		PoolTimeout:     4 * time.Second,
-		MaxIdleTime:     5 * time.Minute,
-		MinRetryBackoff: 8 * time.Millisecond,
-		MaxRetryBackoff: 512 * time.Millisecond,
-	}
+	return &Config{Addrs: addrs, MasterName: masterName}
 }
 
 // Validate 验证配置是否有效
 func (c *Config) Validate() error {
 	if len(c.Addrs) == 0 {
 		return ErrEmptyAddrs
-	}
-
-	// 哨兵模式必须有 MasterName
-	if len(c.Addrs) > 1 && c.MasterName != "" && c.MasterName == "" {
-		return ErrSentinelMasterNameRequired
 	}
 
 	// 验证超时配置

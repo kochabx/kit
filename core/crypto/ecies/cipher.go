@@ -72,7 +72,10 @@ func Encrypt(recipientPublicKey *PublicKey, plaintext []byte) ([]byte, error) {
 	ephemeralPubKey := ephemeralKey.Public().Bytes(false)
 	totalSize := 1 + len(ephemeralPubKey) + len(nonce) + len(tag) + len(encryptedData)
 
-	result := make([]byte, totalSize)
+	// Use buffer pool for the result
+	result := getBuffer(totalSize)
+	defer putBuffer(result)
+	result = result[:totalSize] // Set the correct length
 	offset := 0
 
 	// Version
@@ -94,7 +97,10 @@ func Encrypt(recipientPublicKey *PublicKey, plaintext []byte) ([]byte, error) {
 	// Encrypted data
 	copy(result[offset:], encryptedData)
 
-	return result, nil
+	// Make a copy to return, as the buffer will be returned to pool
+	finalResult := make([]byte, totalSize)
+	copy(finalResult, result)
+	return finalResult, nil
 }
 
 // Decrypt decrypts ciphertext that was encrypted using Encrypt.
@@ -167,7 +173,12 @@ func Decrypt(privateKey *PrivateKey, ciphertext []byte) ([]byte, error) {
 	}
 
 	// Reconstruct ciphertext with tag for GCM
-	ciphertextWithTag := append(encryptedData, tag...)
+	// Use buffer pool for temporary ciphertext reconstruction
+	ciphertextWithTag := getBuffer(len(encryptedData) + len(tag))
+	defer putBuffer(ciphertextWithTag)
+	ciphertextWithTag = ciphertextWithTag[:0] // Reset length
+	ciphertextWithTag = append(ciphertextWithTag, encryptedData...)
+	ciphertextWithTag = append(ciphertextWithTag, tag...)
 
 	// Decrypt and verify
 	plaintext, err := aesGCM.Open(nil, nonce, ciphertextWithTag, nil)
