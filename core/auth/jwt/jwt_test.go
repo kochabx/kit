@@ -1,134 +1,78 @@
 package jwt
 
 import (
+	"context"
 	"testing"
-
-	"github.com/golang-jwt/jwt/v5"
 )
 
-// UserClaims demonstrates the recommended way to define custom claims
-// It embeds jwt.RegisteredClaims and implements ClaimsWithUserID
+// UserClaims 自定义 Claims 示例
 type UserClaims struct {
+	RegisteredClaims
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
 	Role     string `json:"role"`
 	Email    string `json:"email"`
-	jwt.RegisteredClaims
 }
 
-// GetUserID implements ClaimsWithUserID interface
-func (c *UserClaims) GetUserID() int64 {
-	return c.UserID
-}
+func TestBasicAuthenticator(t *testing.T) {
+	ctx := context.Background()
 
-func TestJWT_Basic(t *testing.T) {
-	jwtInstance, err := New(&Config{
-		Expire:        3600,
-		RefreshExpire: 604800,
-	})
+	// 创建基础认证器
+	auth, err := NewBasicAuthenticator(
+		WithSecret("test-secret"),
+		WithAccessTokenTTL(3600),
+		WithRefreshTokenTTL(604800),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Create user claims
-	userClaims := &UserClaims{
-		UserID:   12345,
-		Username: "john_doe",
-		Role:     "user",
-		Email:    "john@example.com",
+	// 创建 claims
+	claims := &UserClaims{
+		RegisteredClaims: RegisteredClaims{},
+		UserID:           12345,
+		Username:         "john_doe",
+		Role:             "user",
+		Email:            "john@example.com",
 	}
+	claims.Subject = "user123"
 
-	// Generate token
-	token, err := jwtInstance.Generate(userClaims)
+	// 生成 token 对
+	tokenPair, err := auth.Generate(ctx, claims)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log("Generated Token:", token)
+	t.Log("Access Token:", tokenPair.AccessToken)
+	t.Log("Refresh Token:", tokenPair.RefreshToken)
 
-	// Parse token back
-	var parsedClaims UserClaims
-	err = jwtInstance.Parse(token, &parsedClaims)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify custom fields
-	if parsedClaims.UserID != userClaims.UserID {
-		t.Errorf("Expected UserID %d, got %d", userClaims.UserID, parsedClaims.UserID)
-	}
-	if parsedClaims.Username != userClaims.Username {
-		t.Errorf("Expected Username %s, got %s", userClaims.Username, parsedClaims.Username)
-	}
-
-	t.Logf("Parsed Claims: %+v", parsedClaims)
-}
-
-// TestJWT_StronglyTyped demonstrates the strongly-typed approach
-func TestJWT_StronglyTyped(t *testing.T) {
-	t.Log("=== Demonstrating Strongly-Typed JWT Usage ===")
-
-	// Create JWT instance
-	jwtInstance, err := New(&Config{
-		Expire:        3600,
-		RefreshExpire: 604800,
-	})
+	// 验证 access token
+	verifiedClaims := &UserClaims{}
+	err = auth.Verify(ctx, tokenPair.AccessToken, verifiedClaims)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Create strongly-typed user claims
-	originalClaims := &UserClaims{
-		UserID:   98765,
-		Username: "jane_doe",
-		Role:     "admin",
-		Email:    "jane@example.com",
+	// 验证字段
+	if verifiedClaims.UserID != claims.UserID {
+		t.Errorf("Expected UserID %d, got %d", claims.UserID, verifiedClaims.UserID)
+	}
+	if verifiedClaims.Username != claims.Username {
+		t.Errorf("Expected Username %s, got %s", claims.Username, verifiedClaims.Username)
 	}
 
-	t.Logf("Original Claims: %+v", originalClaims)
+	t.Logf("Verified Claims: %+v", verifiedClaims)
 
-	// Generate tokens using strongly-typed claims
-	accessToken, err := jwtInstance.Generate(originalClaims)
+	// 刷新 token
+	refreshedClaims := &UserClaims{}
+	err = auth.Verify(ctx, tokenPair.RefreshToken, refreshedClaims)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	refreshToken, err := jwtInstance.GenerateRefreshToken(originalClaims)
+	newPair, err := auth.Refresh(ctx, tokenPair.RefreshToken, refreshedClaims)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	t.Log("Access Token Generated Successfully")
-	t.Log("Refresh Token Generated Successfully")
-
-	// Parse tokens back into strongly-typed structs
-	var accessClaims UserClaims
-	err = jwtInstance.Parse(accessToken, &accessClaims)
-	if err != nil {
-		t.Fatal("Failed to parse access token:", err)
-	}
-
-	var refreshClaims UserClaims
-	err = jwtInstance.Parse(refreshToken, &refreshClaims)
-	if err != nil {
-		t.Fatal("Failed to parse refresh token:", err)
-	}
-
-	// Verify type safety - all fields are strongly typed
-	t.Logf("Parsed Access Claims - UserID: %d, Username: %s, Role: %s",
-		accessClaims.UserID, accessClaims.Username, accessClaims.Role)
-	t.Logf("Parsed Refresh Claims - UserID: %d, Email: %s",
-		refreshClaims.UserID, refreshClaims.Email)
-
-	// Type-safe comparisons
-	if accessClaims.UserID != originalClaims.UserID {
-		t.Errorf("UserID mismatch: expected %d, got %d",
-			originalClaims.UserID, accessClaims.UserID)
-	}
-
-	if accessClaims.Username != originalClaims.Username {
-		t.Errorf("Username mismatch: expected %s, got %s",
-			originalClaims.Username, accessClaims.Username)
-	}
-
-	t.Log("✅ All strongly-typed validations passed!")
+	t.Log("New Access Token:", newPair.AccessToken)
+	t.Log("New Refresh Token:", newPair.RefreshToken)
 }
