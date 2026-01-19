@@ -15,14 +15,14 @@ var (
 )
 
 type SlidingWindowLimiter struct {
-	client    *redis.Client
+	client    redis.UniversalClient
 	bucketKey string
 	window    int
 	limit     int
 	script    *redis.Script
 }
 
-func NewSlidingWindowLimiter(client *redis.Client, bucketKey string, window, limit int) *SlidingWindowLimiter {
+func NewSlidingWindowLimiter(client redis.UniversalClient, bucketKey string, window, limit int) *SlidingWindowLimiter {
 	return &SlidingWindowLimiter{
 		client:    client,
 		bucketKey: bucketKey,

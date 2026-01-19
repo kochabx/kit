@@ -15,14 +15,14 @@ var (
 )
 
 type TokenBucketLimiter struct {
-	client    *redis.Client
+	client    redis.UniversalClient
 	bucketKey string
 	capacity  int
 	rate      int
 	script    *redis.Script
 }
 
-func NewTokenBucketLimiter(client *redis.Client, bucketKey string, capacity, rate int) *TokenBucketLimiter {
+func NewTokenBucketLimiter(client redis.UniversalClient, bucketKey string, capacity, rate int) *TokenBucketLimiter {
 	return &TokenBucketLimiter{
 		client:    client,
 		bucketKey: bucketKey,

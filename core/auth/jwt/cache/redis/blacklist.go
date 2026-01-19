@@ -4,12 +4,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/redis/go-redis/v9"
+	kitredis "github.com/kochabx/kit/store/redis"
 )
 
 // Blacklist Redis 黑名单实现
 type Blacklist struct {
-	client    *redis.Client
+	client    *kitredis.Client
 	keyPrefix string // "jwt:blacklist:"
 }
 
@@ -24,7 +24,7 @@ func WithBlacklistKeyPrefix(prefix string) BlacklistOption {
 }
 
 // NewBlacklist 创建 Redis 黑名单
-func NewBlacklist(client *redis.Client, opts ...BlacklistOption) *Blacklist {
+func NewBlacklist(client *kitredis.Client, opts ...BlacklistOption) *Blacklist {
 	bl := &Blacklist{
 		client:    client,
 		keyPrefix: "jwt:blacklist:",
@@ -44,13 +44,13 @@ func (b *Blacklist) Add(ctx context.Context, jti string, ttl time.Duration) erro
 	}
 
 	key := b.keyPrefix + jti
-	return b.client.Set(ctx, key, "1", ttl).Err()
+	return b.client.UniversalClient().Set(ctx, key, "1", ttl).Err()
 }
 
 // Contains 检查 token 是否在黑名单中
 func (b *Blacklist) Contains(ctx context.Context, jti string) (bool, error) {
 	key := b.keyPrefix + jti
-	exists, err := b.client.Exists(ctx, key).Result()
+	exists, err := b.client.UniversalClient().Exists(ctx, key).Result()
 	if err != nil {
 		return false, err
 	}

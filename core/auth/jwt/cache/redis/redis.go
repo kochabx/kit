@@ -2,7 +2,7 @@ package redis
 
 import (
 	"github.com/kochabx/kit/core/auth/jwt/cache"
-	"github.com/redis/go-redis/v9"
+	kitredis "github.com/kochabx/kit/store/redis"
 )
 
 // Store Redis 存储（同时包含 SessionStore 和 Blacklist）
@@ -24,7 +24,7 @@ func WithStoreKeyPrefix(prefix string) StoreOption {
 }
 
 // NewStore 创建包含 SessionStore 和 Blacklist 的 Redis 存储
-func NewStore(client *redis.Client, opts ...StoreOption) *Store {
+func NewStore(client *kitredis.Client, opts ...StoreOption) *Store {
 	store := &Store{
 		SessionStore: NewSessionStore(client),
 		Blacklist:    NewBlacklist(client),

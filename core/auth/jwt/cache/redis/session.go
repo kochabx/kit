@@ -7,12 +7,12 @@ import (
 	"time"
 
 	"github.com/kochabx/kit/core/auth/jwt/cache"
-	"github.com/redis/go-redis/v9"
+	kitredis "github.com/kochabx/kit/store/redis"
 )
 
 // SessionStore Redis 会话存储实现
 type SessionStore struct {
-	client       *redis.Client
+	client       *kitredis.Client
 	keyPrefix    string // "jwt:session:"
 	subjectIndex string // "jwt:subject:"
 }
@@ -35,7 +35,7 @@ func WithSubjectIndexPrefix(prefix string) SessionStoreOption {
 }
 
 // NewSessionStore 创建 Redis 会话存储
-func NewSessionStore(client *redis.Client, opts ...SessionStoreOption) *SessionStore {
+func NewSessionStore(client *kitredis.Client, opts ...SessionStoreOption) *SessionStore {
 	store := &SessionStore{
 		client:       client,
 		keyPrefix:    "jwt:session:",
@@ -67,7 +67,7 @@ func (s *SessionStore) SaveSession(ctx context.Context, session *cache.Session) 
 		return fmt.Errorf("session already expired")
 	}
 
-	pipe := s.client.Pipeline()
+	pipe := s.client.UniversalClient().Pipeline()
 
 	// 1. 保存会话数据 (key: jwt:session:{jti})
 	sessionKey := s.keyPrefix + session.JTI
@@ -86,8 +86,8 @@ func (s *SessionStore) SaveSession(ctx context.Context, session *cache.Session) 
 func (s *SessionStore) GetSession(ctx context.Context, jti string) (*cache.Session, error) {
 	sessionKey := s.keyPrefix + jti
 
-	data, err := s.client.Get(ctx, sessionKey).Bytes()
-	if err == redis.Nil {
+	data, err := s.client.UniversalClient().Get(ctx, sessionKey).Bytes()
+	if err == kitredis.ErrNil {
 		return nil, cache.ErrSessionNotFound
 	}
 	if err != nil {
@@ -113,7 +113,7 @@ func (s *SessionStore) DeleteSession(ctx context.Context, jti string) error {
 		return err
 	}
 
-	pipe := s.client.Pipeline()
+	pipe := s.client.UniversalClient().Pipeline()
 
 	// 1. 删除会话数据
 	sessionKey := s.keyPrefix + jti
@@ -132,7 +132,7 @@ func (s *SessionStore) DeleteAllSessions(ctx context.Context, subject string) er
 	subjectKey := s.subjectIndex + subject
 
 	// 获取所有 JTI
-	jtis, err := s.client.SMembers(ctx, subjectKey).Result()
+	jtis, err := s.client.UniversalClient().SMembers(ctx, subjectKey).Result()
 	if err != nil {
 		return fmt.Errorf("get subject jtis: %w", err)
 	}
@@ -141,7 +141,7 @@ func (s *SessionStore) DeleteAllSessions(ctx context.Context, subject string) er
 		return nil
 	}
 
-	pipe := s.client.Pipeline()
+	pipe := s.client.UniversalClient().Pipeline()
 
 	// 删除所有会话
 	for _, jti := range jtis {
@@ -161,7 +161,7 @@ func (s *SessionStore) ListSessions(ctx context.Context, subject string) ([]*cac
 	subjectKey := s.subjectIndex + subject
 
 	// 获取所有 JTI
-	jtis, err := s.client.SMembers(ctx, subjectKey).Result()
+	jtis, err := s.client.UniversalClient().SMembers(ctx, subjectKey).Result()
 	if err != nil {
 		return nil, fmt.Errorf("get subject jtis: %w", err)
 	}
@@ -177,7 +177,7 @@ func (s *SessionStore) ListSessions(ctx context.Context, subject string) ([]*cac
 		if err != nil {
 			if err == cache.ErrSessionNotFound {
 				// 会话已过期或被删除，从索引中清理
-				s.client.SRem(ctx, subjectKey, jti)
+				s.client.UniversalClient().SRem(ctx, subjectKey, jti)
 				continue
 			}
 			return nil, fmt.Errorf("get session %s: %w", jti, err)

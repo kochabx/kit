@@ -1,6 +1,7 @@
 package rate
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -9,14 +10,23 @@ import (
 )
 
 func TestSlidingWindowAllow(t *testing.T) {
-	r, err := redis.NewClient(&redis.SingleConfig{
+	// 创建 Redis 客户端配置
+	cfg := &redis.Config{
+		Addrs:    []string{"localhost:6379"},
 		Password: "12345678",
-	})
+		DB:       0,
+	}
+
+	// 创建 Redis 客户端
+	ctx := context.Background()
+	client, err := redis.New(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer client.Close()
 
-	bucket := NewSlidingWindowLimiter(r.Client, "test", 5, 10)
+	// 创建滑动窗口限流器
+	bucket := NewSlidingWindowLimiter(client.UniversalClient(), "test", 5, 10)
 	var count int
 	for i := 0; i < 1000; i++ {
 		now := time.Now()
