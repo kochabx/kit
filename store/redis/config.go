@@ -2,6 +2,7 @@ package redis
 
 import (
 	"crypto/tls"
+	"time"
 
 	"github.com/kochabx/kit/core/tag"
 )
@@ -37,14 +38,14 @@ type Config struct {
 	Protocol int `default:"3"`
 
 	// ==================== 超时配置 ====================
-	// DialTimeout 连接超时时间（毫秒）
-	DialTimeout int64 `default:"5000"`
+	// DialTimeout 连接超时时间
+	DialTimeout time.Duration `default:"5s"`
 
-	// ReadTimeout 读操作超时时间（毫秒）
-	ReadTimeout int64 `default:"3000"`
+	// ReadTimeout 读操作超时时间
+	ReadTimeout time.Duration `default:"3s"`
 
-	// WriteTimeout 写操作超时时间（毫秒）
-	WriteTimeout int64 `default:"3000"`
+	// WriteTimeout 写操作超时时间
+	WriteTimeout time.Duration `default:"3s"`
 
 	// ==================== 连接池配置 ====================
 	// PoolSize 连接池最大连接数
@@ -54,16 +55,16 @@ type Config struct {
 	// MinIdleConns 最小空闲连接数
 	MinIdleConns int
 
-	// MaxIdleTime 空闲连接最大存活时间（毫秒）
+	// MaxIdleTime 空闲连接最大存活时间
 	// 超过此时间的空闲连接将被关闭
-	MaxIdleTime int64 `default:"300000"`
+	MaxIdleTime time.Duration `default:"5m"`
 
-	// MaxLifetime 连接最大生存时间（毫秒）
+	// MaxLifetime 连接最大生存时间
 	// 0 表示连接可以永久重用
-	MaxLifetime int64
+	MaxLifetime time.Duration
 
-	// PoolTimeout 从连接池获取连接的超时时间（毫秒）
-	PoolTimeout int64 `default:"4000"`
+	// PoolTimeout 从连接池获取连接的超时时间
+	PoolTimeout time.Duration `default:"4s"`
 
 	// ==================== 重试配置 ====================
 	// MaxRetries 命令失败后的最大重试次数
@@ -72,11 +73,11 @@ type Config struct {
 	// >0: 指定重试次数
 	MaxRetries int
 
-	// MinRetryBackoff 最小重试退避时间（毫秒）
-	MinRetryBackoff int64 `default:"8"`
+	// MinRetryBackoff 最小重试退避时间
+	MinRetryBackoff time.Duration `default:"8ms"`
 
-	// MaxRetryBackoff 最大重试退避时间（毫秒）
-	MaxRetryBackoff int64 `default:"512"`
+	// MaxRetryBackoff 最大重试退避时间
+	MaxRetryBackoff time.Duration `default:"512ms"`
 
 	// ==================== TLS 配置 ====================
 	// TLSConfig TLS 配置

@@ -18,11 +18,11 @@ type MySQLConfig struct {
 	Database string `json:"database"`
 
 	// MySQL 特有配置
-	Charset   string `json:"charset" default:"utf8mb4"`
-	Collation string `json:"collation" default:"utf8mb4_unicode_ci"`
-	ParseTime bool   `json:"parseTime" default:"true"`
-	Loc       string `json:"loc" default:"Local"`
-	Timeout   int    `json:"timeout" default:"10"`
+	Charset   string        `json:"charset" default:"utf8mb4"`
+	Collation string        `json:"collation" default:"utf8mb4_unicode_ci"`
+	ParseTime bool          `json:"parseTime" default:"true"`
+	Loc       string        `json:"loc" default:"Local"`
+	Timeout   time.Duration `json:"timeout" default:"10s"`
 
 	// 连接池配置
 	PoolConfig `json:"pool"`
@@ -77,29 +77,14 @@ func (c *MySQLConfig) DSN() string {
 	b.WriteString("&loc=")
 	b.WriteString(c.Loc)
 	b.WriteString("&timeout=")
-	b.WriteString(strconv.Itoa(c.Timeout))
-	b.WriteByte('s')
+	b.WriteString(c.Timeout.String())
 
 	return b.String()
 }
 
 // Pool 返回连接池配置
 func (c *MySQLConfig) Pool() *PoolConfig {
-	// 设置默认值
-	pool := &c.PoolConfig
-	if pool.MaxIdleConns == 0 {
-		pool.MaxIdleConns = 10
-	}
-	if pool.MaxOpenConns == 0 {
-		pool.MaxOpenConns = 100
-	}
-	if pool.ConnMaxLifetime == 0 {
-		pool.ConnMaxLifetime = time.Hour
-	}
-	if pool.ConnMaxIdleTime == 0 {
-		pool.ConnMaxIdleTime = 10 * time.Minute
-	}
-	return pool
+	return &c.PoolConfig
 }
 
 // LogLevel 返回日志级别

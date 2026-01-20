@@ -18,9 +18,9 @@ type PostgresConfig struct {
 	Database string `json:"database"`
 
 	// PostgreSQL 特有配置
-	SSLMode        string `json:"sslmode" default:"disable"`
-	TimeZone       string `json:"timezone" default:"Asia/Shanghai"`
-	ConnectTimeout int    `json:"connectTimeout" default:"10"`
+	SSLMode        string        `json:"sslmode" default:"disable"`
+	TimeZone       string        `json:"timezone" default:"Asia/Shanghai"`
+	ConnectTimeout time.Duration `json:"connectTimeout" default:"10s"`
 
 	// 连接池配置
 	PoolConfig `json:"pool"`
@@ -69,27 +69,14 @@ func (c *PostgresConfig) DSN() string {
 	b.WriteString(" TimeZone=")
 	b.WriteString(c.TimeZone)
 	b.WriteString(" connect_timeout=")
-	b.WriteString(strconv.Itoa(c.ConnectTimeout))
+	b.WriteString(strconv.FormatInt(int64(c.ConnectTimeout.Seconds()), 10))
 
 	return b.String()
 }
 
 // Pool 返回连接池配置
 func (c *PostgresConfig) Pool() *PoolConfig {
-	pool := &c.PoolConfig
-	if pool.MaxIdleConns == 0 {
-		pool.MaxIdleConns = 10
-	}
-	if pool.MaxOpenConns == 0 {
-		pool.MaxOpenConns = 100
-	}
-	if pool.ConnMaxLifetime == 0 {
-		pool.ConnMaxLifetime = time.Hour
-	}
-	if pool.ConnMaxIdleTime == 0 {
-		pool.ConnMaxIdleTime = 10 * time.Minute
-	}
-	return pool
+	return &c.PoolConfig
 }
 
 // LogLevel 返回日志级别

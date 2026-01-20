@@ -5,6 +5,7 @@ apis:
     url: "https://api.example.com/user"
     headers:
       Authorization: "Bearer token"
+    duration: 120s
 
 server:
   host: 12345

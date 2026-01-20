@@ -14,11 +14,11 @@ type SQLiteConfig struct {
 	FilePath string `json:"filePath" default:"./data.db"`
 
 	// SQLite 特有配置
-	JournalMode string `json:"journalMode" default:"WAL"`
-	CacheSize   int    `json:"cacheSize" default:"-2000"`
-	BusyTimeout int    `json:"busyTimeout" default:"5000"`
-	SyncMode    string `json:"syncMode" default:"NORMAL"`
-	ForeignKeys bool   `json:"foreignKeys" default:"true"`
+	JournalMode string        `json:"journalMode" default:"WAL"`
+	CacheSize   int           `json:"cacheSize" default:"-2000"`
+	BusyTimeout time.Duration `json:"busyTimeout" default:"5s"`
+	SyncMode    string        `json:"syncMode" default:"NORMAL"`
+	ForeignKeys bool          `json:"foreignKeys" default:"true"`
 
 	// 连接池配置
 	PoolConfig `json:"pool"`
@@ -59,7 +59,7 @@ func (c *SQLiteConfig) DSN() string {
 	b.WriteString("&_cache_size=")
 	b.WriteString(strconv.Itoa(c.CacheSize))
 	b.WriteString("&_busy_timeout=")
-	b.WriteString(strconv.Itoa(c.BusyTimeout))
+	b.WriteString(strconv.FormatInt(c.BusyTimeout.Milliseconds(), 10))
 	b.WriteString("&_synchronous=")
 	b.WriteString(c.SyncMode)
 	b.WriteString("&_foreign_keys=")
@@ -70,21 +70,10 @@ func (c *SQLiteConfig) DSN() string {
 
 // Pool 返回连接池配置
 func (c *SQLiteConfig) Pool() *PoolConfig {
-	pool := &c.PoolConfig
-	// SQLite 通常使用较少的连接
-	if pool.MaxIdleConns == 0 {
-		pool.MaxIdleConns = 1
-	}
-	if pool.MaxOpenConns == 0 {
-		pool.MaxOpenConns = 1 // SQLite 单文件，建议单连接
-	}
-	if pool.ConnMaxLifetime == 0 {
-		pool.ConnMaxLifetime = time.Hour
-	}
-	if pool.ConnMaxIdleTime == 0 {
-		pool.ConnMaxIdleTime = 10 * time.Minute
-	}
-	return pool
+	// SQLite 单文件数据库，使用单连接
+	c.PoolConfig.MaxIdleConns = 1
+	c.PoolConfig.MaxOpenConns = 1
+	return &c.PoolConfig
 }
 
 // LogLevel 返回日志级别

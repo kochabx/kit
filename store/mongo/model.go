@@ -3,18 +3,19 @@ package mongo
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/kochabx/kit/core/tag"
 )
 
 // Config MongoDB 配置结构体
 type Config struct {
-	Host        string `json:"host" default:"localhost"`
-	Port        int    `json:"port" default:"27017"`
-	User        string `json:"user" default:"root"`
-	Password    string `json:"password"`
-	MaxPoolSize int    `json:"maxPoolSize" default:"10"`
-	Timeout     int    `json:"timeout" default:"3"`
+	Host        string        `json:"host" default:"localhost"`
+	Port        int           `json:"port" default:"27017"`
+	User        string        `json:"user" default:"root"`
+	Password    string        `json:"password"`
+	MaxPoolSize int           `json:"maxPoolSize" default:"10"`
+	Timeout     time.Duration `json:"timeout" default:"3s"`
 }
 
 // uri 构建 MongoDB 连接字符串

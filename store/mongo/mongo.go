@@ -3,7 +3,6 @@ package mongo
 import (
 	"context"
 	"errors"
-	"time"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -69,8 +68,8 @@ func (m *Mongo) connect() error {
 		SetServerAPIOptions(serverApi).
 		SetBSONOptions(bsonOpts).
 		SetMaxPoolSize(uint64(m.config.MaxPoolSize)).
-		SetConnectTimeout(time.Duration(m.config.Timeout) * time.Second).
-		SetServerSelectionTimeout(time.Duration(m.config.Timeout) * time.Second)
+		SetConnectTimeout(m.config.Timeout).
+		SetServerSelectionTimeout(m.config.Timeout)
 
 	client, err := mongo.Connect(context.TODO(), opts)
 	if err != nil {

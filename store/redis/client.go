@@ -4,7 +4,6 @@ import (
 	"context"
 	"runtime"
 	"sync/atomic"
-	"time"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
@@ -85,19 +84,19 @@ func buildUniversalOptions(cfg *Config) *redis.UniversalOptions {
 		DB:         cfg.DB,
 		Protocol:   cfg.Protocol,
 
-		DialTimeout:  time.Duration(cfg.DialTimeout) * time.Millisecond,
-		ReadTimeout:  time.Duration(cfg.ReadTimeout) * time.Millisecond,
-		WriteTimeout: time.Duration(cfg.WriteTimeout) * time.Millisecond,
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
 
 		PoolSize:        poolSize,
 		MinIdleConns:    cfg.MinIdleConns,
-		ConnMaxIdleTime: time.Duration(cfg.MaxIdleTime) * time.Millisecond,
-		ConnMaxLifetime: time.Duration(cfg.MaxLifetime) * time.Millisecond,
-		PoolTimeout:     time.Duration(cfg.PoolTimeout) * time.Millisecond,
+		ConnMaxIdleTime: cfg.MaxIdleTime,
+		ConnMaxLifetime: cfg.MaxLifetime,
+		PoolTimeout:     cfg.PoolTimeout,
 
 		MaxRetries:      cfg.MaxRetries,
-		MinRetryBackoff: time.Duration(cfg.MinRetryBackoff) * time.Millisecond,
-		MaxRetryBackoff: time.Duration(cfg.MaxRetryBackoff) * time.Millisecond,
+		MinRetryBackoff: cfg.MinRetryBackoff,
+		MaxRetryBackoff: cfg.MaxRetryBackoff,
 
 		TLSConfig:      cfg.TLSConfig,
 		MaxRedirects:   cfg.MaxRedirects,

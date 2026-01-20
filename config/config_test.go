@@ -6,13 +6,14 @@ import (
 )
 
 type api struct {
-	Name    string            `json:"name"`
-	Method  string            `json:"method" default:"GET"`
-	Url     string            `json:"url"`
-	Body    string            `json:"body"`
-	Headers map[string]string `json:"headers" default:"env: production"`
-	Timeout int               `json:"timeout" default:"3"`
-	Period  int               `json:"period" default:"10"`
+	Name     string            `json:"name"`
+	Method   string            `json:"method" default:"GET"`
+	Url      string            `json:"url"`
+	Body     string            `json:"body"`
+	Headers  map[string]string `json:"headers" default:"env: production"`
+	Timeout  int               `json:"timeout" default:"3"`
+	Period   int               `json:"period" default:"10"`
+	Duration time.Duration     `json:"duration" default:"5s"`
 }
 
 type server struct {

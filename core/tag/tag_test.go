@@ -3,6 +3,7 @@ package tag
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 type tagMock struct {
@@ -17,7 +18,8 @@ type tagMock struct {
 		Province string `default:"New York"`
 		City     string `default:"New York"`
 	}
-	Tags map[string]string `default:"env:prod,region:us"`
+	Tags     map[string]string `default:"env:prod,region:us"`
+	Duration time.Duration     `default:"1h30m"`
 }
 
 type Api struct {

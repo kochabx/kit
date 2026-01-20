@@ -173,29 +173,9 @@ func (ctx *context) applyPointer(value reflect.Value, typ reflect.Type, tagValue
 
 // applySlice handles slice fields
 func (ctx *context) applySlice(value reflect.Value, tagValue, path string) error {
-	values := strings.Split(tagValue, ctx.options.separator)
-
-	// Pre-allocate slice with capacity
-	slice := reflect.MakeSlice(value.Type(), len(values), len(values))
-
-	for i, val := range values {
-		elem := slice.Index(i)
-
-		if isBasicKind(elem.Kind()) {
-			if err := ctx.options.parser.Parse(elem, val); err != nil {
-				return newFieldError(path, elem.Kind(), ctx.options.tagName, val, err)
-			}
-		} else if elem.Kind() == reflect.Struct {
-			// For struct slices, recursively apply defaults
-			if err := ctx.applyStruct(elem); err != nil {
-				return err
-			}
-		} else {
-			return newFieldError(path, elem.Kind(), ctx.options.tagName, val, ErrUnsupportedType)
-		}
+	if err := ctx.options.parser.Parse(value, tagValue); err != nil {
+		return newFieldError(path, value.Kind(), ctx.options.tagName, tagValue, err)
 	}
-
-	value.Set(slice)
 	return nil
 }
 

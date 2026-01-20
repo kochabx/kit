@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl/plain"
@@ -55,7 +54,7 @@ func (k *Kafka) mechanism() plain.Mechanism {
 // createDialer 创建Kafka连接拨号器
 func (k *Kafka) createDialer() *kafka.Dialer {
 	dialer := &kafka.Dialer{
-		Timeout:   time.Duration(k.config.Timeout) * time.Second,
+		Timeout:   k.config.Timeout,
 		DualStack: true,
 	}
 
@@ -179,7 +178,7 @@ func (k *Kafka) closeAll(store *sync.Map, eg *errgroup.Group) {
 
 // Close 关闭所有的生产者和消费者连接
 func (k *Kafka) Close() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(k.config.CloseTimeout)*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), k.config.CloseTimeout)
 	defer cancel()
 
 	eg, _ := errgroup.WithContext(ctx)
