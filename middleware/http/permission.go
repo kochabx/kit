@@ -43,6 +43,11 @@ func Permission(cfgs ...PermissionConfig) gin.HandlerFunc {
 		cfg = cfgs[0]
 	}
 
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
+	}
+
 	if cfg.Checker == nil {
 		panic("middleware: PermissionChecker is required")
 	}

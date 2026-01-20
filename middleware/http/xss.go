@@ -7,6 +7,7 @@ import (
 	"io"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kochabx/kit/log"
 )
 
 // Sanitizer XSS 过滤器接口
@@ -36,25 +37,24 @@ type XssConfig struct {
 	SkipPaths     []string                // 跳过处理的路径前缀
 	SkipFunc      func(*gin.Context) bool // 动态跳过判断函数
 	SkipHeaders   []string                // 跳过过滤的请求头
-}
-
-// DefaultXssConfig 返回默认 XSS 配置
-func DefaultXssConfig() XssConfig {
-	return XssConfig{
-		QueryEnabled:  true,
-		FormEnabled:   true,
-		HeaderEnabled: false, // 默认不过滤请求头，避免破坏正常功能
-		BodyEnabled:   true,
-		Sanitizer:     HTMLEscapeSanitizer(),
-		SkipHeaders:   []string{"Authorization", "Content-Type", "Accept", "User-Agent"},
-	}
+	Logger        *log.Logger             // 自定义日志记录器
 }
 
 // Xss 创建 XSS 防护中间件
 func Xss(cfgs ...XssConfig) gin.HandlerFunc {
-	cfg := DefaultXssConfig()
+	cfg := XssConfig{}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
+	}
+
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
+	}
+
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
 	}
 
 	if cfg.Sanitizer == nil {

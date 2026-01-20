@@ -33,11 +33,14 @@ func (w *responseWriter) Write(b []byte) (int, error) {
 
 // Logger 创建日志中间件
 func Logger(cfgs ...LoggerConfig) gin.HandlerFunc {
-	cfg := LoggerConfig{
-		Logger: log.G,
-	}
+	cfg := LoggerConfig{}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
+	}
+
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
 	}
 
 	// 预编译路径匹配器

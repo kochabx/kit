@@ -59,9 +59,15 @@ func MustECIESDecryptor(privateKeyPath string) Decryptor {
 }
 
 // Crypto 创建加解密中间件
-func Crypto(cfg CryptoConfig) gin.HandlerFunc {
-	if cfg.Decryptor == nil {
-		panic("middleware: Decryptor is required")
+func Crypto(cfgs ...CryptoConfig) gin.HandlerFunc {
+	cfg := CryptoConfig{}
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
+
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
 	}
 
 	// 默认启用 Base64 解码

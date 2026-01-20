@@ -23,10 +23,14 @@ type RecoveryConfig struct {
 func Recovery(cfgs ...RecoveryConfig) gin.HandlerFunc {
 	cfg := RecoveryConfig{
 		StackTrace: true,
-		Logger:     log.G,
 	}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
+	}
+
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
 	}
 
 	return func(c *gin.Context) {

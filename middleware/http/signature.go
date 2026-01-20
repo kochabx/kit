@@ -71,11 +71,14 @@ func DefaultSignatureConfig() SignatureConfig {
 
 // Signature 创建签名验证中间件
 func Signature(cfgs ...SignatureConfig) gin.HandlerFunc {
-	cfg := SignatureConfig{
-		Logger: log.G,
-	}
+	cfg := SignatureConfig{}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
+	}
+
+	// 设置默认日志记录器
+	if cfg.Logger == nil {
+		cfg.Logger = log.G
 	}
 
 	if cfg.Signer == nil {
