@@ -9,7 +9,7 @@ import (
 
 // BasicAuthenticator 基础认证器
 type BasicAuthenticator struct {
-	generator *Generator
+	generator *generator
 	config    *Config
 }
 
@@ -24,7 +24,7 @@ func NewBasicAuthenticator(opts ...Option) (*BasicAuthenticator, error) {
 		opt(config)
 	}
 
-	generator, err := NewGenerator(config)
+	generator, err := newGenerator(config)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +41,7 @@ func New(config *Config) (*BasicAuthenticator, error) {
 		return nil, fmt.Errorf("apply defaults: %w", err)
 	}
 
-	generator, err := NewGenerator(config)
+	generator, err := newGenerator(config)
 	if err != nil {
 		return nil, err
 	}

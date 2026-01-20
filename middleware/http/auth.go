@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/kochabx/kit/errors"
 	"github.com/kochabx/kit/transport/http"
 )
@@ -21,10 +22,8 @@ var (
 	ErrAuthenticatorNil = errors.Unauthorized("authenticator not configured")
 )
 
-// Claims 认证信息接口
-type Claims interface {
-	GetSubject() string
-}
+// Claims JWT Claims 类型约束
+type Claims = jwt.Claims
 
 // Authenticator 认证器接口
 type Authenticator[T Claims] interface {

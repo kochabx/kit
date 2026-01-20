@@ -8,18 +8,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// Generator JWT 生成器
-type Generator struct {
+// generator JWT 生成器
+type generator struct {
 	config *Config
 }
 
-// NewGenerator 创建生成器
-func NewGenerator(config *Config) (*Generator, error) {
-	return &Generator{config: config}, nil
+// newGenerator 创建生成器
+func newGenerator(config *Config) (*generator, error) {
+	return &generator{config: config}, nil
 }
 
 // Generate 生成 token
-func (g *Generator) Generate(claims Claims, ttl time.Duration) (string, error) {
+func (g *generator) Generate(claims Claims, ttl time.Duration) (string, error) {
 	now := time.Now()
 	jti := uuid.New().String()
 
@@ -44,7 +44,7 @@ func (g *Generator) Generate(claims Claims, ttl time.Duration) (string, error) {
 }
 
 // Parse 解析 token
-func (g *Generator) Parse(tokenString string, claims Claims) error {
+func (g *generator) Parse(tokenString string, claims Claims) error {
 	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (any, error) {
 		// 验证签名方法
 		if token.Method != g.config.GetSigningMethod() {
@@ -65,7 +65,7 @@ func (g *Generator) Parse(tokenString string, claims Claims) error {
 }
 
 // Validate 仅验证 token 有效性
-func (g *Generator) Validate(tokenString string) error {
+func (g *generator) Validate(tokenString string) error {
 	claims := &RegisteredClaims{}
 	return g.Parse(tokenString, claims)
 }
