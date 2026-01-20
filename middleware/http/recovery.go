@@ -1,47 +1,60 @@
 package middleware
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"runtime/debug"
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kochabx/kit/log"
 )
 
+// RecoveryConfig Recovery 中间件配置
 type RecoveryConfig struct {
-	Stack bool
+	StackTrace bool        // 是否记录堆栈信息
+	Logger     *log.Logger // 自定义日志记录器
 }
 
-func GinRecovery() gin.HandlerFunc {
-	return GinRecoveryWithConfig(RecoveryConfig{
-		Stack: true,
-	})
-}
+// Recovery 创建 Recovery 中间件
+func Recovery(cfgs ...RecoveryConfig) gin.HandlerFunc {
+	cfg := RecoveryConfig{
+		StackTrace: true,
+		Logger:     log.G,
+	}
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 
-func GinRecoveryWithConfig(config RecoveryConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		defer func() {
 			if err := recover(); err != nil {
 				httpRequest, _ := httputil.DumpRequest(c.Request, false)
-				// Check for a broken connection, as it is not really a
-				// condition that warrants a panic stack trace.
-				brokenPipe := isBrokenPipe(err)
 
-				if brokenPipe {
-					log.Error().AnErr("recovery", err.(error)).Bytes("request", httpRequest).Msg("broken pipe error")
-					// If the connection is dead, we can't write a status to it.
-					_ = c.Error(err.(error)) // nolint: err check
+				// 检查是否为断开的连接
+				if isBrokenPipe(err) {
+					cfg.Logger.Warn().
+						Str("error", fmt.Sprintf("%v", err)).
+						Bytes("request", httpRequest).
+						Msg("broken pipe")
+					_ = c.Error(fmt.Errorf("%v", err))
 					c.Abort()
 					return
 				}
 
-				if config.Stack {
-					log.Error().AnErr("recovery", err.(error)).Bytes("request", httpRequest).Msg("recovered from panic")
-				} else {
-					log.Error().AnErr("recovery", err.(error)).Bytes("request", httpRequest).Msg("recovered from panic")
+				// 记录日志
+				event := cfg.Logger.Error().
+					Str("error", fmt.Sprintf("%v", err)).
+					Bytes("request", httpRequest)
+
+				if cfg.StackTrace {
+					event = event.Bytes("stack", debug.Stack())
 				}
+
+				event.Msg("panic recovered")
 				c.AbortWithStatus(http.StatusInternalServerError)
 			}
 		}()
@@ -49,11 +62,13 @@ func GinRecoveryWithConfig(config RecoveryConfig) gin.HandlerFunc {
 	}
 }
 
+// isBrokenPipe 检查是否为断开的连接错误
 func isBrokenPipe(err any) bool {
 	if ne, ok := err.(*net.OpError); ok {
 		if se, ok := ne.Err.(*os.SyscallError); ok {
 			errStr := strings.ToLower(se.Error())
-			return strings.Contains(errStr, "broken pipe") || strings.Contains(errStr, "connection reset by peer")
+			return strings.Contains(errStr, "broken pipe") ||
+				strings.Contains(errStr, "connection reset by peer")
 		}
 	}
 	return false

@@ -1,100 +1,116 @@
 package middleware
 
 import (
-	"slices"
+	"bytes"
+	"io"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/kochabx/kit/log"
 )
 
 // LoggerConfig 日志中间件配置
 type LoggerConfig struct {
-	// HeaderEnabled 是否记录请求头信息
-	HeaderEnabled bool
-	// HandlerEnabled 是否记录处理器名称
-	HandlerEnabled bool
-	// BodyEnabled 是否记录请求体
-	BodyEnabled bool
-	// SkipPaths 跳过记录的路径列表
-	SkipPaths []string
-	// Filter 自定义过滤函数
-	Filter func(c *gin.Context) bool
+	RequestBody  bool                    // 是否记录请求体
+	ResponseBody bool                    // 是否记录响应体
+	Header       bool                    // 是否记录请求头
+	HandlerName  bool                    // 是否记录处理器名称
+	SkipPaths    []string                // 跳过记录的路径
+	SkipFunc     func(*gin.Context) bool // 动态跳过判断函数
+	Logger       *log.Logger             // 自定义日志记录器
 }
 
-// DefaultLoggerConfig 默认日志配置
-func DefaultLoggerConfig() LoggerConfig {
-	return LoggerConfig{
-		HeaderEnabled:  false,
-		BodyEnabled:    false,
-		HandlerEnabled: false,
-		SkipPaths:      []string{"/health", "/metrics", "/ping"},
-		Filter:         nil,
+// responseWriter 包装 gin.ResponseWriter 以捕获响应体
+type responseWriter struct {
+	gin.ResponseWriter
+	body *bytes.Buffer
+}
+
+func (w *responseWriter) Write(b []byte) (int, error) {
+	w.body.Write(b)
+	return w.ResponseWriter.Write(b)
+}
+
+// Logger 创建日志中间件
+func Logger(cfgs ...LoggerConfig) gin.HandlerFunc {
+	cfg := LoggerConfig{
+		Logger: log.G,
 	}
-}
+	if len(cfgs) > 0 {
+		cfg = cfgs[0]
+	}
 
-// GinLogger 创建默认的 Gin 日志中间件
-func GinLogger() gin.HandlerFunc {
-	return GinLoggerWithConfig(DefaultLoggerConfig())
-}
+	// 预编译路径匹配器
+	matcher := NewPathMatcher(cfg.SkipPaths)
 
-// GinLoggerWithConfig 根据配置创建 Gin 日志中间件
-func GinLoggerWithConfig(config LoggerConfig) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// 检查是否需要跳过记录
-		if shouldSkipLogging(c, config) {
+		// 检查是否跳过
+		if shouldSkip(c, matcher, cfg.SkipFunc) {
 			c.Next()
 			return
 		}
 
 		start := time.Now()
-		c.Next()
-		duration := time.Since(start)
 
-		event := log.Info().
-			Int("status", c.Writer.Status()).
-			Str("method", c.Request.Method).
-			Str("uri", c.Request.RequestURI).
-			Dur("duration", duration).
-			Str("client_ip", c.ClientIP())
-
-		if config.HeaderEnabled {
-			event = event.Any("headers", c.Request.Header)
-		}
-
-		if config.HandlerEnabled {
-			event = event.Str("handler", c.HandlerName())
-		}
-
-		if config.BodyEnabled {
+		// 读取请求体
+		var requestBody []byte
+		if cfg.RequestBody {
 			body, err := c.GetRawData()
-			if err != nil {
-				c.Error(err)
-			} else {
-				event = event.Str("body", string(body))
+			if err == nil {
+				requestBody = body
+				c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
 			}
 		}
 
-		if requestId := c.Request.Header.Get("X-Request-Id"); requestId != "" {
-			event = event.Str("request_id", requestId)
+		// 包装 ResponseWriter
+		var rw *responseWriter
+		if cfg.ResponseBody {
+			rw = &responseWriter{
+				ResponseWriter: c.Writer,
+				body:           bytes.NewBuffer(nil),
+			}
+			c.Writer = rw
 		}
 
-		// 记录错误信息
+		// 处理请求
+		c.Next()
+
+		// 记录日志
+		event := cfg.Logger.Info().
+			Int("status", c.Writer.Status()).
+			Str("method", c.Request.Method).
+			Str("path", c.Request.URL.Path).
+			Dur("duration", time.Since(start)).
+			Str("client_ip", c.ClientIP())
+
+		if query := c.Request.URL.RawQuery; query != "" {
+			event = event.Str("query", query)
+		}
+
+		if requestID := c.Request.Header.Get("X-Request-Id"); requestID != "" {
+			event = event.Str("request_id", requestID)
+		}
+
+		if cfg.HandlerName {
+			event = event.Str("handler", c.HandlerName())
+		}
+
+		if cfg.Header {
+			event = event.Any("headers", c.Request.Header)
+		}
+
+		if cfg.RequestBody && len(requestBody) > 0 {
+			event = event.Bytes("request_body", requestBody)
+		}
+
+		if cfg.ResponseBody && rw != nil {
+			event = event.Bytes("response_body", rw.body.Bytes())
+		}
+
 		if len(c.Errors) > 0 {
-			event = event.Any("errors", c.Errors.ByType(gin.ErrorTypePrivate).String())
+			event = event.Str("errors", c.Errors.ByType(gin.ErrorTypePrivate).String())
 		}
 
 		event.Send()
 	}
-}
-
-// shouldSkipLogging 是否应该跳过日志记录
-func shouldSkipLogging(c *gin.Context, config LoggerConfig) bool {
-	// 检查自定义过滤器
-	if config.Filter != nil {
-		return config.Filter(c)
-	}
-
-	// 检查跳过路径列表
-	path := c.Request.URL.Path
-	return slices.Contains(config.SkipPaths, path)
 }

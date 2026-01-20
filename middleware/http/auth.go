@@ -123,9 +123,12 @@ func Auth[T Claims](cfg AuthConfig[T]) gin.HandlerFunc {
 		}
 	}
 
+	// 预编译路径匹配器
+	matcher := NewPathMatcher(cfg.SkipPaths)
+
 	return func(c *gin.Context) {
 		// 跳过检查
-		if cfg.SkipFunc != nil && cfg.SkipFunc(c) || skippedPathPrefixes(c, cfg.SkipPaths...) {
+		if shouldSkip(c, matcher, cfg.SkipFunc) {
 			c.Next()
 			return
 		}
