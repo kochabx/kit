@@ -21,10 +21,6 @@ type TestClaims struct {
 	Roles  []string `json:"roles"`
 }
 
-func (c *TestClaims) GetSubject() string {
-	return c.Subject
-}
-
 // ============================================================================
 // Mock Authenticator
 // ============================================================================
