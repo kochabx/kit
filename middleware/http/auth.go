@@ -19,7 +19,7 @@ const (
 var (
 	ErrTokenMissing     = errors.Unauthorized("token missing")
 	ErrTokenInvalid     = errors.Unauthorized("token invalid")
-	ErrAuthenticatorNil = errors.Unauthorized("authenticator not configured")
+	ErrAuthenticatorNil = errors.Unauthorized("authenticator missing")
 )
 
 // Claims JWT Claims 类型约束
