@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"database/sql"
-	"sync/atomic"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -22,11 +21,10 @@ type Client struct {
 	sqlDB   *sql.DB
 	options *clientOptions
 	logger  *log.Logger
-	closed  atomic.Bool
 }
 
 // New 创建新的数据库客户端
-func New(ctx context.Context, cfg DriverConfig, opts ...Option) (*Client, error) {
+func New(cfg DriverConfig, opts ...Option) (*Client, error) {
 	if cfg == nil {
 		return nil, ErrInvalidConfig
 	}
@@ -61,7 +59,7 @@ func New(ctx context.Context, cfg DriverConfig, opts ...Option) (*Client, error)
 	}
 
 	// 测试连接
-	pingCtx, pingCancel := context.WithTimeout(ctx, options.connectTimeout)
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), options.connectTimeout)
 	defer pingCancel()
 
 	if err := c.Ping(pingCtx); err != nil {
@@ -177,10 +175,6 @@ func (c *Client) DB() *gorm.DB {
 
 // Ping 测试数据库连接
 func (c *Client) Ping(ctx context.Context) error {
-	if c.closed.Load() {
-		return ErrAlreadyClosed
-	}
-
 	if c.sqlDB == nil {
 		return ErrNotInitialized
 	}
@@ -190,9 +184,6 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Close 关闭数据库连接
 func (c *Client) Close() error {
-	if c.closed.Swap(true) {
-		return nil
-	}
 	if c.sqlDB != nil {
 		return c.sqlDB.Close()
 	}
@@ -209,10 +200,6 @@ func (c *Client) Stats() sql.DBStats {
 
 // IsHealthy 返回健康状态
 func (c *Client) IsHealthy() bool {
-	if c.closed.Load() {
-		return false
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	return c.Ping(ctx) == nil

@@ -11,9 +11,6 @@ var (
 	// ErrNil redis.Nil 的封装，表示 key 不存在
 	ErrNil = redis.Nil
 
-	// ErrClientClosed 客户端已关闭
-	ErrClientClosed = errors.New("redis: client is closed")
-
 	// ErrInvalidConfig 配置无效
 	ErrInvalidConfig = errors.New("redis: invalid configuration")
 

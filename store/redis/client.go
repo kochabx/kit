@@ -3,7 +3,6 @@ package redis
 import (
 	"context"
 	"runtime"
-	"sync/atomic"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
@@ -18,22 +17,16 @@ type Client struct {
 
 	// 日志
 	logger *log.Logger
-
-	// 状态
-	closed atomic.Bool
 }
 
 // New 创建新的 Redis 客户端
 // 根据配置自动选择单机/集群/哨兵模式
-func New(ctx context.Context, cfg *Config, opts ...Option) (*Client, error) {
+func New(cfg *Config, opts ...Option) (*Client, error) {
 	if cfg == nil {
 		return nil, ErrInvalidConfig
 	}
 
 	if err := cfg.ApplyDefaults(); err != nil {
-		return nil, err
-	}
-	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
@@ -60,7 +53,7 @@ func New(ctx context.Context, cfg *Config, opts ...Option) (*Client, error) {
 	if err := client.setupHooks(clientOpts); err != nil {
 		return nil, err
 	}
-	if err := client.Ping(ctx); err != nil {
+	if err := client.Ping(context.Background()); err != nil {
 		return nil, err
 	}
 
@@ -139,26 +132,16 @@ func (c *Client) setupHooks(opts *clientOptions) error {
 // UniversalClient 获取底层 redis.UniversalClient
 // 用于执行所有 Redis 命令
 func (c *Client) UniversalClient() redis.UniversalClient {
-	if c.closed.Load() {
-		return nil
-	}
 	return c.client
 }
 
 // Ping 测试连接
 func (c *Client) Ping(ctx context.Context) error {
-	if c.closed.Load() {
-		return ErrClientClosed
-	}
-
 	return c.client.Ping(ctx).Err()
 }
 
 // Close 关闭客户端
 func (c *Client) Close() error {
-	if c.closed.Swap(true) {
-		return nil
-	}
 	err := c.client.Close()
 	c.logger.Debug().Msg("redis client closed")
 	return err
@@ -166,16 +149,7 @@ func (c *Client) Close() error {
 
 // Stats 获取连接池统计信息
 func (c *Client) Stats() *redis.PoolStats {
-	if c.closed.Load() {
-		return nil
-	}
-
 	return c.client.PoolStats()
-}
-
-// IsClosed 检查客户端是否已关闭
-func (c *Client) IsClosed() bool {
-	return c.closed.Load()
 }
 
 // getMode 获取客户端模式

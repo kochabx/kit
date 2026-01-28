@@ -7,37 +7,39 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 	"go.mongodb.org/mongo-driver/mongo/readpref"
+
+	"github.com/kochabx/kit/log"
 )
 
-var (
-	ErrConnectionFailed = errors.New("failed to connect to mongodb")
-)
-
-// Mongo MongoDB 客户端包装器
-type Mongo struct {
-	Client *mongo.Client
+// Client MongoDB 客户端包装器
+type Client struct {
+	client *mongo.Client
 	config *Config
+	logger *log.Logger
 }
 
-// Option Mongo 配置选项函数类型
-type Option func(*Mongo)
-
-// New 创建新的 Mongo 实例
-func New(config *Config, opts ...Option) (*Mongo, error) {
-	m := &Mongo{
-		config: config,
+// New 创建新的 Mongo 客户端
+func New(config *Config, opts ...Option) (*Client, error) {
+	if config == nil {
+		return nil, errors.New("config is required")
 	}
 
 	// 初始化配置
-	if err := m.config.init(); err != nil {
+	if err := config.Init(); err != nil {
 		return nil, err
 	}
 
-	// 应用选项
+	options := &clientOptions{
+		logger: log.G,
+	}
+
 	for _, opt := range opts {
-		if opt != nil {
-			opt(m)
-		}
+		opt(options)
+	}
+
+	m := &Client{
+		config: config,
+		logger: options.logger,
 	}
 
 	// 创建客户端连接
@@ -46,8 +48,10 @@ func New(config *Config, opts ...Option) (*Mongo, error) {
 	}
 
 	// 测试连接
-	if err := m.Ping(context.TODO()); err != nil {
-		// 如果连接失败，确保清理资源
+	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
+	defer cancel()
+
+	if err := m.Ping(ctx); err != nil {
 		_ = m.Close()
 		return nil, err
 	}
@@ -56,7 +60,7 @@ func New(config *Config, opts ...Option) (*Mongo, error) {
 }
 
 // connect 创建 MongoDB 连接
-func (m *Mongo) connect() error {
+func (m *Client) connect() error {
 	serverApi := options.ServerAPI(options.ServerAPIVersion1)
 	bsonOpts := &options.BSONOptions{
 		UseJSONStructTags: true,
@@ -76,37 +80,37 @@ func (m *Mongo) connect() error {
 		return ErrConnectionFailed
 	}
 
-	m.Client = client
+	m.client = client
 	return nil
 }
 
 // Ping 测试 MongoDB 连接是否正常
-func (m *Mongo) Ping(ctx context.Context) error {
-	return m.Client.Ping(ctx, readpref.Primary())
+func (m *Client) Ping(ctx context.Context) error {
+	return m.client.Ping(ctx, readpref.Primary())
 }
 
-func (m *Mongo) Close() error {
-	if m.Client == nil {
+// Close 关闭客户端
+func (m *Client) Close() error {
+	if m.client == nil {
 		return nil
 	}
 
-	if err := m.Client.Disconnect(context.TODO()); err != nil {
+	if err := m.client.Disconnect(context.TODO()); err != nil {
 		return err
 	}
 
-	m.Client = nil // 清空引用，避免重复关闭
 	return nil
 }
 
 // GetClient 获取 MongoDB 客户端
-func (m *Mongo) GetClient() *mongo.Client {
-	return m.Client
+func (m *Client) GetClient() *mongo.Client {
+	return m.client
 }
 
 // Database 获取指定名称的数据库
-func (m *Mongo) Database(name string) *mongo.Database {
-	if m.Client == nil {
+func (m *Client) Database(name string) *mongo.Database {
+	if m.client == nil {
 		return nil
 	}
-	return m.Client.Database(name)
+	return m.client.Database(name)
 }

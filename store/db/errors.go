@@ -11,7 +11,4 @@ var (
 
 	// ErrNotInitialized 数据库未初始化
 	ErrNotInitialized = errors.New("db: not initialized")
-
-	// ErrAlreadyClosed 数据库连接已关闭
-	ErrAlreadyClosed = errors.New("db: already closed")
 )

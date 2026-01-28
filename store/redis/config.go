@@ -121,20 +121,6 @@ func Sentinel(masterName string, addrs ...string) *Config {
 	return &Config{Addrs: addrs, MasterName: masterName}
 }
 
-// Validate 验证配置是否有效
-func (c *Config) Validate() error {
-	if len(c.Addrs) == 0 {
-		return ErrEmptyAddrs
-	}
-
-	// 验证超时配置
-	if c.DialTimeout < 0 || c.ReadTimeout < 0 || c.WriteTimeout < 0 {
-		return ErrInvalidTimeout
-	}
-
-	return nil
-}
-
 // IsSentinel 判断是否为哨兵模式
 func (c *Config) IsSentinel() bool {
 	return c.MasterName != ""

@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-func TestMongo_Ping(t *testing.T) {
+func TestClient_Ping(t *testing.T) {
 	m, err := New(&Config{
 		Password: "12345678",
 	})
@@ -23,7 +23,7 @@ func TestMongo_Ping(t *testing.T) {
 	}
 }
 
-func TestMongo_GetClient(t *testing.T) {
+func TestClient_GetClient(t *testing.T) {
 	m, err := New(&Config{
 		Password: "12345678",
 	})
@@ -38,7 +38,7 @@ func TestMongo_GetClient(t *testing.T) {
 	}
 }
 
-func TestMongo_Database(t *testing.T) {
+func TestClient_Database(t *testing.T) {
 	m, err := New(&Config{
 		Password: "12345678",
 	})

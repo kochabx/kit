@@ -20,7 +20,7 @@ func mockMySQLConfig() DriverConfig {
 
 func TestNew(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -33,7 +33,7 @@ func TestNew(t *testing.T) {
 
 func TestNewWithOptions(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg,
+	client, err := New(cfg,
 		WithConnectTimeout(5*time.Second),
 		WithSlowQuery(100*time.Millisecond),
 	)
@@ -49,7 +49,7 @@ func TestNewWithOptions(t *testing.T) {
 
 func TestIsHealthy(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestIsHealthy(t *testing.T) {
 }
 
 func TestNewInvalidConfig(t *testing.T) {
-	_, err := New(context.Background(), nil)
+	_, err := New(nil)
 	if !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("expected ErrInvalidConfig, got %v", err)
 	}
@@ -69,7 +69,7 @@ func TestNewInvalidConfig(t *testing.T) {
 
 func TestPing(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestPing(t *testing.T) {
 
 func TestClose(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -99,7 +99,7 @@ func TestClose(t *testing.T) {
 
 func TestStats(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
@@ -111,21 +111,21 @@ func TestStats(t *testing.T) {
 
 func TestPingAfterClose(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}
 
 	_ = client.Close()
 
-	if err := client.Ping(context.Background()); !errors.Is(err, ErrAlreadyClosed) {
-		t.Errorf("expected ErrAlreadyClosed, got %v", err)
+	if err := client.Ping(context.Background()); err == nil {
+		t.Error("expected error after close, got nil")
 	}
 }
 
 func TestIsHealthyAfterClose(t *testing.T) {
 	cfg := mockMySQLConfig()
-	client, err := New(context.Background(), cfg)
+	client, err := New(cfg)
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}

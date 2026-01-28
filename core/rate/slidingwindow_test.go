@@ -1,7 +1,6 @@
 package rate
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -17,9 +16,7 @@ func TestSlidingWindowAllow(t *testing.T) {
 		DB:       0,
 	}
 
-	// 创建 Redis 客户端
-	ctx := context.Background()
-	client, err := redis.New(ctx, cfg)
+	client, err := redis.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}

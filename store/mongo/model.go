@@ -43,6 +43,6 @@ func (c *Config) uri() string {
 }
 
 // init 初始化配置，设置默认值
-func (c *Config) init() error {
+func (c *Config) Init() error {
 	return tag.ApplyDefaults(c)
 }

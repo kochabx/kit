@@ -1,7 +1,6 @@
 package rate
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -16,8 +15,7 @@ func TestTokenBucketAllow(t *testing.T) {
 		DB:       0,
 	}
 
-	ctx := context.Background()
-	client, err := redis.New(ctx, cfg)
+	client, err := redis.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,8 +39,7 @@ func TestTokenBucketAllowN(t *testing.T) {
 		DB:       0,
 	}
 
-	ctx := context.Background()
-	client, err := redis.New(ctx, cfg)
+	client, err := redis.New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
