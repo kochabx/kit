@@ -4,8 +4,8 @@ import (
 	"context"
 	"strings"
 	"sync"
-	"sync/atomic"
 
+	"github.com/kochabx/kit/log"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl/plain"
 	"golang.org/x/sync/errgroup"
@@ -13,15 +13,15 @@ import (
 
 // Client Kafka 客户端封装，提供生产者和消费者的管理
 type Client struct {
-	config    *Config          // 配置信息
-	dialer    *kafka.Dialer    // 连接拨号器
-	transport *kafka.Transport // 传输配置
+	config    *Config
+	dialer    *kafka.Dialer
+	transport *kafka.Transport
+	logger    *log.Logger
 
 	syncProducers  map[string]*kafka.Writer
 	asyncProducers map[string]*kafka.Writer
 	consumers      map[string]*kafka.Reader
 	mu             sync.RWMutex
-	closed         atomic.Bool
 }
 
 // New 创建新的 Kafka 客户端实例
@@ -34,13 +34,19 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 		return nil, err
 	}
 
-	clientOpts := applyOptions(cfg, opts)
+	clientOpts := applyOptions(opts)
 
 	c := &Client{
 		config:         cfg,
+		logger:         clientOpts.logger,
 		syncProducers:  make(map[string]*kafka.Writer),
 		asyncProducers: make(map[string]*kafka.Writer),
 		consumers:      make(map[string]*kafka.Reader),
+	}
+
+	// 使用默认全局日志
+	if c.logger == nil {
+		c.logger = log.G
 	}
 
 	if clientOpts.dialer != nil {
@@ -214,10 +220,6 @@ func (c *Client) ConsumerGroup(topic string, groupId string) *kafka.Reader {
 
 // Close 关闭所有的生产者和消费者连接
 func (c *Client) Close() error {
-	if c.closed.Swap(true) {
-		return nil
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -251,9 +253,4 @@ func (c *Client) Close() error {
 	}
 
 	return eg.Wait()
-}
-
-// IsClosed 检查客户端是否已关闭
-func (c *Client) IsClosed() bool {
-	return c.closed.Load()
 }

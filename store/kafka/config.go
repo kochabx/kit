@@ -12,7 +12,7 @@ type Config struct {
 	// ==================== 连接配置 ====================
 	// Brokers Kafka Broker 地址列表
 	// 格式: ["localhost:9092"]
-	Brokers []string `json:"brokers" validate:"required"`
+	Brokers []string `json:"brokers"`
 
 	// ==================== 认证配置 ====================
 	// Username SASL 用户名
@@ -59,13 +59,6 @@ const (
 // ApplyDefaults 应用默认值
 func (c *Config) ApplyDefaults() error {
 	return tag.ApplyDefaults(c)
-}
-
-// DefaultConfig 返回默认配置
-func DefaultConfig(brokers []string) *Config {
-	return &Config{
-		Brokers: brokers,
-	}
 }
 
 // balancer 获取 kafka-go 的 Balancer 实现

@@ -94,11 +94,13 @@ func TestConsumerGroup(t *testing.T) {
 }
 
 func TestOptions(t *testing.T) {
-
-	k, err := New(&Config{Brokers: []string{"127.0.0.1:9092"}},
-		WithAuth("user", "pass"),
-		WithTimeout(5*time.Second),
-	)
+	cfg := &Config{
+		Brokers:  []string{"127.0.0.1:9092"},
+		Username: "user",
+		Password: "pass",
+		Timeout:  5 * time.Second,
+	}
+	k, err := New(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
