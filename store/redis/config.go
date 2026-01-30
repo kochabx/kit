@@ -14,7 +14,7 @@ type Config struct {
 	// 单机模式: ["localhost:6379"]
 	// 集群模式: ["node1:6379", "node2:6379", "node3:6379"]
 	// 哨兵模式: ["sentinel1:26379", "sentinel2:26379"]
-	Addrs []string
+	Addrs []string `default:"localhost:6379"`
 
 	// MasterName 哨兵模式的主节点名称
 	// 仅在哨兵模式下需要设置

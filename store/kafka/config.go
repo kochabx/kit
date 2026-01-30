@@ -12,7 +12,7 @@ type Config struct {
 	// ==================== 连接配置 ====================
 	// Brokers Kafka Broker 地址列表
 	// 格式: ["localhost:9092"]
-	Brokers []string `json:"brokers"`
+	Brokers []string `json:"brokers" default:"localhost:9092"`
 
 	// ==================== 认证配置 ====================
 	// Username SASL 用户名
