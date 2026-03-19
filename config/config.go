@@ -9,6 +9,11 @@ import (
 	"github.com/kochabx/kit/log"
 )
 
+const (
+	defaultConfigFileName = "config.yaml"
+	defaultConfigPaths    = "."
+)
+
 // Config manages application configuration
 type Config struct {
 	mu       sync.RWMutex        // protects concurrent access to target
@@ -16,7 +21,6 @@ type Config struct {
 	validate validator.Validator // validator for configuration validation
 	target   any                 // target is the destination where the configuration will be unmarshalled
 	loader   Loader              // loader is responsible for loading configuration
-	watch    bool                // whether to automatically watch for configuration changes
 }
 
 // New creates a new Config instance with the given options
@@ -28,7 +32,6 @@ func New(target any, opts ...Option) *Config {
 		viper:    viper.New(),
 		validate: validator.Validate,
 		target:   target,
-		watch:    true,
 	}
 
 	// Apply options
@@ -38,7 +41,7 @@ func New(target any, opts ...Option) *Config {
 
 	// Create default FileLoader if no loader is provided
 	if c.loader == nil {
-		c.loader = NewFileLoader("config.yaml", []string{"."}, c.viper, c.validate)
+		c.loader = NewFileLoader(defaultConfigFileName, []string{defaultConfigPaths}, c.viper, c.validate)
 	}
 
 	return c
@@ -49,26 +52,15 @@ func (c *Config) Load() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if err := c.loader.Load(c.target); err != nil {
-		return err
-	}
-
-	return nil
+	return c.loader.Load(c.target)
 }
 
 // Reload reloads the configuration from the loader
 func (c *Config) Reload() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if err := c.loader.Load(c.target); err != nil {
-		return err
-	}
-
-	return nil
+	return c.Load()
 }
 
-// Watch sets up automatic configuration watching if enabled
+// Watch sets up automatic configuration watching
 func (c *Config) Watch() error {
 	return c.loader.Watch(func() {
 		log.Info().Msg("config change detected")
@@ -83,8 +75,28 @@ func (c *Config) Watch() error {
 	})
 }
 
-// GetViper returns the underlying viper instance if the loader is a FileLoader
-// This is provided for backward compatibility
+// GetViper returns the underlying viper instance
 func (c *Config) GetViper() *viper.Viper {
 	return c.viper
+}
+
+// Set dynamically modifies a configuration value by key, re-unmarshals
+// the configuration into the target struct to keep it in sync,
+// and persists the change to the configuration file.
+// The key uses dot notation for nested values, e.g. "server.port".
+func (c *Config) Set(key string, value any) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.viper.Set(key, value)
+
+	if err := c.viper.Unmarshal(c.target); err != nil {
+		return err
+	}
+
+	if err := c.viper.WriteConfig(); err != nil {
+		return err
+	}
+
+	return nil
 }

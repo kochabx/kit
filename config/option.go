@@ -28,10 +28,3 @@ func WithLoader(loader Loader) Option {
 		c.loader = loader
 	}
 }
-
-// WithWatch enables or disables automatic configuration watching
-func WithWatch(enable bool) Option {
-	return func(c *Config) {
-		c.watch = enable
-	}
-}

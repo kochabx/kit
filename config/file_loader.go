@@ -24,6 +24,7 @@ type FileLoader struct {
 func NewFileLoader(name string, paths []string, v *viper.Viper, validate validator.Validator) *FileLoader {
 	// Determine config type from file extension
 	extension := path.Ext(name)
+	configName := strings.TrimSuffix(name, extension)
 	configType := strings.TrimPrefix(extension, ".")
 
 	// Add configuration paths to viper
@@ -31,7 +32,7 @@ func NewFileLoader(name string, paths []string, v *viper.Viper, validate validat
 		v.AddConfigPath(configPath)
 	}
 
-	v.SetConfigName(name)
+	v.SetConfigName(configName)
 	v.SetConfigType(configType)
 
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))

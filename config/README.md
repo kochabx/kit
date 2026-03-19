@@ -9,6 +9,7 @@
 - ✅ 配置热加载
 - ✅ 配置验证
 - ✅ 并发安全
+- ✅ 动态修改配置
 
 ## 快速开始
 
@@ -74,6 +75,25 @@ c.Watch()
 
 // 手动重载
 c.Reload()
+```
+
+## 动态修改配置
+
+通过 `Set` 方法动态修改配置值，修改会同步到结构体并持久化到配置文件：
+
+```go
+c := config.New(cfg)
+c.Load()
+
+// 修改嵌套值（dot notation）
+c.Set("server.port", 9999)
+// cfg.Server.Port 已更新为 9999，config.yaml 也已同步写入
+
+// 修改顶层值
+c.Set("number", 3.14)
+
+// 通过 GetViper 读取值
+port := c.GetViper().GetInt("server.port")
 ```
 
 ## 配置验证

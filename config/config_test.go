@@ -49,6 +49,10 @@ func TestConfig(t *testing.T) {
 }
 
 func TestWatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping long-running watch test in short mode")
+	}
+
 	cfg := new(mock)
 	c := New(cfg)
 
@@ -90,4 +94,37 @@ func TestEnvOverride(t *testing.T) {
 	}
 
 	t.Logf("Viper AutomaticEnv test completed: %+v", cfg)
+}
+
+func TestSet(t *testing.T) {
+	cfg := new(mock)
+	c := New(cfg)
+
+	if err := c.Load(); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("Before set: %+v", cfg)
+
+	// Dynamically set a nested value
+	if err := c.Set("server.port", 9999); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Port != 9999 {
+		t.Fatalf("expected port 9999, got %d", cfg.Server.Port)
+	}
+
+	// Verify GetViper returns the updated value
+	if port := c.GetViper().GetInt("server.port"); port != 9999 {
+		t.Fatalf("expected GetViper to return 9999, got %v", port)
+	}
+
+	// Set a top-level value
+	if err := c.Set("number", 99.9); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Number != 99.9 {
+		t.Fatalf("expected number 99.9, got %f", cfg.Number)
+	}
+
+	t.Logf("After set: %+v", cfg)
 }

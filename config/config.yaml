@@ -1,11 +1,10 @@
-number: 10
-
 apis:
-  - name: "GetUser"
-    url: "https://api.example.com/user"
-    headers:
-      Authorization: "Bearer token"
-    duration: 120s
-
+    - duration: 120s
+      headers:
+        authorization: Bearer token
+      name: GetUser
+      url: https://api.example.com/user
+number: 99.9
 server:
-  host: 12345
+    host: localhost
+    port: 9999
