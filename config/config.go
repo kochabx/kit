@@ -21,6 +21,7 @@ type Config struct {
 	validate validator.Validator // validator for configuration validation
 	target   any                 // target is the destination where the configuration will be unmarshalled
 	loader   Loader              // loader is responsible for loading configuration
+	onChange func()              // onChange is the user-defined callback invoked after config reload
 }
 
 // New creates a new Config instance with the given options
@@ -63,8 +64,6 @@ func (c *Config) Reload() error {
 // Watch sets up automatic configuration watching
 func (c *Config) Watch() error {
 	return c.loader.Watch(func() {
-		log.Info().Msg("config change detected")
-
 		// Attempt to reload configuration
 		if err := c.Reload(); err != nil {
 			log.Error().Err(err).Msg("failed to reload config after change")
@@ -72,6 +71,10 @@ func (c *Config) Watch() error {
 		}
 
 		log.Info().Msg("config reloaded successfully")
+
+		if c.onChange != nil {
+			c.onChange()
+		}
 	})
 }
 

@@ -28,3 +28,10 @@ func WithLoader(loader Loader) Option {
 		c.loader = loader
 	}
 }
+
+// WithOnChange sets a callback that is invoked after configuration is successfully reloaded
+func WithOnChange(fn func()) Option {
+	return func(c *Config) {
+		c.onChange = fn
+	}
+}
