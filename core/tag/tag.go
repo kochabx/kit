@@ -2,6 +2,7 @@ package tag
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 )
 
@@ -88,13 +89,31 @@ func (ctx *context) applyStruct(value reflect.Value) error {
 
 // applyField processes a single field
 func (ctx *context) applyField(fieldValue reflect.Value, field reflect.StructField, tagValue, fieldPath string) error {
+	// Track path for nested error reporting
+	savedPath := ctx.path
+	ctx.path = fieldPath
+	defer func() { ctx.path = savedPath }()
+
+	// For struct types, always recurse regardless of zero-ness.
+	// A struct may be non-zero because some sub-fields were loaded from the config file,
+	// but other sub-fields may still need their defaults applied.
+	if fieldValue.Kind() == reflect.Struct {
+		return ctx.applyStruct(fieldValue)
+	}
+
 	// Handle slices with existing elements first (before checking zero)
 	if fieldValue.Kind() == reflect.Slice && !fieldValue.IsNil() && fieldValue.Len() > 0 {
-		if err := ctx.applySliceElements(fieldValue, fieldPath); err != nil {
-			return err
+		return ctx.applySliceElements(fieldValue, fieldPath)
+	}
+
+	// For pointer to struct, create instance if nil and recurse.
+	if fieldValue.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.Struct {
+		if fieldValue.IsNil() {
+			newValue := reflect.New(field.Type.Elem())
+			fieldValue.Set(newValue)
+			return ctx.applyStruct(newValue.Elem())
 		}
-		// After processing existing elements, don't process the slice itself
-		return nil
+		return ctx.applyStruct(fieldValue.Elem())
 	}
 
 	// Skip if field is not zero (already has a value)
@@ -102,8 +121,8 @@ func (ctx *context) applyField(fieldValue reflect.Value, field reflect.StructFie
 		return nil
 	}
 
-	// No tag value and not a struct - skip
-	if tagValue == "" && fieldValue.Kind() != reflect.Struct {
+	// No tag value - skip
+	if tagValue == "" {
 		return nil
 	}
 
@@ -184,16 +203,21 @@ func (ctx *context) applySliceElements(value reflect.Value, path string) error {
 	for i := 0; i < value.Len(); i++ {
 		elem := value.Index(i)
 
-		if elem.Kind() == reflect.Struct {
-			if err := ctx.applyStruct(elem); err != nil {
-				return err
-			}
-		} else if elem.Kind() == reflect.Pointer && elem.Elem().Kind() == reflect.Struct {
-			if !elem.IsNil() {
-				if err := ctx.applyStruct(elem.Elem()); err != nil {
-					return err
-				}
-			}
+		// Set path context for this element
+		savedPath := ctx.path
+		ctx.path = path + "[" + strconv.Itoa(i) + "]"
+
+		var err error
+		switch {
+		case elem.Kind() == reflect.Struct:
+			err = ctx.applyStruct(elem)
+		case elem.Kind() == reflect.Pointer && !elem.IsNil() && elem.Elem().Kind() == reflect.Struct:
+			err = ctx.applyStruct(elem.Elem())
+		}
+
+		ctx.path = savedPath
+		if err != nil {
+			return err
 		}
 	}
 	return nil

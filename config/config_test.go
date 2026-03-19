@@ -22,10 +22,15 @@ type server struct {
 }
 
 type mock struct {
-	Number  float64 `json:"number" default:"1.23"`
-	Enabled bool    `json:"enabled" default:"true"`
-	Server  server  `json:"server"`
-	Apis    []api   `json:"apis"`
+	IDs     []string `json:"ids" default:"1,2,3"`
+	Number  float64  `json:"number" default:"1.23"`
+	Enabled bool     `json:"enabled" default:"true"`
+	Server  server   `json:"server"`
+	Apis    []api    `json:"apis"`
+	Address struct {
+		Street string `json:"street" default:"123 Main St"`
+		City   string `json:"city" default:"Anytown"`
+	} `json:"address"`
 }
 
 // TestConfig tests the basic configuration loading
