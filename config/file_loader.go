@@ -48,18 +48,18 @@ func NewFileLoader(name string, paths []string, v *viper.Viper, validate validat
 
 // Load implements Loader interface
 func (l *FileLoader) Load(target any) error {
-	// Apply default values from struct tags BEFORE unmarshalling
-	// This ensures that fields not present in config file get their defaults
-	if err := tag.ApplyDefaults(target); err != nil {
-		return errors.New(500, "failed to apply defaults: %v", err)
-	}
-
 	if err := l.viper.ReadInConfig(); err != nil {
 		return errors.New(404, "config file not found: %v", err)
 	}
 
 	if err := l.viper.Unmarshal(target); err != nil {
 		return errors.New(500, "config parse error: %v", err)
+	}
+
+	// Apply default values from struct tags AFTER unmarshalling
+	// This fills in defaults only for zero-value fields not present in config file
+	if err := tag.ApplyDefaults(target); err != nil {
+		return errors.New(500, "failed to apply defaults: %v", err)
 	}
 
 	// Validate configuration
