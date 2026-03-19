@@ -1,8 +1,12 @@
 package config
 
 import (
+	"crypto/sha256"
+	"io"
+	"os"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
@@ -74,12 +78,47 @@ func (l *FileLoader) Load(target any) error {
 
 // Watch implements Loader interface
 func (l *FileLoader) Watch(callback func()) error {
+	notify := make(chan struct{}, 1)
+
+	go func() {
+		lastHash := l.fileHash()
+		timer := time.NewTimer(0)
+		timer.Stop()
+
+		for {
+			select {
+			case <-notify:
+				timer.Reset(100 * time.Millisecond)
+			case <-timer.C:
+				if h := l.fileHash(); h != [sha256.Size]byte{} && h != lastHash {
+					lastHash = h
+					callback()
+				}
+			}
+		}
+	}()
+
 	l.viper.OnConfigChange(func(e fsnotify.Event) {
-		if callback != nil {
-			callback()
+		select {
+		case notify <- struct{}{}:
+		default:
 		}
 	})
 
 	l.viper.WatchConfig()
 	return nil
+}
+
+// fileHash computes the SHA-256 checksum of the config file.
+func (l *FileLoader) fileHash() [sha256.Size]byte {
+	f, err := os.Open(l.viper.ConfigFileUsed())
+	if err != nil {
+		return [sha256.Size]byte{}
+	}
+	defer f.Close()
+	h := sha256.New()
+	io.Copy(h, f)
+	var sum [sha256.Size]byte
+	copy(sum[:], h.Sum(nil))
+	return sum
 }
