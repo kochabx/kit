@@ -8,8 +8,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"math/big"
-
-	"github.com/kochabx/kit/core/crypto/ecies/internal"
 )
 
 // PrivateKey represents an ECIES private key that wraps an ECDH private key.
@@ -111,7 +109,7 @@ func ImportECDSA(ecdsaKey *ecdsa.PrivateKey) (*PrivateKey, error) {
 	}
 
 	// Convert to ECDH format
-	keyBytes := internal.ZeroPad(ecdsaKey.D.Bytes(), CurvePointSize)
+	keyBytes := ecdsaKey.D.FillBytes(make([]byte, CurvePointSize))
 	curve := ecdh.P256()
 	ecdhKey, err := curve.NewPrivateKey(keyBytes)
 	if err != nil {

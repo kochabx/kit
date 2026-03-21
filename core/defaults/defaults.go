@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Apply sets default values for struct fields based on struct tags.
@@ -20,211 +21,248 @@ import (
 func Apply(target any, opts ...Option) error {
 	options := newOptions(opts)
 
-	valueOf := reflect.ValueOf(target)
-	if valueOf.Kind() != reflect.Pointer {
+	v := reflect.ValueOf(target)
+	if v.Kind() != reflect.Pointer {
 		return ErrTargetMustBePointer
 	}
-	if valueOf.IsNil() {
+	if v.IsNil() {
 		return ErrTargetIsNil
 	}
 
-	elem := valueOf.Elem()
+	elem := v.Elem()
 	if elem.Kind() != reflect.Struct {
 		return ErrUnsupportedType
 	}
 
-	ctx := &context{
-		options: options,
-		depth:   0,
-		path:    "",
-	}
-
+	ctx := &context{options: options}
 	return ctx.applyStruct(elem)
 }
 
-// context holds the state during processing
+// context holds mutable processing state.
 type context struct {
 	options *Options
 	depth   int
 	path    string
 }
 
-// applyStruct processes a struct and sets defaults for its fields
+// --- struct metadata cache ---
+
+type cacheKey struct {
+	typ     reflect.Type
+	tagName string
+}
+
+type fieldMeta struct {
+	index    int
+	field    reflect.StructField
+	tagValue string
+}
+
+type structInfo struct {
+	fields []fieldMeta
+}
+
+var cache sync.Map // map[cacheKey]*structInfo
+
+func getStructInfo(typ reflect.Type, tagName string) *structInfo {
+	key := cacheKey{typ: typ, tagName: tagName}
+	if v, ok := cache.Load(key); ok {
+		return v.(*structInfo)
+	}
+
+	n := typ.NumField()
+	fields := make([]fieldMeta, 0, n)
+	for i := range n {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		fields = append(fields, fieldMeta{
+			index:    i,
+			field:    f,
+			tagValue: f.Tag.Get(tagName),
+		})
+	}
+
+	info := &structInfo{fields: fields}
+	v, _ := cache.LoadOrStore(key, info)
+	return v.(*structInfo)
+}
+
+// --- apply logic ---
+
+// enterStruct increments depth, calls applyStruct, then restores depth.
+func (ctx *context) enterStruct(value reflect.Value) error {
+	ctx.depth++
+	err := ctx.applyStruct(value)
+	ctx.depth--
+	return err
+}
+
 func (ctx *context) applyStruct(value reflect.Value) error {
 	if ctx.depth >= ctx.options.maxDepth {
 		return ErrMaxDepthExceeded
 	}
-	ctx.depth++
-	defer func() { ctx.depth-- }()
 
-	typ := value.Type()
-	numField := typ.NumField()
+	info := getStructInfo(value.Type(), ctx.options.tagName)
+	savedPath := ctx.path
 
-	for i := 0; i < numField; i++ {
-		field := typ.Field(i)
-		fieldValue := value.Field(i)
+	for i := range info.fields {
+		meta := &info.fields[i]
+		fv := value.Field(meta.index)
 
-		// Skip unexported fields
-		if !fieldValue.CanSet() {
+		if !fv.CanSet() {
 			continue
 		}
 
-		// Apply filter if provided
-		if ctx.options.filter != nil && !ctx.options.filter(field) {
+		if ctx.options.filter != nil && !ctx.options.filter(meta.field) {
 			continue
 		}
 
-		// Build field path for error reporting
-		fieldPath := ctx.buildPath(field.Name)
-
-		tagValue := field.Tag.Get(ctx.options.tagName)
-
-		if err := ctx.applyField(fieldValue, field, tagValue, fieldPath); err != nil {
+		ctx.path = buildPath(savedPath, meta.field.Name)
+		if err := ctx.applyField(fv, meta); err != nil {
 			return err
 		}
 	}
 
+	ctx.path = savedPath
 	return nil
 }
 
-// applyField processes a single field
-func (ctx *context) applyField(fieldValue reflect.Value, field reflect.StructField, tagValue, fieldPath string) error {
-	// Track path for nested error reporting
-	savedPath := ctx.path
-	ctx.path = fieldPath
-	defer func() { ctx.path = savedPath }()
+func (ctx *context) applyField(fv reflect.Value, meta *fieldMeta) error {
+	kind := fv.Kind()
 
-	// For struct types, always recurse regardless of zero-ness.
-	// A struct may be non-zero because some sub-fields were loaded from the config file,
-	// but other sub-fields may still need their defaults applied.
-	if fieldValue.Kind() == reflect.Struct {
-		return ctx.applyStruct(fieldValue)
+	// Struct: always recurse (sub-fields may need defaults even if struct is non-zero)
+	if kind == reflect.Struct {
+		return ctx.enterStruct(fv)
 	}
 
-	// Handle slices with existing elements first (before checking zero)
-	if fieldValue.Kind() == reflect.Slice && !fieldValue.IsNil() && fieldValue.Len() > 0 {
-		return ctx.applySliceElements(fieldValue, fieldPath)
+	// Slice with existing elements: recurse into struct elements
+	if kind == reflect.Slice && !fv.IsNil() && fv.Len() > 0 {
+		return ctx.applySliceElements(fv)
 	}
 
-	// For pointer to struct, create instance if nil and recurse.
-	if fieldValue.Kind() == reflect.Pointer && field.Type.Elem().Kind() == reflect.Struct {
-		if fieldValue.IsNil() {
-			newValue := reflect.New(field.Type.Elem())
-			fieldValue.Set(newValue)
-			return ctx.applyStruct(newValue.Elem())
+	// Pointer to struct: create if nil, then recurse
+	if kind == reflect.Pointer && meta.field.Type.Elem().Kind() == reflect.Struct {
+		if fv.IsNil() {
+			v := reflect.New(meta.field.Type.Elem())
+			fv.Set(v)
+			return ctx.enterStruct(v.Elem())
 		}
-		return ctx.applyStruct(fieldValue.Elem())
+		return ctx.enterStruct(fv.Elem())
 	}
 
-	// Skip if field is not zero (already has a value)
-	if !fieldValue.IsZero() {
+	// Non-zero field: already set, skip
+	if !fv.IsZero() {
 		return nil
 	}
 
-	// No tag value - skip
-	if tagValue == "" {
+	// No tag value: nothing to apply
+	if meta.tagValue == "" {
 		return nil
 	}
 
-	// Apply default value based on field type
-	return ctx.applyValue(fieldValue, field.Type, tagValue, fieldPath)
+	return ctx.applyValue(fv, meta.field.Type, meta.tagValue)
 }
 
-// applyValue sets the value based on its kind
-func (ctx *context) applyValue(value reflect.Value, typ reflect.Type, tagValue, path string) error {
-	kind := value.Kind()
-
-	switch kind {
+func (ctx *context) applyValue(value reflect.Value, typ reflect.Type, tagValue string) error {
+	switch value.Kind() {
 	case reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
 		reflect.Float32, reflect.Float64, reflect.Bool:
-		if tagValue == "" {
-			return nil
-		}
 		if err := ctx.options.parser.Parse(value, tagValue); err != nil {
-			return newFieldError(path, kind, ctx.options.tagName, tagValue, err)
+			return newFieldError(ctx.path, value.Kind(), ctx.options.tagName, tagValue, err)
 		}
 
 	case reflect.Pointer:
-		return ctx.applyPointer(value, typ, tagValue, path)
+		return ctx.applyPointer(value, typ, tagValue)
 
 	case reflect.Slice:
-		if tagValue == "" {
-			return nil
-		}
-		return ctx.applySlice(value, tagValue, path)
-
-	case reflect.Struct:
-		return ctx.applyStruct(value)
+		return ctx.applySlice(value, tagValue)
 
 	case reflect.Map:
-		return ctx.applyMap(value, tagValue, path)
+		return ctx.applyMap(value, tagValue)
 
 	default:
-		return newFieldError(path, kind, ctx.options.tagName, tagValue, ErrUnsupportedType)
+		return newFieldError(ctx.path, value.Kind(), ctx.options.tagName, tagValue, ErrUnsupportedType)
 	}
 
 	return nil
 }
 
-// applyPointer handles pointer fields
-func (ctx *context) applyPointer(value reflect.Value, typ reflect.Type, tagValue, path string) error {
-	if tagValue == "" && typ.Elem().Kind() != reflect.Struct {
+func (ctx *context) applyPointer(value reflect.Value, typ reflect.Type, tagValue string) error {
+	elemKind := typ.Elem().Kind()
+
+	if tagValue == "" && elemKind != reflect.Struct {
 		return nil
 	}
 
-	// Create new instance
-	newValue := reflect.New(typ.Elem())
-	value.Set(newValue)
+	v := reflect.New(typ.Elem())
+	value.Set(v)
 
-	// If it's a pointer to struct, process recursively
-	if typ.Elem().Kind() == reflect.Struct {
-		return ctx.applyStruct(newValue.Elem())
+	if elemKind == reflect.Struct {
+		return ctx.enterStruct(v.Elem())
 	}
 
-	// Otherwise, set the value using the tag
 	if tagValue != "" {
-		return ctx.applyValue(newValue.Elem(), typ.Elem(), tagValue, path)
+		return ctx.applyValue(v.Elem(), typ.Elem(), tagValue)
 	}
 
 	return nil
 }
 
-// applySlice handles slice fields
-func (ctx *context) applySlice(value reflect.Value, tagValue, path string) error {
-	if err := ctx.options.parser.Parse(value, tagValue); err != nil {
-		return newFieldError(path, value.Kind(), ctx.options.tagName, tagValue, err)
+var byteSliceType = reflect.TypeFor[[]byte]()
+
+func (ctx *context) applySlice(value reflect.Value, tagValue string) error {
+	// []byte: set directly without splitting
+	if value.Type() == byteSliceType {
+		value.SetBytes([]byte(tagValue))
+		return nil
 	}
+
+	str := strings.TrimSpace(tagValue)
+	if str == "" {
+		value.Set(reflect.MakeSlice(value.Type(), 0, 0))
+		return nil
+	}
+
+	parts := strings.Split(str, ctx.options.separator)
+	slice := reflect.MakeSlice(value.Type(), len(parts), len(parts))
+	elemKind := value.Type().Elem().Kind()
+
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if err := ctx.options.parser.Parse(slice.Index(i), part); err != nil {
+			return newFieldError(ctx.path+"["+strconv.Itoa(i)+"]", elemKind, ctx.options.tagName, part, err)
+		}
+	}
+
+	value.Set(slice)
 	return nil
 }
 
-// applySliceElements processes existing slice elements
-func (ctx *context) applySliceElements(value reflect.Value, path string) error {
-	for i := 0; i < value.Len(); i++ {
+func (ctx *context) applySliceElements(value reflect.Value) error {
+	savedPath := ctx.path
+	for i := range value.Len() {
 		elem := value.Index(i)
+		ctx.path = savedPath + "[" + strconv.Itoa(i) + "]"
 
-		// Set path context for this element
-		savedPath := ctx.path
-		ctx.path = path + "[" + strconv.Itoa(i) + "]"
-
-		var err error
 		switch {
 		case elem.Kind() == reflect.Struct:
-			err = ctx.applyStruct(elem)
+			if err := ctx.enterStruct(elem); err != nil {
+				return err
+			}
 		case elem.Kind() == reflect.Pointer && !elem.IsNil() && elem.Elem().Kind() == reflect.Struct:
-			err = ctx.applyStruct(elem.Elem())
-		}
-
-		ctx.path = savedPath
-		if err != nil {
-			return err
+			if err := ctx.enterStruct(elem.Elem()); err != nil {
+				return err
+			}
 		}
 	}
+	ctx.path = savedPath
 	return nil
 }
 
-// applyMap handles map fields (basic support)
-func (ctx *context) applyMap(value reflect.Value, tagValue, path string) error {
+func (ctx *context) applyMap(value reflect.Value, tagValue string) error {
 	if tagValue == "" {
 		return nil
 	}
@@ -232,9 +270,7 @@ func (ctx *context) applyMap(value reflect.Value, tagValue, path string) error {
 	mapType := value.Type()
 	newMap := reflect.MakeMap(mapType)
 
-	// Simple key:value,key:value format
-	pairs := strings.SplitSeq(tagValue, ctx.options.separator)
-	for pair := range pairs {
+	for pair := range strings.SplitSeq(tagValue, ctx.options.separator) {
 		parts := strings.SplitN(pair, ":", 2)
 		if len(parts) != 2 {
 			continue
@@ -248,13 +284,13 @@ func (ctx *context) applyMap(value reflect.Value, tagValue, path string) error {
 
 		if isBasicKind(key.Kind()) {
 			if err := ctx.options.parser.Parse(key, keyStr); err != nil {
-				return newFieldError(path+"[key]", key.Kind(), ctx.options.tagName, keyStr, err)
+				return newFieldError(ctx.path+"[key]", key.Kind(), ctx.options.tagName, keyStr, err)
 			}
 		}
 
 		if isBasicKind(val.Kind()) {
 			if err := ctx.options.parser.Parse(val, valStr); err != nil {
-				return newFieldError(path+"[value]", val.Kind(), ctx.options.tagName, valStr, err)
+				return newFieldError(ctx.path+"[value]", val.Kind(), ctx.options.tagName, valStr, err)
 			}
 		}
 
@@ -265,10 +301,9 @@ func (ctx *context) applyMap(value reflect.Value, tagValue, path string) error {
 	return nil
 }
 
-// buildPath constructs a field path for error messages
-func (ctx *context) buildPath(fieldName string) string {
-	if ctx.path == "" {
-		return fieldName
+func buildPath(base, field string) string {
+	if base == "" {
+		return field
 	}
-	return ctx.path + "." + fieldName
+	return base + "." + field
 }

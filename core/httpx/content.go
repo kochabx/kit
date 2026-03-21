@@ -1,4 +1,4 @@
-package httpclient
+package httpx
 
 // Common Content-Types
 const (

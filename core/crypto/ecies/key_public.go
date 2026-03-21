@@ -8,8 +8,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"math/big"
-
-	"github.com/kochabx/kit/core/crypto/ecies/internal"
 )
 
 // PublicKey represents an ECIES public key that wraps an ECDH public key.
@@ -35,7 +33,7 @@ func (pub *PublicKey) Bytes(compressed bool) []byte {
 	}
 
 	// Fallback to coordinate-based encoding
-	xBytes := internal.ZeroPad(pub.x.Bytes(), CurvePointSize)
+	xBytes := pub.x.FillBytes(make([]byte, CurvePointSize))
 
 	if compressed {
 		if pub.y.Bit(0) == 0 {
@@ -44,7 +42,7 @@ func (pub *PublicKey) Bytes(compressed bool) []byte {
 		return append([]byte{CompressedOddTag}, xBytes...)
 	}
 
-	yBytes := internal.ZeroPad(pub.y.Bytes(), CurvePointSize)
+	yBytes := pub.y.FillBytes(make([]byte, CurvePointSize))
 	return bytes.Join([][]byte{{UncompressedPointTag}, xBytes, yBytes}, nil)
 }
 
@@ -97,8 +95,8 @@ func ImportECDSAPublic(ecdsaKey *ecdsa.PublicKey) (*PublicKey, error) {
 	}
 
 	// Encode to uncompressed format for ECDH
-	xBytes := internal.ZeroPad(ecdsaKey.X.Bytes(), CurvePointSize)
-	yBytes := internal.ZeroPad(ecdsaKey.Y.Bytes(), CurvePointSize)
+	xBytes := ecdsaKey.X.FillBytes(make([]byte, CurvePointSize))
+	yBytes := ecdsaKey.Y.FillBytes(make([]byte, CurvePointSize))
 	pubBytes := append([]byte{UncompressedPointTag}, append(xBytes, yBytes...)...)
 
 	// Create ECDH public key

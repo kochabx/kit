@@ -1,4 +1,4 @@
-package httpclient
+package httpx
 
 // Common HTTP methods.
 //

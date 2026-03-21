@@ -197,7 +197,8 @@ func TestApplyErrors(t *testing.T) {
 
 func TestApplyWithCustomSeparator(t *testing.T) {
 	type CustomSep struct {
-		Values []int `default:"1|2|3"`
+		Values []int             `default:"1|2|3"`
+		Tags   map[string]string `default:"a:1|b:2"`
 	}
 
 	custom := &CustomSep{}
@@ -205,11 +206,20 @@ func TestApplyWithCustomSeparator(t *testing.T) {
 		t.Fatalf("Apply failed: %v", err)
 	}
 
+	// Verify slice splitting uses custom separator
 	if len(custom.Values) != 3 {
 		t.Errorf("Expected 3 values, got %d", len(custom.Values))
 	}
 	if custom.Values[0] != 1 || custom.Values[1] != 2 || custom.Values[2] != 3 {
 		t.Errorf("Expected [1,2,3], got %v", custom.Values)
+	}
+
+	// Verify map splitting uses custom separator
+	if len(custom.Tags) != 2 {
+		t.Errorf("Expected 2 tags, got %d", len(custom.Tags))
+	}
+	if custom.Tags["a"] != "1" || custom.Tags["b"] != "2" {
+		t.Errorf("Expected {a:1, b:2}, got %v", custom.Tags)
 	}
 }
 
@@ -239,6 +249,33 @@ func TestApplyWithFieldFilter(t *testing.T) {
 	}
 }
 
+func TestApplyPointerScalar(t *testing.T) {
+	type WithPointers struct {
+		Name   *string  `default:"hello"`
+		Count  *int     `default:"42"`
+		Rate   *float64 `default:"3.14"`
+		Active *bool    `default:"true"`
+	}
+
+	w := &WithPointers{}
+	if err := Apply(w); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	if w.Name == nil || *w.Name != "hello" {
+		t.Errorf("Expected Name=hello, got %v", w.Name)
+	}
+	if w.Count == nil || *w.Count != 42 {
+		t.Errorf("Expected Count=42, got %v", w.Count)
+	}
+	if w.Rate == nil || *w.Rate != 3.14 {
+		t.Errorf("Expected Rate=3.14, got %v", w.Rate)
+	}
+	if w.Active == nil || !*w.Active {
+		t.Errorf("Expected Active=true, got %v", w.Active)
+	}
+}
+
 // Benchmark tests
 func BenchmarkApply(b *testing.B) {
 	for i := 0; i < b.N; i++ {
@@ -255,6 +292,16 @@ func BenchmarkApplyComplex(b *testing.B) {
 				{Name: "api2", Url: "http://example.org"},
 			},
 		}
+		_ = Apply(mock)
+	}
+}
+
+func BenchmarkApplyCached(b *testing.B) {
+	// First call populates cache; subsequent calls benefit from cached struct metadata
+	_ = Apply(&tagMock{})
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		mock := &tagMock{}
 		_ = Apply(mock)
 	}
 }
