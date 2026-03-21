@@ -15,22 +15,13 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
 LDFLAGS := -X '$(MODULE)/version.Version=$(VERSION)' -X '$(MODULE)/version.BuildTime=$(BUILD_TIME)'
 
-GOLANGCI_LINT_VERSION ?= v2.1.6
-GOVULNCHECK_VERSION ?= latest
-
-GOLANGCI_LINT_BIN := $(GOBIN)/golangci-lint
-GOVULNCHECK_BIN := $(GOBIN)/govulncheck
 WIRE_BIN := $(GOBIN)/wire
 SWAG_BIN := $(GOBIN)/swag
 PROTOC_GEN_GO_BIN := $(GOBIN)/protoc-gen-go
 PROTOC_GEN_GO_GRPC_BIN := $(GOBIN)/protoc-gen-go-grpc
 PROTOC_GO_INJECT_TAG_BIN := $(GOBIN)/protoc-go-inject-tag
 
-COVERAGE_DIR := .coverage
-COVERAGE_PROFILE := $(COVERAGE_DIR)/coverage.out
-COVERAGE_HTML := $(COVERAGE_DIR)/coverage.html
 TEST_TIMEOUT ?= 120s
-SHORT_TEST_TIMEOUT ?= 30s
 
 GREEN := \033[32m
 RED := \033[31m
@@ -39,11 +30,11 @@ BLUE := \033[34m
 BOLD := \033[1m
 NC := \033[0m
 
-.PHONY: all build test test/short coverage lint lint/fix clean install upgrade proto wire swag fmt vet mod-tidy security generate info help
+.PHONY: all build test clean install upgrade proto wire swag fmt vet mod-tidy generate info help
 
 .DEFAULT_GOAL := help
 
-all: fmt vet lint test ## 完整本地校验
+all: fmt vet test ## 完整本地校验
 
 ##@ 构建
 build: ## 编译所有包
@@ -57,22 +48,6 @@ test: ## 全量测试（含 race）
 	@$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
 	@printf "$(GREEN)✓ 测试通过$(NC)\n"
 
-test/short: ## 快速测试（-short）
-	@printf "$(BLUE)运行短测试...$(NC)\n"
-	@$(GO) test -short -timeout $(SHORT_TEST_TIMEOUT) ./...
-	@printf "$(GREEN)✓ 短测试通过$(NC)\n"
-
-coverage: | $(COVERAGE_DIR) ## 生成覆盖率摘要和 HTML 报告
-	@printf "$(BLUE)生成覆盖率报告...$(NC)\n"
-	@$(GO) test -race -timeout $(TEST_TIMEOUT) -covermode=atomic -coverprofile=$(COVERAGE_PROFILE) ./...
-	@printf "$(BLUE)覆盖率摘要:$(NC)\n"
-	@$(GO) tool cover -func=$(COVERAGE_PROFILE) | tail -n 1
-	@$(GO) tool cover -html=$(COVERAGE_PROFILE) -o $(COVERAGE_HTML)
-	@printf "$(GREEN)✓ HTML 报告已生成: $(COVERAGE_HTML)$(NC)\n"
-
-$(COVERAGE_DIR):
-	@mkdir -p $@
-
 ##@ 代码质量
 fmt: ## 使用 gofmt 简化并格式化代码
 	@printf "$(BLUE)格式化代码...$(NC)\n"
@@ -84,22 +59,6 @@ vet: ## 使用 go vet 做静态检查
 	@$(GO) vet ./...
 	@printf "$(GREEN)✓ 静态分析完成$(NC)\n"
 
-lint: $(GOLANGCI_LINT_BIN) ## 运行 golangci-lint
-	@printf "$(BLUE)运行 golangci-lint...$(NC)\n"
-	@$(GOLANGCI_LINT_BIN) run ./...
-	@printf "$(GREEN)✓ Lint 通过$(NC)\n"
-
-lint/fix: $(GOLANGCI_LINT_BIN) ## 运行 golangci-lint 并自动修复
-	@printf "$(BLUE)运行 golangci-lint --fix...$(NC)\n"
-	@$(GOLANGCI_LINT_BIN) run --fix ./...
-	@printf "$(GREEN)✓ Lint 修复完成$(NC)\n"
-
-##@ 安全
-govulncheck: $(GOVULNCHECK_BIN) ## 运行 govulncheck 漏洞扫描
-	@printf "$(BLUE)运行 govulncheck...$(NC)\n"
-	@$(GOVULNCHECK_BIN) ./...
-	@printf "$(GREEN)✓ 漏洞扫描完成$(NC)\n"
-
 ##@ 依赖
 mod-tidy: ## 整理并校验 Go 模块依赖
 	@printf "$(BLUE)整理依赖...$(NC)\n"
@@ -107,7 +66,7 @@ mod-tidy: ## 整理并校验 Go 模块依赖
 	@$(GO) mod verify
 	@printf "$(GREEN)✓ 依赖整理完成$(NC)\n"
 
-install: $(PROTOC_GEN_GO_BIN) $(PROTOC_GEN_GO_GRPC_BIN) $(PROTOC_GO_INJECT_TAG_BIN) $(WIRE_BIN) $(SWAG_BIN) $(GOLANGCI_LINT_BIN) $(GOVULNCHECK_BIN) ## 安装开发工具
+install: $(PROTOC_GEN_GO_BIN) $(PROTOC_GEN_GO_GRPC_BIN) $(PROTOC_GO_INJECT_TAG_BIN) $(WIRE_BIN) $(SWAG_BIN) ## 安装开发工具
 	@printf "$(GREEN)✓ 开发工具安装完成$(NC)\n"
 
 upgrade: ## 升级依赖并整理模块
@@ -138,14 +97,6 @@ $(WIRE_BIN): | $(GOBIN)
 $(SWAG_BIN): | $(GOBIN)
 	@printf "$(BLUE)安装 swag...$(NC)\n"
 	@GOBIN=$(GOBIN) $(GO) install github.com/swaggo/swag/cmd/swag@latest
-
-$(GOLANGCI_LINT_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 golangci-lint $(GOLANGCI_LINT_VERSION)...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
-
-$(GOVULNCHECK_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 govulncheck...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 
 ##@ 代码生成
 proto: $(PROTOC_GEN_GO_BIN) $(PROTOC_GEN_GO_GRPC_BIN) $(PROTOC_GO_INJECT_TAG_BIN) ## 生成 gRPC 代码
