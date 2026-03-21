@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/kochabx/kit/errors"
 	"github.com/kochabx/kit/log"
-	"github.com/kochabx/kit/transport/http"
+	kithttp "github.com/kochabx/kit/transport/http"
 )
 
 var (
@@ -46,16 +46,16 @@ func HMACSHA256Signer(secret string) Signer {
 
 // SignatureConfig 签名验证中间件配置
 type SignatureConfig struct {
-	Signer        Signer                    // 签名验证器（必需）
-	HeaderName    string                    // 签名头名称，默认 "X-Signature"
-	ParamsEnabled bool                      // 是否包含 Query 参数
-	BodyEnabled   bool                      // 是否包含请求体
-	PathEnabled   bool                      // 是否包含请求路径
-	MethodEnabled bool                      // 是否包含请求方法
-	SkipPaths     []string                  // 跳过处理的路径前缀
-	SkipFunc      func(*gin.Context) bool   // 动态跳过判断函数
-	ErrorHandler  func(*gin.Context, error) // 错误处理函数
-	Logger        *log.Logger               // 自定义日志记录器
+	Signer        Signer                                          // 签名验证器（必需）
+	HeaderName    string                                          // 签名头名称，默认 "X-Signature"
+	ParamsEnabled bool                                            // 是否包含 Query 参数
+	BodyEnabled   bool                                            // 是否包含请求体
+	PathEnabled   bool                                            // 是否包含请求路径
+	MethodEnabled bool                                            // 是否包含请求方法
+	SkipPaths     []string                                        // 跳过处理的路径前缀
+	SkipFunc      func(*http.Request) bool                        // 动态跳过判断函数
+	ErrorHandler  func(http.ResponseWriter, *http.Request, error) // 错误处理函数
+	Logger        *log.Logger                                     // 自定义日志记录器
 }
 
 // DefaultSignatureConfig 返回默认签名配置
@@ -69,14 +69,13 @@ func DefaultSignatureConfig() SignatureConfig {
 	}
 }
 
-// Signature 创建签名验证中间件
-func Signature(cfgs ...SignatureConfig) gin.HandlerFunc {
+// Signature 创建框架无关的请求签名验证中间件
+func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 	cfg := SignatureConfig{}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
 	}
 
-	// 设置默认日志记录器
 	if cfg.Logger == nil {
 		cfg.Logger = log.G
 	}
@@ -90,66 +89,59 @@ func Signature(cfgs ...SignatureConfig) gin.HandlerFunc {
 	}
 
 	if cfg.ErrorHandler == nil {
-		cfg.ErrorHandler = func(c *gin.Context, err error) {
-			http.GinJSONE(c, http.StatusBadRequest, ErrSignatureFailed)
-			c.Abort()
+		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			kithttp.Fail(w, http.StatusBadRequest, ErrSignatureFailed)
 		}
 	}
 
-	// 预编译路径匹配器
 	matcher := NewPathMatcher(cfg.SkipPaths)
 
-	return func(c *gin.Context) {
-		// 检查是否跳过
-		if shouldSkip(c, matcher, cfg.SkipFunc) {
-			c.Next()
-			return
-		}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if shouldSkip(r, matcher, cfg.SkipFunc) {
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		// 获取签名
-		signature := c.GetHeader(cfg.HeaderName)
-		if signature == "" {
-			cfg.Logger.Error().Str("header", cfg.HeaderName).Msg("signature: header missing")
-			cfg.ErrorHandler(c, ErrSignatureFailed)
-			return
-		}
+			signature := r.Header.Get(cfg.HeaderName)
+			if signature == "" {
+				cfg.Logger.Error().Str("header", cfg.HeaderName).Msg("signature: header missing")
+				cfg.ErrorHandler(w, r, ErrSignatureFailed)
+				return
+			}
 
-		// 构建待签名数据
-		data, err := buildSignatureData(c, cfg)
-		if err != nil {
-			cfg.Logger.Error().Err(err).Msg("signature: build data failed")
-			cfg.ErrorHandler(c, err)
-			return
-		}
+			data, err := buildSignatureData(r, cfg)
+			if err != nil {
+				cfg.Logger.Error().Err(err).Msg("signature: build data failed")
+				cfg.ErrorHandler(w, r, err)
+				return
+			}
 
-		// 验证签名
-		if err := cfg.Signer.Verify(data, signature); err != nil {
-			cfg.Logger.Error().Err(err).Msg("signature: verify failed")
-			cfg.ErrorHandler(c, err)
-			return
-		}
+			if err := cfg.Signer.Verify(data, signature); err != nil {
+				cfg.Logger.Error().Err(err).Msg("signature: verify failed")
+				cfg.ErrorHandler(w, r, err)
+				return
+			}
 
-		c.Next()
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
 // buildSignatureData 构建待签名数据
-func buildSignatureData(c *gin.Context, cfg SignatureConfig) ([]byte, error) {
+func buildSignatureData(r *http.Request, cfg SignatureConfig) ([]byte, error) {
 	var builder strings.Builder
 
-	// 添加请求方法
 	if cfg.MethodEnabled {
-		builder.WriteString(c.Request.Method)
+		builder.WriteString(r.Method)
 	}
 
-	// 添加请求路径
 	if cfg.PathEnabled {
-		builder.WriteString(c.Request.URL.Path)
+		builder.WriteString(r.URL.Path)
 	}
 
-	// 添加 Query 参数（按 key 排序）
 	if cfg.ParamsEnabled {
-		params := c.Request.URL.Query()
+		params := r.URL.Query()
 		if len(params) > 0 {
 			keys := make([]string, 0, len(params))
 			for k := range params {
@@ -165,13 +157,12 @@ func buildSignatureData(c *gin.Context, cfg SignatureConfig) ([]byte, error) {
 		}
 	}
 
-	// 添加请求体
 	if cfg.BodyEnabled {
-		body, err := c.GetRawData()
+		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err
 		}
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+		r.Body = io.NopCloser(bytes.NewBuffer(body))
 		builder.Write(body)
 	}
 

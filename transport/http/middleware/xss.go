@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"html"
 	"io"
+	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"github.com/kochabx/kit/log"
 )
 
@@ -29,30 +29,24 @@ func HTMLEscapeSanitizer() Sanitizer {
 
 // XssConfig XSS 中间件配置
 type XssConfig struct {
-	QueryEnabled  bool                    // 过滤 Query 参数
-	FormEnabled   bool                    // 过滤表单数据
-	HeaderEnabled bool                    // 过滤请求头（慎用）
-	BodyEnabled   bool                    // 过滤 JSON Body
-	Sanitizer     Sanitizer               // 自定义过滤器
-	SkipPaths     []string                // 跳过处理的路径前缀
-	SkipFunc      func(*gin.Context) bool // 动态跳过判断函数
-	SkipHeaders   []string                // 跳过过滤的请求头
-	Logger        *log.Logger             // 自定义日志记录器
+	QueryEnabled  bool                     // 过滤 Query 参数
+	FormEnabled   bool                     // 过滤表单数据
+	HeaderEnabled bool                     // 过滤请求头（慎用）
+	BodyEnabled   bool                     // 过滤 JSON Body
+	Sanitizer     Sanitizer                // 自定义过滤器
+	SkipPaths     []string                 // 跳过处理的路径前缀
+	SkipFunc      func(*http.Request) bool // 动态跳过判断函数
+	SkipHeaders   []string                 // 跳过过滤的请求头
+	Logger        *log.Logger              // 自定义日志记录器
 }
 
-// Xss 创建 XSS 防护中间件
-func Xss(cfgs ...XssConfig) gin.HandlerFunc {
+// Xss 创建框架无关的 XSS 防护中间件
+func Xss(cfgs ...XssConfig) func(http.Handler) http.Handler {
 	cfg := XssConfig{}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
 	}
 
-	// 设置默认日志记录器
-	if cfg.Logger == nil {
-		cfg.Logger = log.G
-	}
-
-	// 设置默认日志记录器
 	if cfg.Logger == nil {
 		cfg.Logger = log.G
 	}
@@ -61,49 +55,43 @@ func Xss(cfgs ...XssConfig) gin.HandlerFunc {
 		cfg.Sanitizer = HTMLEscapeSanitizer()
 	}
 
-	// 构建跳过头部的 map
-	skipHeaderMap := make(map[string]bool)
+	skipHeaderMap := make(map[string]bool, len(cfg.SkipHeaders))
 	for _, h := range cfg.SkipHeaders {
 		skipHeaderMap[h] = true
 	}
 
-	// 预编译路径匹配器
 	matcher := NewPathMatcher(cfg.SkipPaths)
 
-	return func(c *gin.Context) {
-		// 检查是否跳过
-		if shouldSkip(c, matcher, cfg.SkipFunc) {
-			c.Next()
-			return
-		}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if shouldSkip(r, matcher, cfg.SkipFunc) {
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		// 过滤 Query 参数
-		if cfg.QueryEnabled {
-			sanitizeQuery(c, cfg.Sanitizer)
-		}
+			if cfg.QueryEnabled {
+				sanitizeQuery(r, cfg.Sanitizer)
+			}
 
-		// 过滤表单数据
-		if cfg.FormEnabled {
-			sanitizeForm(c, cfg.Sanitizer)
-		}
+			if cfg.FormEnabled {
+				sanitizeForm(r, cfg.Sanitizer)
+			}
 
-		// 过滤请求头
-		if cfg.HeaderEnabled {
-			sanitizeHeaders(c, cfg.Sanitizer, skipHeaderMap)
-		}
+			if cfg.HeaderEnabled {
+				sanitizeHeaders(r, cfg.Sanitizer, skipHeaderMap)
+			}
 
-		// 过滤 JSON Body
-		if cfg.BodyEnabled {
-			sanitizeJSONBody(c, cfg.Sanitizer)
-		}
+			if cfg.BodyEnabled {
+				sanitizeJSONBody(r, cfg.Sanitizer)
+			}
 
-		c.Next()
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 
-// sanitizeQuery 过滤 Query 参数
-func sanitizeQuery(c *gin.Context, sanitizer Sanitizer) {
-	query := c.Request.URL.Query()
+func sanitizeQuery(r *http.Request, sanitizer Sanitizer) {
+	query := r.URL.Query()
 	modified := false
 
 	for key, values := range query {
@@ -117,74 +105,67 @@ func sanitizeQuery(c *gin.Context, sanitizer Sanitizer) {
 	}
 
 	if modified {
-		c.Request.URL.RawQuery = query.Encode()
+		r.URL.RawQuery = query.Encode()
 	}
 }
 
-// sanitizeForm 过滤表单数据
-func sanitizeForm(c *gin.Context, sanitizer Sanitizer) {
-	if err := c.Request.ParseForm(); err != nil {
+func sanitizeForm(r *http.Request, sanitizer Sanitizer) {
+	if err := r.ParseForm(); err != nil {
 		return
 	}
 
-	for key, values := range c.Request.PostForm {
+	for key, values := range r.PostForm {
 		for i, value := range values {
-			c.Request.PostForm[key][i] = sanitizer.Sanitize(value)
+			r.PostForm[key][i] = sanitizer.Sanitize(value)
 		}
 	}
 }
 
-// sanitizeHeaders 过滤请求头
-func sanitizeHeaders(c *gin.Context, sanitizer Sanitizer, skipHeaders map[string]bool) {
-	for key, values := range c.Request.Header {
+func sanitizeHeaders(r *http.Request, sanitizer Sanitizer, skipHeaders map[string]bool) {
+	for key, values := range r.Header {
 		if skipHeaders[key] {
 			continue
 		}
 		for i, value := range values {
-			c.Request.Header[key][i] = sanitizer.Sanitize(value)
+			r.Header[key][i] = sanitizer.Sanitize(value)
 		}
 	}
 }
 
-// sanitizeJSONBody 过滤 JSON Body
-func sanitizeJSONBody(c *gin.Context, sanitizer Sanitizer) {
-	contentType := c.GetHeader("Content-Type")
-	if contentType != "application/json" {
+func sanitizeJSONBody(r *http.Request, sanitizer Sanitizer) {
+	if r.Header.Get("Content-Type") != "application/json" {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(c.Request.Body)
+	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil || len(bodyBytes) == 0 {
 		return
 	}
 
 	var bodyData any
 	if err := json.Unmarshal(bodyBytes, &bodyData); err != nil {
-		// 不是有效的 JSON，恢复原始数据
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		return
 	}
 
-	// 递归过滤
 	sanitized := sanitizeValue(bodyData, sanitizer)
 
 	newBodyBytes, err := json.Marshal(sanitized)
 	if err != nil {
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		r.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		return
 	}
 
-	c.Request.Body = io.NopCloser(bytes.NewBuffer(newBodyBytes))
-	c.Request.ContentLength = int64(len(newBodyBytes))
+	r.Body = io.NopCloser(bytes.NewBuffer(newBodyBytes))
+	r.ContentLength = int64(len(newBodyBytes))
 }
 
-// sanitizeValue 递归过滤值
 func sanitizeValue(v any, sanitizer Sanitizer) any {
 	switch val := v.(type) {
 	case string:
 		return sanitizer.Sanitize(val)
 	case map[string]any:
-		result := make(map[string]any)
+		result := make(map[string]any, len(val))
 		for k, v := range val {
 			result[k] = sanitizeValue(v, sanitizer)
 		}

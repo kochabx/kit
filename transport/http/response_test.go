@@ -11,9 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestGinJSON(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
+func TestOK(t *testing.T) {
 	tests := []struct {
 		name string
 		data any
@@ -22,70 +20,65 @@ func TestGinJSON(t *testing.T) {
 		{
 			name: "string data",
 			data: "test data",
-			want: `{"code":200,"msg":"success","data":"test data"}`,
+			want: `{"code":200,"msg":"ok","data":"test data"}`,
 		},
 		{
 			name: "map data",
 			data: map[string]string{"key": "value"},
-			want: `{"code":200,"msg":"success","data":{"key":"value"}}`,
+			want: `{"code":200,"msg":"ok","data":{"key":"value"}}`,
 		},
 		{
 			name: "nil data",
 			data: nil,
-			want: `{"code":200,"msg":"success"}`,
+			want: `{"code":200,"msg":"ok"}`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
-
-			GinJSON(c, tt.data)
-
+			OK(w, tt.data)
 			assert.Equal(t, http.StatusOK, w.Code)
 			assert.JSONEq(t, tt.want, w.Body.String())
 		})
 	}
 }
 
-func TestGinJSONE(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
+func TestFail(t *testing.T) {
 	tests := []struct {
 		name string
 		code int
-		data any
+		msg  any
 		want string
 	}{
 		{
 			name: "with kit error",
 			code: 10001,
-			data: kiterrors.New(10001, "custom error message"),
+			msg:  kiterrors.New(10001, "custom error message"),
 			want: `{"code":10001,"msg":"custom error message"}`,
 		},
 		{
 			name: "with standard error",
 			code: 500,
-			data: errors.New("standard error"),
+			msg:  errors.New("standard error"),
 			want: `{"code":500,"msg":"standard error"}`,
 		},
 		{
 			name: "with string message",
 			code: 400,
-			data: "bad request",
+			msg:  "bad request",
 			want: `{"code":400,"msg":"bad request"}`,
 		},
 		{
 			name: "with nil",
 			code: 500,
-			data: nil,
-			want: `{"code":500,"msg":"operation failed"}`,
+			msg:  nil,
+			want: `{"code":500,"msg":"failed"}`,
 		},
 		{
 			name: "with data object",
 			code: 201,
-			data: map[string]any{"id": 123},
+			msg:  map[string]any{"id": 123},
 			want: `{"code":201,"data":{"id":123}}`,
 		},
 	}
@@ -93,36 +86,17 @@ func TestGinJSONE(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
-
-			GinJSONE(c, tt.code, tt.data)
-
+			Fail(w, tt.code, tt.msg)
 			assert.Equal(t, http.StatusOK, w.Code)
 			assert.JSONEq(t, tt.want, w.Body.String())
 		})
 	}
 }
 
-func TestGinJSONWithNilContext(t *testing.T) {
-	// 应该不会 panic
-	GinJSON(nil, "test")
-	GinJSONE(nil, 500, "error")
-}
-
-func TestSuccess(t *testing.T) {
-	resp := Success("test data")
-
-	assert.Equal(t, 200, resp.Code)
-	assert.Equal(t, "success", resp.Msg)
-	assert.Equal(t, "test data", resp.Data)
-}
-
-func TestFailure(t *testing.T) {
-	resp := Failure(404, "not found")
-
-	assert.Equal(t, 404, resp.Code)
-	assert.Equal(t, "not found", resp.Msg)
-	assert.Nil(t, resp.Data)
+func TestOKAndFail_NilWriter(t *testing.T) {
+	// must not panic
+	OK(nil, "test")
+	Fail(nil, 500, "error")
 }
 
 func TestExtractErrorMessage(t *testing.T) {
@@ -134,7 +108,7 @@ func TestExtractErrorMessage(t *testing.T) {
 		{
 			name: "nil error",
 			err:  nil,
-			want: "operation failed",
+			want: "failed",
 		},
 		{
 			name: "kit error",
@@ -150,35 +124,145 @@ func TestExtractErrorMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractErrorMessage(tt.err)
-			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.want, extractErrorMessage(tt.err))
 		})
 	}
 }
 
-// Benchmark 测试
-func BenchmarkGinJSON(b *testing.B) {
-	gin.SetMode(gin.TestMode)
+func BenchmarkOK(b *testing.B) {
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
 	testData := map[string]string{"key": "value"}
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		w.Body.Reset()
-		GinJSON(c, testData)
+		OK(w, testData)
 	}
 }
 
-func BenchmarkGinJSONE(b *testing.B) {
-	gin.SetMode(gin.TestMode)
+func BenchmarkFail(b *testing.B) {
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
 	testErr := kiterrors.New(500, "benchmark error")
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		w.Body.Reset()
-		GinJSONE(c, 500, testErr)
+		Fail(w, 500, testErr)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Multi-framework integration tests
+// ---------------------------------------------------------------------------
+
+// TestOK_WithStdlibHandler verifies OK() works when the writer comes from a
+// plain net/http handler.
+func TestOK_WithStdlibHandler(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/data", func(w http.ResponseWriter, r *http.Request) {
+		OK(w, map[string]int{"count": 3})
+	})
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/data", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+	assert.JSONEq(t, `{"code":200,"msg":"ok","data":{"count":3}}`, w.Body.String())
+}
+
+// TestFail_WithStdlibHandler verifies Fail() works inside a stdlib handler.
+func TestFail_WithStdlibHandler(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/err", func(w http.ResponseWriter, r *http.Request) {
+		Fail(w, 400, errors.New("bad input"))
+	})
+
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/err", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"code":400,"msg":"bad input"}`, w.Body.String())
+}
+
+// TestOK_WithGin verifies OK() works inside a Gin handler using its
+// ResponseWriter adapter.
+func TestOK_WithGin(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/items", func(c *gin.Context) {
+		OK(c.Writer, []string{"a", "b"})
+	})
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/items", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+	assert.JSONEq(t, `{"code":200,"msg":"ok","data":["a","b"]}`, w.Body.String())
+}
+
+// TestFail_WithGin_KitError verifies Fail() extracts the message from a kit
+// error when running inside Gin.
+func TestFail_WithGin_KitError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.GET("/fail", func(c *gin.Context) {
+		Fail(c.Writer, 10001, kiterrors.New(10001, "resource not found"))
+	})
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/fail", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"code":10001,"msg":"resource not found"}`, w.Body.String())
+}
+
+// TestFail_WithGin_StringMsg verifies Fail() with a plain string message inside Gin.
+func TestFail_WithGin_StringMsg(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.POST("/submit", func(c *gin.Context) {
+		Fail(c.Writer, 422, "validation error")
+	})
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/submit", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"code":422,"msg":"validation error"}`, w.Body.String())
+}
+
+// TestOK_WithGin_NilData verifies OK() omits the data field when nil is passed.
+func TestOK_WithGin_NilData(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.DELETE("/resource", func(c *gin.Context) {
+		OK[any](c.Writer, nil)
+	})
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/resource", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"code":200,"msg":"ok"}`, w.Body.String())
+}
+
+// TestOK_ContentType_AcrossFrameworks checks that the Content-Type header is
+// set consistently regardless of which framework provides the ResponseWriter.
+func TestOK_ContentType_AcrossFrameworks(t *testing.T) {
+	const wantCT = "application/json; charset=utf-8"
+
+	t.Run("stdlib", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		OK(w, "x")
+		assert.Equal(t, wantCT, w.Header().Get("Content-Type"))
+	})
+
+	t.Run("gin", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		engine := gin.New()
+		engine.GET("/ct", func(c *gin.Context) { OK(c.Writer, "x") })
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ct", nil))
+		assert.Equal(t, wantCT, w.Header().Get("Content-Type"))
+	})
 }

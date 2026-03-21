@@ -3,117 +3,129 @@ package middleware
 import (
 	"bytes"
 	"io"
+	"net"
+	"net/http"
+	"strings"
 	"time"
 
-	"github.com/gin-gonic/gin"
 	"github.com/kochabx/kit/log"
 )
 
 // LoggerConfig 日志中间件配置
 type LoggerConfig struct {
-	RequestBody  bool                    // 是否记录请求体
-	ResponseBody bool                    // 是否记录响应体
-	Header       bool                    // 是否记录请求头
-	HandlerName  bool                    // 是否记录处理器名称
-	SkipPaths    []string                // 跳过记录的路径
-	SkipFunc     func(*gin.Context) bool // 动态跳过判断函数
-	Logger       *log.Logger             // 自定义日志记录器
+	RequestBody  bool                     // 是否记录请求体
+	ResponseBody bool                     // 是否记录响应体
+	Header       bool                     // 是否记录请求头
+	SkipPaths    []string                 // 跳过记录的路径
+	SkipFunc     func(*http.Request) bool // 动态跳过判断函数
+	Logger       *log.Logger              // 自定义日志记录器
 }
 
-// responseWriter 包装 gin.ResponseWriter 以捕获响应体
-type responseWriter struct {
-	gin.ResponseWriter
-	body *bytes.Buffer
+// statusResponseWriter 包装 http.ResponseWriter 以捕获状态码和响应体
+type statusResponseWriter struct {
+	http.ResponseWriter
+	status int
+	body   *bytes.Buffer
 }
 
-func (w *responseWriter) Write(b []byte) (int, error) {
-	w.body.Write(b)
+func (w *statusResponseWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusResponseWriter) Write(b []byte) (int, error) {
+	if w.body != nil {
+		w.body.Write(b)
+	}
 	return w.ResponseWriter.Write(b)
 }
 
-// Logger 创建日志中间件
-func Logger(cfgs ...LoggerConfig) gin.HandlerFunc {
+// clientIP 从请求中提取真实客户端 IP
+func clientIP(r *http.Request) string {
+	if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		return ip
+	}
+	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+		if idx := strings.Index(fwd, ","); idx != -1 {
+			return strings.TrimSpace(fwd[:idx])
+		}
+		return fwd
+	}
+	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		return host
+	}
+	return r.RemoteAddr
+}
+
+// Logger 创建框架无关的请求日志中间件
+func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 	cfg := LoggerConfig{}
 	if len(cfgs) > 0 {
 		cfg = cfgs[0]
 	}
 
-	// 设置默认日志记录器
 	if cfg.Logger == nil {
 		cfg.Logger = log.G
 	}
 
-	// 预编译路径匹配器
 	matcher := NewPathMatcher(cfg.SkipPaths)
 
-	return func(c *gin.Context) {
-		// 检查是否跳过
-		if shouldSkip(c, matcher, cfg.SkipFunc) {
-			c.Next()
-			return
-		}
-
-		start := time.Now()
-
-		// 读取请求体
-		var requestBody []byte
-		if cfg.RequestBody {
-			body, err := c.GetRawData()
-			if err == nil {
-				requestBody = body
-				c.Request.Body = io.NopCloser(bytes.NewBuffer(body))
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if shouldSkip(r, matcher, cfg.SkipFunc) {
+				next.ServeHTTP(w, r)
+				return
 			}
-		}
 
-		// 包装 ResponseWriter
-		var rw *responseWriter
-		if cfg.ResponseBody {
-			rw = &responseWriter{
-				ResponseWriter: c.Writer,
-				body:           bytes.NewBuffer(nil),
+			start := time.Now()
+
+			var requestBody []byte
+			if cfg.RequestBody {
+				body, err := io.ReadAll(r.Body)
+				if err == nil {
+					requestBody = body
+					r.Body = io.NopCloser(bytes.NewReader(body))
+				}
 			}
-			c.Writer = rw
-		}
 
-		// 处理请求
-		c.Next()
+			rw := &statusResponseWriter{
+				ResponseWriter: w,
+				status:         http.StatusOK,
+			}
+			if cfg.ResponseBody {
+				rw.body = bytes.NewBuffer(nil)
+			}
 
-		// 记录日志
-		event := cfg.Logger.Info().
-			Int("status", c.Writer.Status()).
-			Str("method", c.Request.Method).
-			Str("path", c.Request.URL.Path).
-			Dur("duration", time.Since(start)).
-			Str("client_ip", c.ClientIP())
+			next.ServeHTTP(rw, r)
 
-		if query := c.Request.URL.RawQuery; query != "" {
-			event = event.Str("query", query)
-		}
+			event := cfg.Logger.Info().
+				Int("status", rw.status).
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Dur("duration", time.Since(start)).
+				Str("client_ip", clientIP(r))
 
-		if requestID := c.Request.Header.Get("X-Request-Id"); requestID != "" {
-			event = event.Str("request_id", requestID)
-		}
+			if query := r.URL.RawQuery; query != "" {
+				event = event.Str("query", query)
+			}
 
-		if cfg.HandlerName {
-			event = event.Str("handler", c.HandlerName())
-		}
+			if requestID := r.Header.Get("X-Request-Id"); requestID != "" {
+				event = event.Str("request_id", requestID)
+			}
 
-		if cfg.Header {
-			event = event.Any("headers", c.Request.Header)
-		}
+			if cfg.Header {
+				event = event.Any("headers", r.Header)
+			}
 
-		if cfg.RequestBody && len(requestBody) > 0 {
-			event = event.Bytes("request_body", requestBody)
-		}
+			if cfg.RequestBody && len(requestBody) > 0 {
+				event = event.Bytes("request_body", requestBody)
+			}
 
-		if cfg.ResponseBody && rw != nil {
-			event = event.Bytes("response_body", rw.body.Bytes())
-		}
+			if cfg.ResponseBody && rw.body != nil {
+				event = event.Bytes("response_body", rw.body.Bytes())
+			}
 
-		if len(c.Errors) > 0 {
-			event = event.Str("errors", c.Errors.ByType(gin.ErrorTypePrivate).String())
-		}
-
-		event.Send()
+			event.Send()
+		})
 	}
 }

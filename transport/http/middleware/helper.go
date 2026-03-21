@@ -1,10 +1,9 @@
 package middleware
 
 import (
+	"net/http"
 	"path"
 	"strings"
-
-	"github.com/gin-gonic/gin"
 )
 
 // prefixPath 预编译的前缀路径
@@ -104,12 +103,10 @@ func (pm *PathMatcher) Match(urlPath string) bool {
 	return false
 }
 
-// shouldSkip 检查请求是否应跳过处理
-func shouldSkip(c *gin.Context, matcher *PathMatcher, skipFunc func(*gin.Context) bool) bool {
-	// 先检查自定义跳过函数（通常更轻量）
-	if skipFunc != nil && skipFunc(c) {
+// shouldSkip reports whether the request should be skipped.
+func shouldSkip(r *http.Request, matcher *PathMatcher, skipFunc func(*http.Request) bool) bool {
+	if skipFunc != nil && skipFunc(r) {
 		return true
 	}
-	// matcher.Match 内部已处理 nil 检查
-	return matcher.Match(c.Request.URL.Path)
+	return matcher.Match(r.URL.Path)
 }

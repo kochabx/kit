@@ -18,7 +18,7 @@ type Logger struct {
 	zerolog.Logger
 	desensitizeHook *desensitize.Hook
 	writer          io.Writer
-	closer          io.Closer // 用于资源清理
+	closer          io.Closer
 }
 
 // GetDesensitizeHook 获取脱敏钩子

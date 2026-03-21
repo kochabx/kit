@@ -2,12 +2,12 @@ package middleware
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 )
 
@@ -38,36 +38,33 @@ func (m *mockAuthenticator) Authenticate(ctx context.Context, token string) (*Te
 }
 
 // ============================================================================
-// ============================================================================
 // Test Setup
 // ============================================================================
-
-func init() {
-	gin.SetMode(gin.TestMode)
-}
 
 func containsString(s, substr string) bool {
 	return strings.Contains(s, substr)
 }
 
-func setupRouter(middleware gin.HandlerFunc) *gin.Engine {
-	r := gin.New()
-	r.Use(middleware)
-	r.GET("/protected", func(c *gin.Context) {
-		claims, ok := GetClaims[*TestClaims](c.Request.Context())
+// setupHandler wraps a stdib mux with the given middleware applied globally.
+func setupHandler(mw func(http.Handler) http.Handler) http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protected", func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := GetClaims[*TestClaims](r.Context())
 		if !ok {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "claims not found"})
+			http.Error(w, "claims not found", http.StatusInternalServerError)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
 			"user_id": claims.UserID,
 			"roles":   claims.Roles,
 		})
 	})
-	r.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	})
-	return r
+	return mw(mux)
 }
 
 // ============================================================================
@@ -114,14 +111,12 @@ func TestBearerExtractor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
-			c.Request = httptest.NewRequest("GET", "/", nil)
+			req := httptest.NewRequest("GET", "/", nil)
 			if tt.header != "" {
-				c.Request.Header.Set("Authorization", tt.header)
+				req.Header.Set("Authorization", tt.header)
 			}
 
-			token, err := extractor(c)
+			token, err := extractor(req)
 
 			if tt.wantErr {
 				if err == nil {
@@ -142,12 +137,10 @@ func TestBearerExtractor(t *testing.T) {
 func TestHeaderExtractor(t *testing.T) {
 	extractor := HeaderExtractor("X-API-Key")
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/", nil)
-	c.Request.Header.Set("X-API-Key", "my-api-key")
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-API-Key", "my-api-key")
 
-	token, err := extractor(c)
+	token, err := extractor(req)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -159,11 +152,9 @@ func TestHeaderExtractor(t *testing.T) {
 func TestQueryExtractor(t *testing.T) {
 	extractor := QueryExtractor("token")
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/?token=query-token", nil)
+	req := httptest.NewRequest("GET", "/?token=query-token", nil)
 
-	token, err := extractor(c)
+	token, err := extractor(req)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -175,12 +166,10 @@ func TestQueryExtractor(t *testing.T) {
 func TestCookieExtractor(t *testing.T) {
 	extractor := CookieExtractor("session")
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest("GET", "/", nil)
-	c.Request.AddCookie(&http.Cookie{Name: "session", Value: "cookie-token"})
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(&http.Cookie{Name: "session", Value: "cookie-token"})
 
-	token, err := extractor(c)
+	token, err := extractor(req)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -197,12 +186,10 @@ func TestChainExtractor(t *testing.T) {
 	)
 
 	t.Run("first extractor succeeds", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest("GET", "/", nil)
-		c.Request.Header.Set("X-API-Key", "api-key")
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-API-Key", "api-key")
 
-		token, err := extractor(c)
+		token, err := extractor(req)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -212,12 +199,10 @@ func TestChainExtractor(t *testing.T) {
 	})
 
 	t.Run("fallback to second extractor", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest("GET", "/", nil)
-		c.Request.Header.Set("Authorization", "Bearer bearer-token")
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer bearer-token")
 
-		token, err := extractor(c)
+		token, err := extractor(req)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -227,11 +212,9 @@ func TestChainExtractor(t *testing.T) {
 	})
 
 	t.Run("fallback to third extractor", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest("GET", "/?token=query-token", nil)
+		req := httptest.NewRequest("GET", "/?token=query-token", nil)
 
-		token, err := extractor(c)
+		token, err := extractor(req)
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -241,11 +224,9 @@ func TestChainExtractor(t *testing.T) {
 	})
 
 	t.Run("all extractors fail", func(t *testing.T) {
-		w := httptest.NewRecorder()
-		c, _ := gin.CreateTestContext(w)
-		c.Request = httptest.NewRequest("GET", "/", nil)
+		req := httptest.NewRequest("GET", "/", nil)
 
-		_, err := extractor(c)
+		_, err := extractor(req)
 		if err == nil {
 			t.Error("expected error, got nil")
 		}
@@ -264,17 +245,17 @@ func TestAuth_Success(t *testing.T) {
 	claims.Subject = "user123"
 
 	auth := &mockAuthenticator{claims: claims}
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
 	})
 
-	r := setupRouter(middleware)
+	handler := setupHandler(mw)
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	req.Header.Set("Authorization", "Bearer valid-token")
 	w := httptest.NewRecorder()
 
-	r.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -283,26 +264,24 @@ func TestAuth_Success(t *testing.T) {
 
 func TestAuth_MissingToken(t *testing.T) {
 	auth := &mockAuthenticator{claims: &TestClaims{}}
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
 	})
 
-	r := gin.New()
-	r.Use(middleware)
-	r.GET("/protected", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"success": true})
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"success":true}`))
 	})
+	handler := mw(inner)
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
 
-	r.ServeHTTP(w, req)
-
-	// GinJSONE 返回 HTTP 200，但业务码是 401
+	// Fail writes HTTP 200 with business code 401 in JSON body
 	if w.Code != http.StatusOK {
 		t.Errorf("HTTP status = %d, want %d", w.Code, http.StatusOK)
 	}
-	// 验证响应体中的业务码
 	if !containsString(w.Body.String(), `"code":401`) {
 		t.Errorf("response should contain code 401, got: %s", w.Body.String())
 	}
@@ -310,27 +289,23 @@ func TestAuth_MissingToken(t *testing.T) {
 
 func TestAuth_InvalidToken(t *testing.T) {
 	auth := &mockAuthenticator{err: ErrTokenInvalid}
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
 	})
 
-	r := gin.New()
-	r.Use(middleware)
-	r.GET("/protected", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"success": true})
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
 	})
+	handler := mw(inner)
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	req.Header.Set("Authorization", "Bearer invalid-token")
 	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
 
-	r.ServeHTTP(w, req)
-
-	// GinJSONE 返回 HTTP 200，但业务码是 401
 	if w.Code != http.StatusOK {
 		t.Errorf("HTTP status = %d, want %d", w.Code, http.StatusOK)
 	}
-	// 验证响应体中的业务码
 	if !containsString(w.Body.String(), `"code":401`) {
 		t.Errorf("response should contain code 401, got: %s", w.Body.String())
 	}
@@ -338,17 +313,16 @@ func TestAuth_InvalidToken(t *testing.T) {
 
 func TestAuth_SkipPaths(t *testing.T) {
 	auth := &mockAuthenticator{err: ErrTokenInvalid}
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
 		SkipPaths:     []string{"/health"},
 	})
 
-	r := setupRouter(middleware)
+	handler := setupHandler(mw)
 
 	req := httptest.NewRequest("GET", "/health", nil)
 	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -357,25 +331,23 @@ func TestAuth_SkipPaths(t *testing.T) {
 
 func TestAuth_SkipFunc(t *testing.T) {
 	auth := &mockAuthenticator{err: ErrTokenInvalid}
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
-		SkipFunc: func(c *gin.Context) bool {
-			return c.GetHeader("X-Skip-Auth") == "true"
+		SkipFunc: func(r *http.Request) bool {
+			return r.Header.Get("X-Skip-Auth") == "true"
 		},
 	})
 
-	r := gin.New()
-	r.Use(middleware)
-	r.GET("/protected", func(c *gin.Context) {
-		// 跳过认证时，claims 不存在
-		c.JSON(http.StatusOK, gin.H{"skipped": true})
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(map[string]any{"skipped": true})
 	})
+	handler := mw(inner)
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	req.Header.Set("X-Skip-Auth", "true")
 	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -387,30 +359,29 @@ func TestAuth_CustomContextKey(t *testing.T) {
 	auth := &mockAuthenticator{claims: claims}
 
 	var gotClaims *TestClaims
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
 		ContextKey:    "user",
-		SuccessHandler: func(c *gin.Context, claims *TestClaims) {
-			gotClaims = claims
+		SuccessHandler: func(w http.ResponseWriter, r *http.Request, c *TestClaims) {
+			gotClaims = c
 		},
 	})
 
-	r := gin.New()
-	r.Use(middleware)
-	r.GET("/test", func(c *gin.Context) {
-		user, ok := GetClaims[*TestClaims](c.Request.Context(), "user")
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := GetClaims[*TestClaims](r.Context(), "user")
 		if !ok {
-			c.JSON(http.StatusInternalServerError, nil)
+			http.Error(w, "not found", http.StatusInternalServerError)
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{"user_id": user.UserID})
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"user_id": user.UserID})
 	})
+	handler := mw(inner)
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("Authorization", "Bearer token")
 	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -424,22 +395,21 @@ func TestAuth_CustomErrorHandler(t *testing.T) {
 	auth := &mockAuthenticator{err: ErrTokenInvalid}
 	customErrorCalled := false
 
-	middleware := Auth(AuthConfig[*TestClaims]{
+	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
-		ErrorHandler: func(c *gin.Context, err error) {
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			customErrorCalled = true
-			c.JSON(http.StatusForbidden, gin.H{"custom_error": err.Error()})
-			c.Abort()
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]any{"custom_error": err.Error()})
 		},
 	})
 
-	r := setupRouter(middleware)
+	handler := setupHandler(mw)
 
 	req := httptest.NewRequest("GET", "/protected", nil)
 	req.Header.Set("Authorization", "Bearer token")
 	w := httptest.NewRecorder()
-
-	r.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 
 	if !customErrorCalled {
 		t.Error("custom error handler not called")

@@ -9,7 +9,6 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/kochabx/kit/log"
 )
 
@@ -19,8 +18,8 @@ type RecoveryConfig struct {
 	Logger     *log.Logger // 自定义日志记录器
 }
 
-// Recovery 创建 Recovery 中间件
-func Recovery(cfgs ...RecoveryConfig) gin.HandlerFunc {
+// Recovery 创建框架无关的 panic 恢复中间件
+func Recovery(cfgs ...RecoveryConfig) func(http.Handler) http.Handler {
 	cfg := RecoveryConfig{
 		StackTrace: true,
 	}
@@ -28,41 +27,38 @@ func Recovery(cfgs ...RecoveryConfig) gin.HandlerFunc {
 		cfg = cfgs[0]
 	}
 
-	// 设置默认日志记录器
 	if cfg.Logger == nil {
 		cfg.Logger = log.G
 	}
 
-	return func(c *gin.Context) {
-		defer func() {
-			if err := recover(); err != nil {
-				httpRequest, _ := httputil.DumpRequest(c.Request, false)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer func() {
+				if err := recover(); err != nil {
+					httpRequest, _ := httputil.DumpRequest(r, false)
 
-				// 检查是否为断开的连接
-				if isBrokenPipe(err) {
-					cfg.Logger.Warn().
+					if isBrokenPipe(err) {
+						cfg.Logger.Warn().
+							Str("error", fmt.Sprintf("%v", err)).
+							Bytes("request", httpRequest).
+							Msg("broken pipe")
+						return
+					}
+
+					event := cfg.Logger.Error().
 						Str("error", fmt.Sprintf("%v", err)).
-						Bytes("request", httpRequest).
-						Msg("broken pipe")
-					_ = c.Error(fmt.Errorf("%v", err))
-					c.Abort()
-					return
+						Bytes("request", httpRequest)
+
+					if cfg.StackTrace {
+						event = event.Bytes("stack", debug.Stack())
+					}
+
+					event.Msg("panic recovered")
+					w.WriteHeader(http.StatusInternalServerError)
 				}
-
-				// 记录日志
-				event := cfg.Logger.Error().
-					Str("error", fmt.Sprintf("%v", err)).
-					Bytes("request", httpRequest)
-
-				if cfg.StackTrace {
-					event = event.Bytes("stack", debug.Stack())
-				}
-
-				event.Msg("panic recovered")
-				c.AbortWithStatus(http.StatusInternalServerError)
-			}
-		}()
-		c.Next()
+			}()
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 

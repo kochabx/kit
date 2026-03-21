@@ -2,12 +2,12 @@ package middleware
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
-	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/kochabx/kit/errors"
-	"github.com/kochabx/kit/transport/http"
+	kithttp "github.com/kochabx/kit/transport/http"
 )
 
 const (
@@ -37,13 +37,13 @@ func (f AuthenticatorFunc[T]) Authenticate(ctx context.Context, token string) (T
 	return f(ctx, token)
 }
 
-// TokenExtractor Token 提取器
-type TokenExtractor func(c *gin.Context) (string, error)
+// TokenExtractor 从 HTTP 请求提取 Token
+type TokenExtractor func(r *http.Request) (string, error)
 
 // BearerExtractor 从 Authorization: Bearer <token> 提取
 func BearerExtractor() TokenExtractor {
-	return func(c *gin.Context) (string, error) {
-		auth := c.GetHeader(headerAuthorization)
+	return func(r *http.Request) (string, error) {
+		auth := r.Header.Get(headerAuthorization)
 		if auth == "" {
 			return "", ErrTokenMissing
 		}
@@ -56,8 +56,8 @@ func BearerExtractor() TokenExtractor {
 
 // HeaderExtractor 从指定 Header 提取
 func HeaderExtractor(header string) TokenExtractor {
-	return func(c *gin.Context) (string, error) {
-		if token := c.GetHeader(header); token != "" {
+	return func(r *http.Request) (string, error) {
+		if token := r.Header.Get(header); token != "" {
 			return token, nil
 		}
 		return "", ErrTokenMissing
@@ -66,8 +66,8 @@ func HeaderExtractor(header string) TokenExtractor {
 
 // QueryExtractor 从 URL Query 参数提取
 func QueryExtractor(param string) TokenExtractor {
-	return func(c *gin.Context) (string, error) {
-		if token := c.Query(param); token != "" {
+	return func(r *http.Request) (string, error) {
+		if token := r.URL.Query().Get(param); token != "" {
 			return token, nil
 		}
 		return "", ErrTokenMissing
@@ -76,9 +76,10 @@ func QueryExtractor(param string) TokenExtractor {
 
 // CookieExtractor 从 Cookie 提取
 func CookieExtractor(name string) TokenExtractor {
-	return func(c *gin.Context) (string, error) {
-		if token, err := c.Cookie(name); err == nil && token != "" {
-			return token, nil
+	return func(r *http.Request) (string, error) {
+		c, err := r.Cookie(name)
+		if err == nil && c.Value != "" {
+			return c.Value, nil
 		}
 		return "", ErrTokenMissing
 	}
@@ -86,9 +87,9 @@ func CookieExtractor(name string) TokenExtractor {
 
 // ChainExtractor 链式提取器，依次尝试直到成功
 func ChainExtractor(extractors ...TokenExtractor) TokenExtractor {
-	return func(c *gin.Context) (string, error) {
+	return func(r *http.Request) (string, error) {
 		for _, extract := range extractors {
-			if token, err := extract(c); err == nil {
+			if token, err := extract(r); err == nil {
 				return token, nil
 			}
 		}
@@ -98,17 +99,17 @@ func ChainExtractor(extractors ...TokenExtractor) TokenExtractor {
 
 // AuthConfig 认证中间件配置
 type AuthConfig[T Claims] struct {
-	Authenticator  Authenticator[T]          // 认证器（必需）
-	Extractor      TokenExtractor            // Token 提取器
-	ContextKey     string                    // 上下文键
-	SkipPaths      []string                  // 跳过认证的路径前缀
-	SkipFunc       func(*gin.Context) bool   // 动态跳过判断
-	SuccessHandler func(*gin.Context, T)     // 成功回调
-	ErrorHandler   func(*gin.Context, error) // 错误处理
+	Authenticator  Authenticator[T]                                // 认证器（必需）
+	Extractor      TokenExtractor                                  // Token 提取器，默认 BearerExtractor
+	ContextKey     string                                          // 上下文键，默认 "claims"
+	SkipPaths      []string                                        // 跳过认证的路径前缀
+	SkipFunc       func(*http.Request) bool                        // 动态跳过判断
+	SuccessHandler func(http.ResponseWriter, *http.Request, T)     // 成功回调
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理，默认返回 401
 }
 
-// Auth 创建认证中间件
-func Auth[T Claims](cfg AuthConfig[T]) gin.HandlerFunc {
+// Auth 创建框架无关的认证中间件
+func Auth[T Claims](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 	if cfg.Extractor == nil {
 		cfg.Extractor = BearerExtractor()
 	}
@@ -116,47 +117,45 @@ func Auth[T Claims](cfg AuthConfig[T]) gin.HandlerFunc {
 		cfg.ContextKey = contextKey
 	}
 	if cfg.ErrorHandler == nil {
-		cfg.ErrorHandler = func(c *gin.Context, err error) {
-			http.GinJSONE(c, http.StatusUnauthorized, err)
-			c.Abort()
+		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			kithttp.Fail(w, http.StatusUnauthorized, err)
 		}
 	}
 
-	// 预编译路径匹配器
 	matcher := NewPathMatcher(cfg.SkipPaths)
 
-	return func(c *gin.Context) {
-		// 跳过检查
-		if shouldSkip(c, matcher, cfg.SkipFunc) {
-			c.Next()
-			return
-		}
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if shouldSkip(r, matcher, cfg.SkipFunc) {
+				next.ServeHTTP(w, r)
+				return
+			}
 
-		if cfg.Authenticator == nil {
-			cfg.ErrorHandler(c, ErrAuthenticatorNil)
-			return
-		}
+			if cfg.Authenticator == nil {
+				cfg.ErrorHandler(w, r, ErrAuthenticatorNil)
+				return
+			}
 
-		token, err := cfg.Extractor(c)
-		if err != nil {
-			cfg.ErrorHandler(c, err)
-			return
-		}
+			token, err := cfg.Extractor(r)
+			if err != nil {
+				cfg.ErrorHandler(w, r, err)
+				return
+			}
 
-		claims, err := cfg.Authenticator.Authenticate(c.Request.Context(), token)
-		if err != nil {
-			cfg.ErrorHandler(c, err)
-			return
-		}
+			claims, err := cfg.Authenticator.Authenticate(r.Context(), token)
+			if err != nil {
+				cfg.ErrorHandler(w, r, err)
+				return
+			}
 
-		// 存入 request context
-		ctx := context.WithValue(c.Request.Context(), cfg.ContextKey, claims)
-		c.Request = c.Request.WithContext(ctx)
+			ctx := context.WithValue(r.Context(), cfg.ContextKey, claims)
+			r = r.WithContext(ctx)
 
-		if cfg.SuccessHandler != nil {
-			cfg.SuccessHandler(c, claims)
-		}
-		c.Next()
+			if cfg.SuccessHandler != nil {
+				cfg.SuccessHandler(w, r, claims)
+			}
+			next.ServeHTTP(w, r)
+		})
 	}
 }
 

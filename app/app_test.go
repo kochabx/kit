@@ -8,11 +8,13 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+
 	"github.com/kochabx/kit/transport/http"
 )
 
 func TestNew_Simple(t *testing.T) {
-	httpServer := http.NewServer("", gin.New())
+	gin.SetMode(gin.TestMode)
+	httpServer := http.NewServer(gin.New())
 	app := New(WithServer(httpServer))
 
 	info := app.Info()
@@ -26,7 +28,8 @@ func TestNew_Simple(t *testing.T) {
 }
 
 func TestNew_WithOptions(t *testing.T) {
-	httpServer := http.NewServer("", gin.New())
+	gin.SetMode(gin.TestMode)
+	httpServer := http.NewServer(gin.New())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -53,8 +56,9 @@ func TestNew_WithOptions(t *testing.T) {
 }
 
 func TestNew_WithMultipleServers(t *testing.T) {
-	httpServer1 := http.NewServer("", gin.New())
-	httpServer2 := http.NewServer("", gin.New())
+	gin.SetMode(gin.TestMode)
+	httpServer1 := http.NewServer(gin.New())
+	httpServer2 := http.NewServer(gin.New())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -92,7 +96,8 @@ func TestNew_NoServers(t *testing.T) {
 
 func TestApplication_AddServerAtRuntime(t *testing.T) {
 	app := New()
-	httpServer := http.NewServer("", gin.New())
+	gin.SetMode(gin.TestMode)
+	httpServer := http.NewServer(gin.New())
 
 	// Should work before starting
 	err := app.AddServer(httpServer)
@@ -112,7 +117,8 @@ func TestApplication_AddServerAfterStart(t *testing.T) {
 	// Mark as started
 	app.started = true
 
-	httpServer := http.NewServer("", gin.New())
+	gin.SetMode(gin.TestMode)
+	httpServer := http.NewServer(gin.New())
 	err := app.AddServer(httpServer)
 	if err != ErrAlreadyStarted {
 		t.Fatalf("expected ErrAlreadyStarted, got %v", err)
@@ -166,7 +172,8 @@ func TestWithContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	httpServer := http.NewServer("", gin.New())
+	gin.SetMode(gin.TestMode)
+	httpServer := http.NewServer(gin.New())
 	app := New(
 		WithContext(ctx),
 		WithServer(httpServer),
