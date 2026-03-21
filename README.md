@@ -69,7 +69,7 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 go get github.com/kochabx/kit
 ```
 
-### 最小示例：启动一个 HTTP 服务
+### 最小示例：启动一个 HTTP 服务（标准库）
 
 HTTP 服务封装是框架无关的，只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi` 等均可）：
 
@@ -90,7 +90,35 @@ func main() {
 	})
 
 	application := app.New(
-		app.WithServer(kithttp.NewServer(":8080", mux)),
+		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
+	)
+
+	if err := application.Start(); err != nil {
+		panic(err)
+	}
+}
+```
+
+### 最小示例：启动一个 HTTP 服务（Gin）
+
+```go
+package main
+
+import (
+	"github.com/gin-gonic/gin"
+
+	"github.com/kochabx/kit/app"
+	kithttp "github.com/kochabx/kit/transport/http"
+)
+
+func main() {
+	r := gin.Default()
+	r.GET("/ping", func(c *gin.Context) {
+		c.JSON(200, gin.H{"message": "pong"})
+	})
+
+	application := app.New(
+		app.WithServer(kithttp.NewServer(r, kithttp.WithAddr(":8080"))),
 	)
 
 	if err := application.Start(); err != nil {
@@ -106,6 +134,9 @@ package main
 
 import (
 	"context"
+	"net/http"
+	"strconv"
+	"net/http"
 	"time"
 
 	"github.com/kochabx/kit/app"
@@ -140,7 +171,7 @@ func main() {
 	logger := log.New()
 	log.SetGlobal(logger)
 
-	gormDB, err := db.NewGorm(&db.MySQLConfig{
+	gormDB, err := db.New(&db.MySQLConfig{
 		Host:     cfg.DB.Host,
 		Port:     cfg.DB.Port,
 		User:     cfg.DB.User,
@@ -151,9 +182,8 @@ func main() {
 		panic(err)
 	}
 
-	rdb, err := redis.NewClient(&redis.SingleConfig{
-		Host:     cfg.Redis.Host,
-		Port:     cfg.Redis.Port,
+	rdb, err := redis.New(&redis.Config{
+		Addrs:    []string{cfg.Redis.Host + ":" + strconv.Itoa(cfg.Redis.Port)},
 		Password: cfg.Redis.Password,
 	})
 	if err != nil {
@@ -166,7 +196,7 @@ func main() {
 	})
 
 	application := app.New(
-		app.WithServer(kithttp.NewServer(":8080", mux)),
+		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
 		app.WithShutdownTimeout(30*time.Second),
 		app.WithClose("database", func(ctx context.Context) error {
 			return gormDB.Close()
@@ -290,8 +320,8 @@ Redis 支持的分布式限流：
 
 统一的存储层封装，各组件均支持 functional options 配置：
 
-- **db**：`db.NewGorm(config)` 支持 MySQL / PostgreSQL / SQLite
-- **redis**：`redis.NewClient(config)` 支持单机 / Sentinel / Cluster 模式
+- **db**：`db.New(config)` 支持 MySQL / PostgreSQL / SQLite
+- **redis**：`redis.New(config)` 支持单机 / Sentinel / Cluster 模式
 - **mongo**：`mongo.NewClient(config)` MongoDB 客户端
 - **etcd**：`etcd.NewClient(config)` + 辅助函数（Watch、选举等）
 - **kafka**：`kafka.NewClient(config)` 生产者与消费者

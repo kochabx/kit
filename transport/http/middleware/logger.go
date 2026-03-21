@@ -15,17 +15,14 @@ import (
 
 // LoggerConfig 日志中间件配置
 type LoggerConfig struct {
-	// 记录开关
-	Header         bool // 是否记录请求头
-	RequestBody    bool // 是否记录请求体
-	ResponseBody   bool // 是否记录响应体
-	TrustedProxies bool // 是否信任 X-Real-IP / X-Forwarded-For 头（仅在代理后部署时启用）
-	// 跳过逻辑
-	SkipPaths []string                 // 跳过记录的路径
-	SkipFunc  func(*http.Request) bool // 动态跳过判断函数
-	// 扩展
-	Logger       *log.Logger                                        // 自定义日志记录器
-	CustomFields func(*http.Request, *zerolog.Event) *zerolog.Event // 追加自定义日志字段
+	Header         bool                                               // 是否记录请求头
+	RequestBody    bool                                               // 是否记录请求体
+	ResponseBody   bool                                               // 是否记录响应体
+	TrustedProxies bool                                               // 是否信任 X-Real-IP / X-Forwarded-For 头（仅在代理后部署时启用）
+	SkipPaths      []string                                           // 跳过记录的路径
+	SkipFunc       func(*http.Request) bool                           // 动态跳过判断函数
+	Logger         *log.Logger                                        // 自定义日志记录器
+	CustomFields   func(*http.Request, *zerolog.Event) *zerolog.Event // 追加自定义日志字段
 }
 
 // statusResponseWriter 包装 http.ResponseWriter 以捕获状态码和响应体
