@@ -58,8 +58,8 @@ func clientIP(r *http.Request, trustedProxies bool) string {
 			return ip
 		}
 		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			if idx := strings.Index(fwd, ","); idx != -1 {
-				return strings.TrimSpace(fwd[:idx])
+			if before, _, ok := strings.Cut(fwd, ","); ok {
+				return strings.TrimSpace(before)
 			}
 			return fwd
 		}
@@ -70,7 +70,7 @@ func clientIP(r *http.Request, trustedProxies bool) string {
 	return r.RemoteAddr
 }
 
-// Logger 创建框架无关的请求日志中间件
+// Logger 创建请求日志中间件
 func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 	cfg := LoggerConfig{}
 	if len(cfgs) > 0 {

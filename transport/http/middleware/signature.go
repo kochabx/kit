@@ -69,7 +69,7 @@ func DefaultSignatureConfig() SignatureConfig {
 	}
 }
 
-// Signature 创建框架无关的请求签名验证中间件
+// Signature 创建请求签名验证中间件
 func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 	cfg := SignatureConfig{}
 	if len(cfgs) > 0 {

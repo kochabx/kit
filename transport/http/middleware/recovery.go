@@ -18,7 +18,7 @@ type RecoveryConfig struct {
 	Logger     *log.Logger // 自定义日志记录器
 }
 
-// Recovery 创建框架无关的 panic 恢复中间件
+// Recovery 创建 panic 恢复中间件
 func Recovery(cfgs ...RecoveryConfig) func(http.Handler) http.Handler {
 	cfg := RecoveryConfig{
 		StackTrace: true,

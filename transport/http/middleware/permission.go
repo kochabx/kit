@@ -36,7 +36,7 @@ type PermissionConfig struct {
 	Logger       *log.Logger                                     // 自定义日志记录器
 }
 
-// Permission 创建框架无关的权限检查中间件
+// Permission 创建权限检查中间件
 func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 	var cfg PermissionConfig
 	if len(cfgs) > 0 {

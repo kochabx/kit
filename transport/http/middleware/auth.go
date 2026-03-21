@@ -108,7 +108,7 @@ type AuthConfig[T Claims] struct {
 	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理，默认返回 401
 }
 
-// Auth 创建框架无关的认证中间件
+// Auth 创建认证中间件
 func Auth[T Claims](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 	if cfg.Extractor == nil {
 		cfg.Extractor = BearerExtractor()

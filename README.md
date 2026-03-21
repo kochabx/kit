@@ -24,7 +24,7 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 
 | 模块 | 说明 |
 |------|------|
-| [transport/http](transport/http/) | 框架无关的 HTTP 服务封装，任意 `http.Handler` 均可接入，内置 `/metrics`、`/swagger/` 端点 |
+| [transport/http](transport/http/) |  HTTP 服务封装，任意 `http.Handler` 均可接入，内置 `/metrics`、`/swagger/` 端点 |
 | [transport/http/middleware](transport/http/middleware/) | 认证、CORS、加解密、日志、权限、恢复、请求签名 |
 | [transport/grpc](transport/grpc/) | gRPC 服务封装，与应用生命周期统一集成 |
 | [transport/websocket](transport/websocket/) | WebSocket 客户端，支持自动重连、心跳保活、事件驱动与消息队列 |
@@ -71,7 +71,7 @@ go get github.com/kochabx/kit
 
 ### 最小示例：启动一个 HTTP 服务（标准库）
 
-HTTP 服务封装是框架无关的，只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi` 等均可）：
+HTTP 服务封装是，只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi` 等均可）：
 
 ```go
 package main
@@ -257,7 +257,7 @@ container, err := ioc.NewContainerBuilder().
 
 ### [transport/http](transport/http/)
 
-框架无关的 HTTP 服务，接受任意 `http.Handler`：
+ HTTP 服务，接受任意 `http.Handler`：
 
 - 内置 `/metrics` Prometheus 端点（可配置路径）
 - 内置 `/swagger/` Swagger UI 端点

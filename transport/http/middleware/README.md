@@ -1,6 +1,6 @@
 # HTTP Middleware
 
-框架无关的 HTTP 中间件集合，基于标准库 `net/http`，可无缝集成 Gin、Chi、Echo 等任意框架。
+ HTTP 中间件集合，基于标准库 `net/http`，可无缝集成 Gin、Chi、Echo 等任意框架。
 
 所有中间件均返回 `func(http.Handler) http.Handler`，通过以下方式组合：
 

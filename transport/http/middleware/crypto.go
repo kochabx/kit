@@ -58,7 +58,7 @@ func MustECIESDecryptor(privateKeyPath string) Decryptor {
 	return d
 }
 
-// Crypto 创建框架无关的请求体解密中间件
+// Crypto 创建请求体解密中间件
 func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 	cfg := CryptoConfig{}
 	if len(cfgs) > 0 {

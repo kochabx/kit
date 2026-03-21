@@ -30,7 +30,7 @@ func DefaultCorsConfig() CorsConfig {
 	}
 }
 
-// Cors 创建框架无关的 CORS 中间件
+// Cors 创建 CORS 中间件
 func Cors(cfgs ...CorsConfig) func(http.Handler) http.Handler {
 	cfg := DefaultCorsConfig()
 	if len(cfgs) > 0 {
