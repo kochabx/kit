@@ -21,7 +21,7 @@ require (
 	gorm.io/driver/sqlite v1.6.0
 )
 
-require github.com/swaggo/http-swagger v1.3.4 // indirect
+require github.com/swaggo/http-swagger v1.3.4
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -131,8 +131,7 @@ require (
 	github.com/segmentio/kafka-go v0.4.50
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/viper v1.21.0
-	github.com/swaggo/files v1.0.1
-	github.com/swaggo/gin-swagger v1.6.1
+	github.com/swaggo/files v1.0.1 // indirect
 	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
 	golang.org/x/arch v0.25.0 // indirect

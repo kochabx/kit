@@ -3,155 +3,150 @@ package validator
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
-	"sync"
 
 	"github.com/go-playground/locales/en"
 	"github.com/go-playground/locales/zh"
 	ut "github.com/go-playground/universal-translator"
-	"github.com/go-playground/validator/v10"
+	gv "github.com/go-playground/validator/v10"
 	en_translations "github.com/go-playground/validator/v10/translations/en"
 	zh_translations "github.com/go-playground/validator/v10/translations/zh"
 )
 
-// validatorImpl 校验器实现
+// Validate 是使用 JSON 字段名、英文为默认语言的包级 Validator，
+// 可直接用于简单场景。
+var Validate = New()
+
+// validatorImpl 是 Validator 的具体实现。
 type validatorImpl struct {
-	validator    *validator.Validate
-	uni          *ut.UniversalTranslator
-	translators  map[string]ut.Translator
-	mutex        sync.RWMutex
-	enabledLangs []string
-	defaultLang  string
+	v           *gv.Validate
+	translators map[Lang]ut.Translator
+	defaultLang Lang
 }
 
-// Validate 全局校验器实例
-var (
-	Validate Validator
-	once     sync.Once
-)
-
-func init() {
-	once.Do(func() {
-		Validate = New()
-	})
+// New 按选项创建一个新的 Validator。
+// 零选项默认值：默认语言 en，启用 [en, zh]，字段名取自 json tag。
+func New(opts ...Option) Validator {
+	cfg := defaultConfig()
+	for _, o := range opts {
+		o(cfg)
+	}
+	return build(cfg)
 }
 
-// New 创建新的校验器实例
-func New(opts ...ValidationOption) Validator {
-	v := &validatorImpl{
-		validator:    validator.New(),
-		translators:  make(map[string]ut.Translator),
-		enabledLangs: []string{"en", "zh"},
-		defaultLang:  "en",
+func build(cfg *config) *validatorImpl {
+	v := gv.New()
+
+	if cfg.fieldNameTag != "" {
+		tag := cfg.fieldNameTag
+		v.RegisterTagNameFunc(func(fld reflect.StructField) string {
+			name := strings.SplitN(fld.Tag.Get(tag), ",", 2)[0]
+			if name == "-" || name == "" {
+				return fld.Name
+			}
+			return name
+		})
 	}
 
-	// 初始化通用翻译器
 	enLocale := en.New()
 	zhLocale := zh.New()
-	v.uni = ut.New(enLocale, enLocale, zhLocale)
+	uni := ut.New(enLocale, enLocale, zhLocale)
 
-	// 应用选项
-	for _, opt := range opts {
-		opt(v)
-	}
-
-	// 初始化翻译器
-	v.initTranslators()
-
-	return v
-}
-
-// initTranslators 初始化翻译器
-func (v *validatorImpl) initTranslators() {
-	for _, lang := range v.enabledLangs {
+	translators := make(map[Lang]ut.Translator, len(cfg.enabledLangs))
+	for _, lang := range cfg.enabledLangs {
 		switch lang {
-		case "en":
-			if trans, found := v.uni.GetTranslator("en"); found {
-				v.translators["en"] = trans
-				// 注册英文翻译
-				_ = en_translations.RegisterDefaultTranslations(v.validator, trans)
+		case LangEn:
+			if trans, ok := uni.GetTranslator("en"); ok {
+				translators[LangEn] = trans
+				_ = en_translations.RegisterDefaultTranslations(v, trans)
 			}
-		case "zh":
-			if trans, found := v.uni.GetTranslator("zh"); found {
-				v.translators["zh"] = trans
-				// 注册中文翻译
-				_ = zh_translations.RegisterDefaultTranslations(v.validator, trans)
+		case LangZh:
+			if trans, ok := uni.GetTranslator("zh"); ok {
+				translators[LangZh] = trans
+				_ = zh_translations.RegisterDefaultTranslations(v, trans)
 			}
 		}
 	}
+
+	return &validatorImpl{
+		v:           v,
+		translators: translators,
+		defaultLang: cfg.defaultLang,
+	}
 }
 
-// Struct 校验结构体
-func (v *validatorImpl) Struct(s any) error {
+func (vi *validatorImpl) Struct(s any) error {
+	return vi.StructCtx(context.Background(), s)
+}
+
+func (vi *validatorImpl) StructCtx(ctx context.Context, s any) error {
 	if s == nil {
-		return errors.New("validation target cannot be nil")
+		return ErrNilTarget
 	}
-
-	err := v.validator.Struct(s)
-	if err != nil {
-		return v.translateError(err, v.defaultLang)
-	}
-	return nil
+	return vi.wrap(ctx, vi.v.StructCtx(ctx, s))
 }
 
-// StructCtx 带上下文校验结构体
-func (v *validatorImpl) StructCtx(ctx context.Context, s any) error {
-	if s == nil {
-		return errors.New("validation target cannot be nil")
-	}
-
-	err := v.validator.StructCtx(ctx, s)
-	if err != nil {
-		return v.translateError(err, v.defaultLang)
-	}
-	return nil
+func (vi *validatorImpl) Var(field any, tag string) error {
+	return vi.VarCtx(context.Background(), field, tag)
 }
 
-// GetValidator 获取底层的validator实例
-func (v *validatorImpl) GetValidator() *validator.Validate {
-	return v.validator
+func (vi *validatorImpl) VarCtx(ctx context.Context, field any, tag string) error {
+	return vi.wrap(ctx, vi.v.VarCtx(ctx, field, tag))
 }
 
-// translateError 翻译错误
-func (v *validatorImpl) translateError(err error, lang string) error {
+func (vi *validatorImpl) RegisterValidation(tag string, fn gv.Func, callValidationEvenIfNull ...bool) error {
+	return vi.v.RegisterValidation(tag, fn, callValidationEvenIfNull...)
+}
+
+func (vi *validatorImpl) RegisterStructValidation(fn func(gv.StructLevel), types ...any) {
+	vi.v.RegisterStructValidation(fn, types...)
+}
+
+func (vi *validatorImpl) RegisterTagNameFunc(fn gv.TagNameFunc) {
+	vi.v.RegisterTagNameFunc(fn)
+}
+
+// wrap 将底层 gv.ValidationErrors 转换为公共 ValidationErrors 类型。
+func (vi *validatorImpl) wrap(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
-
-	validationErrors, ok := err.(validator.ValidationErrors)
-	if !ok {
+	var verrs gv.ValidationErrors
+	if !errors.As(err, &verrs) {
 		return err
 	}
 
-	v.mutex.RLock()
-	trans, exists := v.translators[lang]
-	v.mutex.RUnlock()
-
-	if !exists {
-		// 如果指定语言的翻译器不存在，使用默认语言
-		v.mutex.RLock()
-		trans, exists = v.translators[v.defaultLang]
-		v.mutex.RUnlock()
-		if !exists {
-			return err
-		}
+	lang := vi.defaultLang
+	if l, ok := ctx.Value(ctxLangKey{}).(Lang); ok {
+		lang = l
 	}
 
-	var fieldErrors []FieldError
-	var errorMessages []string
-
-	for _, fe := range validationErrors {
-		fieldError := &fieldErrorImpl{
-			fieldError:  fe,
-			message:     fe.Translate(trans),
-			translators: v.translators,
-		}
-		fieldErrors = append(fieldErrors, fieldError)
-		errorMessages = append(errorMessages, fieldError.Message())
+	trans := vi.translators[lang]
+	if trans == nil {
+		trans = vi.translators[vi.defaultLang]
 	}
 
-	return &validationErrorsImpl{
-		fieldErrors: fieldErrors,
-		message:     strings.Join(errorMessages, "; "),
+	fieldErrors := make([]FieldError, len(verrs))
+	msgs := make([]string, len(verrs))
+	for i, fe := range verrs {
+		var msg string
+		if trans != nil {
+			msg = fe.Translate(trans)
+		} else {
+			msg = fe.Error()
+		}
+		fieldErrors[i] = &fieldError{
+			field:   fe.Field(),
+			tag:     fe.Tag(),
+			value:   fe.Value(),
+			message: msg,
+		}
+		msgs[i] = msg
+	}
+
+	return &validationErrors{
+		fields:  fieldErrors,
+		message: strings.Join(msgs, "; "),
 	}
 }

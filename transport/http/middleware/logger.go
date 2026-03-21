@@ -8,17 +8,24 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
+
 	"github.com/kochabx/kit/log"
 )
 
 // LoggerConfig 日志中间件配置
 type LoggerConfig struct {
-	RequestBody  bool                     // 是否记录请求体
-	ResponseBody bool                     // 是否记录响应体
-	Header       bool                     // 是否记录请求头
-	SkipPaths    []string                 // 跳过记录的路径
-	SkipFunc     func(*http.Request) bool // 动态跳过判断函数
-	Logger       *log.Logger              // 自定义日志记录器
+	// 记录开关
+	Header         bool // 是否记录请求头
+	RequestBody    bool // 是否记录请求体
+	ResponseBody   bool // 是否记录响应体
+	TrustedProxies bool // 是否信任 X-Real-IP / X-Forwarded-For 头（仅在代理后部署时启用）
+	// 跳过逻辑
+	SkipPaths []string                 // 跳过记录的路径
+	SkipFunc  func(*http.Request) bool // 动态跳过判断函数
+	// 扩展
+	Logger       *log.Logger                                        // 自定义日志记录器
+	CustomFields func(*http.Request, *zerolog.Event) *zerolog.Event // 追加自定义日志字段
 }
 
 // statusResponseWriter 包装 http.ResponseWriter 以捕获状态码和响应体
@@ -40,16 +47,25 @@ func (w *statusResponseWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
-// clientIP 从请求中提取真实客户端 IP
-func clientIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
+func (w *statusResponseWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
 	}
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if idx := strings.Index(fwd, ","); idx != -1 {
-			return strings.TrimSpace(fwd[:idx])
+}
+
+// clientIP 从请求中提取客户端 IP
+// trustedProxies 为 true 时才读取 X-Real-IP / X-Forwarded-For，避免伪造
+func clientIP(r *http.Request, trustedProxies bool) string {
+	if trustedProxies {
+		if ip := r.Header.Get("X-Real-IP"); ip != "" {
+			return ip
 		}
-		return fwd
+		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
+			if idx := strings.Index(fwd, ","); idx != -1 {
+				return strings.TrimSpace(fwd[:idx])
+			}
+			return fwd
+		}
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
@@ -98,12 +114,21 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(rw, r)
 
-			event := cfg.Logger.Info().
+			var event *zerolog.Event
+			switch {
+			case rw.status >= 500:
+				event = cfg.Logger.Error()
+			case rw.status >= 400:
+				event = cfg.Logger.Warn()
+			default:
+				event = cfg.Logger.Info()
+			}
+			event = event.
 				Int("status", rw.status).
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Dur("duration", time.Since(start)).
-				Str("client_ip", clientIP(r))
+				Str("client_ip", clientIP(r, cfg.TrustedProxies))
 
 			if query := r.URL.RawQuery; query != "" {
 				event = event.Str("query", query)
@@ -123,6 +148,10 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 
 			if cfg.ResponseBody && rw.body != nil {
 				event = event.Bytes("response_body", rw.body.Bytes())
+			}
+
+			if cfg.CustomFields != nil {
+				event = cfg.CustomFields(r, event)
 			}
 
 			event.Send()

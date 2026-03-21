@@ -53,7 +53,8 @@ func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 
 	if cfg.ErrorHandler == nil {
 		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			kithttp.Fail(w, http.StatusForbidden, ErrForbidden)
+			e := errors.FromError(err)
+			kithttp.Fail(w, e.Code, err)
 		}
 	}
 

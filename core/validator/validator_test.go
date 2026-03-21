@@ -1,247 +1,269 @@
 package validator
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"testing"
 
+	gv "github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// TestUser 测试用户结构体
-type TestUser struct {
-	Name     string `json:"name" validate:"required"`
-	Email    string `json:"email" validate:"required,email"`
-	Mobile   string `json:"mobile" validate:"required"`
-	Age      int    `json:"age" validate:"gte=18,lte=150"`
+type testUser struct {
+	Name     string `json:"name"     validate:"required"`
+	Email    string `json:"email"    validate:"required,email"`
+	Age      int    `json:"age"      validate:"gte=18,lte=150"`
 	Username string `json:"username" validate:"required,min=3,max=20"`
 }
 
-// TestValidatorCreation 测试校验器创建
-func TestValidatorCreation(t *testing.T) {
-	// 测试默认校验器
-	v1 := Validate
-	assert.NotNil(t, v1)
+// ---- 构造 ----
 
-	// 测试新建校验器
-	v2 := New()
-	assert.NotNil(t, v2)
-
-	// 测试带选项的校验器
-	v3 := New(
-		WithTagName("validate"),
-		WithTranslator("en", "zh"),
-	)
-	assert.NotNil(t, v3)
+func TestNew(t *testing.T) {
+	assert.NotNil(t, New())
 }
 
-// TestBasicValidation 测试基本校验功能
-func TestBasicValidation(t *testing.T) {
+func TestValidate(t *testing.T) {
+	assert.NotNil(t, Validate)
+}
+
+func TestNewWithOptions(t *testing.T) {
+	v := New(
+		WithDefaultLang(LangZh),
+		WithLangs(LangEn, LangZh),
+		WithFieldNameTag("json"),
+	)
+	assert.NotNil(t, v)
+}
+
+// ---- Struct ----
+
+func TestStruct_Valid(t *testing.T) {
 	v := New()
-
-	// 测试有效数据
-	validUser := TestUser{
-		Name:     "John Doe",
-		Email:    "john@example.com",
-		Mobile:   "1234567890",
-		Username: "johndoe",
-		Age:      16, // 修改为有效年龄
-	}
-
-	err := v.Struct(&validUser)
+	err := v.Struct(&testUser{
+		Name:     "Alice",
+		Email:    "alice@example.com",
+		Age:      25,
+		Username: "alice99",
+	})
 	assert.NoError(t, err)
 }
 
-// TestValidationErrors 测试校验错误
-func TestValidationErrors(t *testing.T) {
+func TestStruct_Nil(t *testing.T) {
+	err := New().Struct(nil)
+	assert.ErrorIs(t, err, ErrNilTarget)
+}
+
+func TestStruct_Invalid_ReturnsValidationErrors(t *testing.T) {
 	v := New()
-
-	// 测试无效数据
-	invalidUser := TestUser{
-		Name:     "",        // 必填
-		Email:    "invalid", // 无效邮箱
-		Mobile:   "",        // 必填
-		Username: "ab",      // 太短
-		Age:      -1,        // 年龄不能为负数
-	}
-
-	err := v.Struct(&invalidUser)
-	assert.Error(t, err)
-
-	// 检查是否为校验错误
+	err := v.Struct(&testUser{
+		Name:     "",    // required
+		Email:    "bad", // email
+		Age:      10,    // gte=18
+		Username: "ab",  // min=3
+	})
+	require.Error(t, err)
 	assert.True(t, IsValidationError(err))
 
-	// 转换为校验错误
-	validationErr, ok := err.(ValidationErrors)
-	assert.True(t, ok)
-	assert.True(t, validationErr.HasErrors())
-
-	errors := validationErr.Errors()
-	assert.NotEmpty(t, errors)
+	var ve ValidationErrors
+	require.True(t, errors.As(err, &ve))
+	assert.Len(t, ve.Fields(), 4)
 }
 
-// TestChineseTranslation 测试中文翻译
-func TestChineseTranslation(t *testing.T) {
-	v := New()
-
-	// 测试中文翻译
-	invalidUser := TestUser{
-		Name:   "",
-		Email:  "invalid",
-		Mobile: "",
-	}
-
-	err := v.Struct(&invalidUser)
-	assert.Error(t, err)
-
-	errorMsg := err.Error()
-	// 检查错误消息不为空
-	assert.NotEmpty(t, errorMsg)
+func TestStruct_ErrorMessage_NotEmpty(t *testing.T) {
+	err := New().Struct(&testUser{Name: ""})
+	require.Error(t, err)
+	assert.NotEmpty(t, err.Error())
 }
 
-// TestEnglishTranslation 测试英文翻译
-func TestEnglishTranslation(t *testing.T) {
+// ---- 字段名映射 ----
+
+func TestFieldName_JSONTag(t *testing.T) {
+	// 默认使用 json tag，字段名应为小写
 	v := New()
-
-	// 测试英文翻译
-	invalidUser := TestUser{
-		Name:   "",
-		Email:  "invalid",
-		Mobile: "",
-	}
-
-	err := v.Struct(&invalidUser)
-	assert.Error(t, err)
-
-	errorMsg := err.Error()
-	// 检查错误消息是否包含英文关键词
-	assert.Contains(t, errorMsg, "required")
-}
-
-// TestValidateVar 测试单个变量校验
-func TestValidateVar(t *testing.T) {
-	v := New()
-	validator := v.GetValidator()
-
-	// 测试邮箱
-	err := validator.Var("test@example.com", "email")
-	assert.NoError(t, err)
-
-	err = validator.Var("invalid-email", "email")
-	assert.Error(t, err)
-
-	// 测试必填
-	err = validator.Var("", "required")
-	assert.Error(t, err)
-
-	err = validator.Var("not empty", "required")
-	assert.NoError(t, err)
-}
-
-// TestErrorHandling 测试错误处理功能
-func TestErrorHandling(t *testing.T) {
-	v := New()
-
-	invalidUser := TestUser{
-		Name:   "",
-		Email:  "invalid",
-		Mobile: "",
-	}
-
-	err := v.Struct(&invalidUser)
+	err := v.Struct(&testUser{Name: ""})
 	require.Error(t, err)
 
-	// 测试ToValidationResult
-	result := ToValidationResult(err)
-	assert.False(t, result.Valid)
-	assert.NotEmpty(t, result.Errors)
-
-	// 测试ErrorsToString
-	validationErr := err.(ValidationErrors)
-	errorString := ErrorsToString(validationErr.Errors(), " | ")
-	assert.NotEmpty(t, errorString)
-
-	// 测试HasFieldError
-	hasNameError := HasFieldError(err, "Name")
-	assert.True(t, hasNameError)
-
-	hasNonExistentError := HasFieldError(err, "NonExistent")
-	assert.False(t, hasNonExistentError)
-
-	// 测试GetFieldErrorMessage
-	nameErrorMsg := GetFieldErrorMessage(err, "Name")
-	assert.NotEmpty(t, nameErrorMsg)
-}
-
-// TestValidationResult 测试校验结果
-func TestValidationResult(t *testing.T) {
-	// 测试成功校验结果
-	result := ToValidationResult(nil)
-	assert.True(t, result.Valid)
-	assert.Empty(t, result.Errors)
-
-	v := New()
-
-	// 测试失败校验结果
-	invalidUser := TestUser{Name: ""}
-	validationErr := v.Struct(&invalidUser)
-
-	result = ToValidationResult(validationErr)
-	assert.False(t, result.Valid)
-	assert.NotEmpty(t, result.Errors)
-
-	// 检查错误详情
-	for _, err := range result.Errors {
-		assert.NotEmpty(t, err.Field)
-		assert.NotEmpty(t, err.Tag)
-		assert.NotEmpty(t, err.Message)
+	for _, fe := range FieldErrors(err) {
+		if fe.Tag() == "required" {
+			assert.Equal(t, "name", fe.Field(), "预期 json tag 中的字段名")
+			break
+		}
 	}
 }
 
-// TestConcurrentAccess 测试并发访问
-func TestConcurrentAccess(t *testing.T) {
+func TestFieldName_GoStructField(t *testing.T) {
+	// 不使用任何 tag 时，使用 Go 结构体字段名
+	v := New(WithFieldNameTag(""))
+	err := v.Struct(&testUser{Name: ""})
+	require.Error(t, err)
+
+	for _, fe := range FieldErrors(err) {
+		if fe.Tag() == "required" {
+			assert.Equal(t, "Name", fe.Field(), "预期 Go 结构体字段名")
+			break
+		}
+	}
+}
+
+// ---- 语言 / 翻译 ----
+
+func TestStructCtx_DefaultLangEn(t *testing.T) {
 	v := New()
+	err := v.Struct(&testUser{Name: ""})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required")
+}
 
-	// 并发校验
-	done := make(chan bool, 10)
+func TestStructCtx_LangZh(t *testing.T) {
+	v := New()
+	ctx := ContextWithLang(context.Background(), LangZh)
+	err := v.StructCtx(ctx, &testUser{Name: ""})
+	require.Error(t, err)
+	// zh 翻译结果与 en 不同（不含 "required" 英文单词）
+	assert.NotContains(t, err.Error(), "required")
+}
 
-	for i := 0; i < 10; i++ {
+func TestStructCtx_DefaultLangZh(t *testing.T) {
+	v := New(WithDefaultLang(LangZh))
+	err := v.Struct(&testUser{Name: ""})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "required")
+}
+
+// ---- Var / VarCtx ----
+
+func TestVar(t *testing.T) {
+	v := New()
+	assert.NoError(t, v.Var("test@example.com", "email"))
+	assert.Error(t, v.Var("bad-email", "email"))
+	assert.Error(t, v.Var("", "required"))
+	assert.NoError(t, v.Var("hello", "required"))
+}
+
+func TestVarCtx(t *testing.T) {
+	v := New()
+	ctx := ContextWithLang(context.Background(), LangEn)
+	err := v.VarCtx(ctx, "", "required")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required")
+}
+
+// ---- FieldError 属性 ----
+
+func TestFieldError_Attributes(t *testing.T) {
+	v := New()
+	err := v.Struct(&testUser{Name: "", Email: "bad"})
+	require.Error(t, err)
+
+	fes := FieldErrors(err)
+	require.NotEmpty(t, fes)
+
+	for _, fe := range fes {
+		assert.NotEmpty(t, fe.Field())
+		assert.NotEmpty(t, fe.Tag())
+		assert.NotEmpty(t, fe.Message())
+	}
+}
+
+// ---- 自定义校验 ----
+
+func TestRegisterValidation(t *testing.T) {
+	v := New()
+	err := v.RegisterValidation("nonempty_str", func(fl gv.FieldLevel) bool {
+		return fl.Field().String() != ""
+	})
+	require.NoError(t, err)
+
+	type payload struct {
+		Val string `validate:"nonempty_str"`
+	}
+	assert.NoError(t, v.Struct(&payload{Val: "ok"}))
+	assert.Error(t, v.Struct(&payload{Val: ""}))
+}
+
+func TestRegisterStructValidation(t *testing.T) {
+	type dateRange struct {
+		Start int `validate:"required"`
+		End   int `validate:"required"`
+	}
+
+	v := New()
+	v.RegisterStructValidation(func(sl gv.StructLevel) {
+		dr := sl.Current().Interface().(dateRange)
+		if dr.Start > dr.End {
+			sl.ReportError(dr.End, "end", "End", "gtstart", "")
+		}
+	}, dateRange{})
+
+	assert.NoError(t, v.Struct(&dateRange{Start: 1, End: 10}))
+	assert.Error(t, v.Struct(&dateRange{Start: 10, End: 1}))
+}
+
+// ---- 错误工具 ----
+
+func TestIsValidationError(t *testing.T) {
+	v := New()
+	err := v.Struct(&testUser{Name: ""})
+	assert.True(t, IsValidationError(err))
+	assert.False(t, IsValidationError(errors.New("plain error")))
+	assert.False(t, IsValidationError(nil))
+}
+
+func TestFieldErrors_Helper(t *testing.T) {
+	v := New()
+	err := v.Struct(&testUser{Name: ""})
+	fes := FieldErrors(err)
+	assert.NotEmpty(t, fes)
+
+	assert.Nil(t, FieldErrors(nil))
+	assert.Nil(t, FieldErrors(errors.New("plain")))
+}
+
+// ---- 并发安全 ----
+
+func TestConcurrentValidation(t *testing.T) {
+	v := New()
+	done := make(chan struct{}, 20)
+	for i := 0; i < 20; i++ {
 		go func(i int) {
-			defer func() { done <- true }()
-
-			user := TestUser{
+			defer func() { done <- struct{}{} }()
+			u := &testUser{
 				Name:     fmt.Sprintf("User%d", i),
 				Email:    "user@example.com",
-				Mobile:   "1234567890",
-				Username: "user123",
 				Age:      25,
+				Username: "user123",
 			}
-
-			err := v.Struct(&user)
-			assert.NoError(t, err)
+			assert.NoError(t, v.Struct(u))
 		}(i)
 	}
-
-	// 等待所有goroutine完成
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 20; i++ {
 		<-done
 	}
 }
 
-// BenchmarkValidation 基准测试
-func BenchmarkValidation(b *testing.B) {
+// ---- 基准 ----
+
+func BenchmarkStruct_Valid(b *testing.B) {
 	v := New()
-
-	user := TestUser{
-		Name:     "John Doe",
-		Email:    "john@example.com",
-		Mobile:   "1234567890",
-		Username: "johndoe",
+	u := &testUser{
+		Name:     "Alice",
+		Email:    "alice@example.com",
 		Age:      25,
+		Username: "alice99",
 	}
-
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = v.Struct(&user)
+		_ = v.Struct(u)
+	}
+}
+
+func BenchmarkStruct_Invalid(b *testing.B) {
+	v := New()
+	u := &testUser{Name: "", Email: "bad", Age: -1, Username: "ab"}
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = v.Struct(u)
 	}
 }
