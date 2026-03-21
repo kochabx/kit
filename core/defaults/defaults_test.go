@@ -1,4 +1,4 @@
-package tag
+package defaults
 
 import (
 	"reflect"
@@ -46,11 +46,11 @@ type mockWithSlice struct {
 	Apis []Api `json:"apis"`
 }
 
-func TestApplyDefaults(t *testing.T) {
+func TestApply(t *testing.T) {
 	mock := &tagMock{Age: 20}
 
-	if err := ApplyDefaults(mock); err != nil {
-		t.Fatalf("ApplyDefaults failed: %v", err)
+	if err := Apply(mock); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 
 	// Verify values
@@ -79,7 +79,7 @@ func TestApplyDefaults(t *testing.T) {
 	t.Logf("Result: %+v", mock)
 }
 
-func TestApplyDefaultsWithSliceStruct(t *testing.T) {
+func TestApplyWithSliceStruct(t *testing.T) {
 	mock := &mockWithSlice{}
 
 	// Initialize slice but don't set defaults
@@ -90,8 +90,8 @@ func TestApplyDefaultsWithSliceStruct(t *testing.T) {
 		},
 	}
 
-	if err := ApplyDefaults(mock); err != nil {
-		t.Fatalf("ApplyDefaults failed: %v", err)
+	if err := Apply(mock); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 
 	// Verify nested defaults were applied
@@ -115,15 +115,15 @@ func TestApplyDefaultsWithSliceStruct(t *testing.T) {
 	t.Logf("Apis[0]: %+v", mock.Apis[0])
 }
 
-func TestApplyDefaultsWithCustomTag(t *testing.T) {
+func TestApplyWithCustomTag(t *testing.T) {
 	type CustomTag struct {
 		Name string `mytag:"Alice"`
 		Age  int    `mytag:"25"`
 	}
 
 	custom := &CustomTag{}
-	if err := ApplyDefaults(custom, WithTagName("mytag")); err != nil {
-		t.Fatalf("ApplyDefaults failed: %v", err)
+	if err := Apply(custom, WithTagName("mytag")); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 
 	if custom.Name != "Alice" {
@@ -134,7 +134,7 @@ func TestApplyDefaultsWithCustomTag(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsWithMaxDepth(t *testing.T) {
+func TestApplyWithMaxDepth(t *testing.T) {
 	type DeepNested struct {
 		Level1 struct {
 			Level2 struct {
@@ -147,8 +147,8 @@ func TestApplyDefaultsWithMaxDepth(t *testing.T) {
 
 	// Test with max depth that allows processing
 	deep := &DeepNested{}
-	if err := ApplyDefaults(deep, WithMaxDepth(10)); err != nil {
-		t.Fatalf("ApplyDefaults failed: %v", err)
+	if err := Apply(deep, WithMaxDepth(10)); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 	if deep.Level1.Level2.Level3.Value != "deep" {
 		t.Errorf("Expected Value=deep, got %s", deep.Level1.Level2.Level3.Value)
@@ -156,13 +156,13 @@ func TestApplyDefaultsWithMaxDepth(t *testing.T) {
 
 	// Test with max depth that prevents processing
 	deep2 := &DeepNested{}
-	err := ApplyDefaults(deep2, WithMaxDepth(2))
+	err := Apply(deep2, WithMaxDepth(2))
 	if err != ErrMaxDepthExceeded {
 		t.Errorf("Expected ErrMaxDepthExceeded, got %v", err)
 	}
 }
 
-func TestApplyDefaultsErrors(t *testing.T) {
+func TestApplyErrors(t *testing.T) {
 	tests := []struct {
 		name   string
 		target any
@@ -187,7 +187,7 @@ func TestApplyDefaultsErrors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ApplyDefaults(tt.target)
+			err := Apply(tt.target)
 			if err != tt.want {
 				t.Errorf("Expected error %v, got %v", tt.want, err)
 			}
@@ -195,14 +195,14 @@ func TestApplyDefaultsErrors(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsWithCustomSeparator(t *testing.T) {
+func TestApplyWithCustomSeparator(t *testing.T) {
 	type CustomSep struct {
 		Values []int `default:"1|2|3"`
 	}
 
 	custom := &CustomSep{}
-	if err := ApplyDefaults(custom, WithSeparator("|")); err != nil {
-		t.Fatalf("ApplyDefaults failed: %v", err)
+	if err := Apply(custom, WithSeparator("|")); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 
 	if len(custom.Values) != 3 {
@@ -213,7 +213,7 @@ func TestApplyDefaultsWithCustomSeparator(t *testing.T) {
 	}
 }
 
-func TestApplyDefaultsWithFieldFilter(t *testing.T) {
+func TestApplyWithFieldFilter(t *testing.T) {
 	type Filtered struct {
 		Public  string `default:"public"`
 		private string `default:"private"`
@@ -227,8 +227,8 @@ func TestApplyDefaultsWithFieldFilter(t *testing.T) {
 		return field.Tag.Get("skip") != "true"
 	}
 
-	if err := ApplyDefaults(filtered, WithFieldFilter(filter)); err != nil {
-		t.Fatalf("ApplyDefaults failed: %v", err)
+	if err := Apply(filtered, WithFieldFilter(filter)); err != nil {
+		t.Fatalf("Apply failed: %v", err)
 	}
 
 	if filtered.Public != "public" {
@@ -240,14 +240,14 @@ func TestApplyDefaultsWithFieldFilter(t *testing.T) {
 }
 
 // Benchmark tests
-func BenchmarkApplyDefaults(b *testing.B) {
+func BenchmarkApply(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		mock := &tagMock{}
-		_ = ApplyDefaults(mock)
+		_ = Apply(mock)
 	}
 }
 
-func BenchmarkApplyDefaultsComplex(b *testing.B) {
+func BenchmarkApplyComplex(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		mock := &mockWithSlice{
 			Apis: []Api{
@@ -255,6 +255,6 @@ func BenchmarkApplyDefaultsComplex(b *testing.B) {
 				{Name: "api2", Url: "http://example.org"},
 			},
 		}
-		_ = ApplyDefaults(mock)
+		_ = Apply(mock)
 	}
 }

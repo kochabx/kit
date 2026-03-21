@@ -10,7 +10,7 @@ import (
 	ginSwagger "github.com/swaggo/gin-swagger"
 
 	"github.com/kochabx/kit/log"
-	httpmetrics "github.com/kochabx/kit/metrics/http"
+	httpmetrics "github.com/kochabx/kit/observability/metrics/http"
 	"github.com/kochabx/kit/transport"
 )
 

@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"time"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 )
 
 // Config Redis 统一配置（支持单机/集群/哨兵模式）
@@ -103,7 +103,7 @@ type Config struct {
 
 // ApplyDefaults 应用默认值
 func (c *Config) ApplyDefaults() error {
-	return tag.ApplyDefaults(c)
+	return defaults.Apply(c)
 }
 
 // Single 创建单机模式配置

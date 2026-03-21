@@ -18,11 +18,6 @@ func SetGlobalLogger(logger *Logger) {
 	G = logger
 }
 
-// SetGlobalLevel 设置全局日志级别
-func SetGlobalLevel(level zerolog.Level) {
-	G.Logger = G.Logger.Level(level)
-}
-
 // Debug 返回 debug 级别的日志事件
 func Debug() *zerolog.Event {
 	return G.Debug()

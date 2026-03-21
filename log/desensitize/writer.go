@@ -2,8 +2,7 @@ package desensitize
 
 import (
 	"io"
-
-	"github.com/kochabx/kit/log/internal"
+	"unsafe"
 )
 
 // Writer 包装 writer 以支持脱敏
@@ -38,20 +37,14 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 		return w.writer.Write(p)
 	}
 
-	// 使用池化的 buffer
-	buf := internal.GetBuffer()
-	defer internal.PutBuffer(buf)
-
-	// 安全地转换为字符串
-	text := string(p)
+	// 零拷贝转换：p 在本函数调用期间不会被修改，unsafe.String 安全
+	text := unsafe.String(unsafe.SliceData(p), len(p))
 	desensitized := w.hook.Desensitize(text)
 
-	// 如果内容没有变化，直接写入原始数据
+	// 内容未变化，直接写入原始字节
 	if desensitized == text {
 		return w.writer.Write(p)
 	}
 
-	// 写入脱敏后的数据
-	buf.WriteString(desensitized)
-	return w.writer.Write(buf.Bytes())
+	return io.WriteString(w.writer, desensitized)
 }

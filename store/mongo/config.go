@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 )
 
 // Config MongoDB 配置结构体
@@ -44,5 +44,5 @@ func (c *Config) uri() string {
 
 // init 初始化配置，设置默认值
 func (c *Config) Init() error {
-	return tag.ApplyDefaults(c)
+	return defaults.Apply(c)
 }

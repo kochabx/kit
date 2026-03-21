@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 )
 
 // KeyOption contains options for key generation and file I/O.
@@ -46,7 +46,7 @@ func GenerateKeyPair(opts ...func(*KeyOption)) error {
 	option := &KeyOption{}
 
 	// Apply default tags
-	if err := tag.ApplyDefaults(option); err != nil {
+	if err := defaults.Apply(option); err != nil {
 		return fmt.Errorf("failed to apply defaults: %w", err)
 	}
 

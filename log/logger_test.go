@@ -29,7 +29,6 @@ func TestLog(t *testing.T) {
 }
 
 func TestGlobalLog(t *testing.T) {
-	SetGlobalLevel(1)
 	Debug().Msg("test global debug log")
 	Info().Msg("test global info log")
 	Warn().Msg("test global warn log")

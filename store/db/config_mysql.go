@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 )
 
 // MySQLConfig MySQL 数据库配置
@@ -44,7 +44,7 @@ func (c *MySQLConfig) Init() error {
 	if c.initialized {
 		return nil
 	}
-	if err := tag.ApplyDefaults(c); err != nil {
+	if err := defaults.Apply(c); err != nil {
 		return err
 	}
 	c.initialized = true

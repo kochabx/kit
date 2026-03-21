@@ -4,7 +4,7 @@ var (
 	// PhoneRule 手机号脱敏规则 (13812345678 -> 138****5678)
 	PhoneRule = MustNewContentRule(
 		"phone",
-		`1[3-9]\d{9}`,
+		`(1[3-9]\d)\d{4}(\d{4})`,
 		"$1****$2",
 	)
 

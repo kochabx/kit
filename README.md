@@ -42,8 +42,8 @@
 
 ### 📊 可观测性
 - **[Logger](log/)** - 基于 Zerolog 的高性能日志库，支持数据脱敏和日志轮转
-- **[Metrics](metrics/)** - Prometheus 指标采集（HTTP/gRPC 中间件集成）
-- **[Middleware](middleware/)** - 丰富的 HTTP/gRPC 中间件：认证、日志、限流、恢复、CORS 等
+- **[Metrics](observability/metrics/)** - Prometheus 指标采集（HTTP/gRPC 中间件集成）
+- **[Middleware](transport/http/middleware/)** - 丰富的 HTTP/gRPC 中间件：认证、日志、限流、恢复、CORS 等
 
 ### 🛠️ 核心工具
 - **[Validator](core/validator/)** - 基于 validator.v10 的多语言验证器（支持中英文）
@@ -293,14 +293,14 @@ type Config struct {
   - 数据脱敏
   - 日志轮转（按时间/大小）
 
-- **[Metrics](metrics/)** - 指标采集
+- **[Metrics](observability/metrics/)** - 指标采集
   - Prometheus 集成
   - HTTP/gRPC 指标
   - 自定义指标
 
 #### 7. 中间件
 
-- **[HTTP Middleware](middleware/http/)** - HTTP 中间件
+- **[HTTP Middleware](transport/http/middleware/)** - HTTP 中间件
   - 认证 (Auth)
   - CORS 跨域
   - 加密/解密
@@ -310,7 +310,7 @@ type Config struct {
   - 签名验证
   - XSS 防护
 
-- **[gRPC Middleware](middleware/grpc/)** - gRPC 中间件
+- **[gRPC Middleware](transport/grpc/middleware/)** - gRPC 中间件
 
 #### 8. 工具库
 
@@ -374,13 +374,11 @@ kit/
 ├── ioc/              # IoC 容器
 ├── log/              # 日志系统
 ├── errors/           # 错误处理
-├── metrics/          # 指标采集
-├── middleware/       # 中间件
-│   ├── http/        # HTTP 中间件
-│   └── grpc/        # gRPC 中间件
+├── observability/    # 可观测性
+│   └── metrics/     # 指标采集
 ├── transport/        # 传输层
-│   ├── http/        # HTTP 服务器
-│   ├── grpc/        # gRPC 服务器
+│   ├── http/        # HTTP 服务器与中间件
+│   ├── grpc/        # gRPC 服务器与中间件
 │   └── websocket/   # WebSocket 客户端
 ├── store/            # 存储层
 │   ├── db/          # 数据库（GORM）
@@ -388,11 +386,10 @@ kit/
 │   ├── mongo/       # MongoDB
 │   ├── etcd/        # Etcd
 │   └── kafka/       # Kafka
-└── core/             # 核心工具
+└── core/             # 协议无关核心能力
     ├── auth/        # 认证（JWT, MFA）
     ├── crypto/      # 加密（ECIES, HMAC）
     ├── httpclient/  # HTTP 客户端
-    ├── oss/         # 对象存储（MinIO）
     ├── rate/        # 限流器
     ├── scheduler/   # 任务调度器
     ├── tag/         # 标签解析器

@@ -437,6 +437,7 @@ defer logger.Close() // 释放文件句柄等资源
 - `RemoveRule(name string) bool` - 移除规则
 - `EnableRule(name string) bool` - 启用规则
 - `DisableRule(name string) bool` - 禁用规则
+- `IsEnabled(name string) bool` - 查询规则是否启用
 - `GetRule(name string) (Rule, bool)` - 获取规则
 - `GetRules() []string` - 列出所有规则名称
 - `RuleCount() int` - 获取规则数量

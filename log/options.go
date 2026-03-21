@@ -23,10 +23,11 @@ func WithCaller() Option {
 	}
 }
 
-// WithCallerSkip 设置调用栈跳过的帧数
+// WithCallerSkip 在默认帧数基础上额外跳过的帧数
+// skip=1 表示在 logger 之外额外封装了一层函数，以此类推
 func WithCallerSkip(skip int) Option {
 	return func(l *Logger) {
-		l.Logger = l.Logger.With().CallerWithSkipFrameCount(skip).Logger()
+		l.Logger = l.Logger.With().CallerWithSkipFrameCount(zerolog.CallerSkipFrameCount + skip).Logger()
 	}
 }
 

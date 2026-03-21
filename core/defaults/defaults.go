@@ -1,4 +1,4 @@
-package tag
+package defaults
 
 import (
 	"reflect"
@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// ApplyDefaults sets default values for struct fields based on struct tags.
+// Apply sets default values for struct fields based on struct tags.
 // The target must be a pointer to a struct.
 //
 // Example:
@@ -16,8 +16,8 @@ import (
 //	    Port int    `default:"8080"`
 //	}
 //	config := &Config{}
-//	err := ApplyDefaults(config)
-func ApplyDefaults(target any, opts ...Option) error {
+//	err := defaults.Apply(config)
+func Apply(target any, opts ...Option) error {
 	options := newOptions(opts)
 
 	valueOf := reflect.ValueOf(target)

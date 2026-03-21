@@ -1,6 +1,6 @@
 package http
 
-import "github.com/kochabx/kit/core/tag"
+import "github.com/kochabx/kit/core/defaults"
 
 type Options struct {
 	Swag    SwagOption
@@ -14,7 +14,7 @@ type SwagOption struct {
 }
 
 func (s *SwagOption) init() error {
-	return tag.ApplyDefaults(s)
+	return defaults.Apply(s)
 }
 
 type MetricsOption struct {
@@ -25,7 +25,7 @@ type MetricsOption struct {
 }
 
 func (m *MetricsOption) init() error {
-	return tag.ApplyDefaults(m)
+	return defaults.Apply(m)
 }
 
 type HealthOption struct {
@@ -34,5 +34,5 @@ type HealthOption struct {
 }
 
 func (h *HealthOption) init() error {
-	return tag.ApplyDefaults(h)
+	return defaults.Apply(h)
 }

@@ -76,11 +76,11 @@ func TestDesensitizeHookRuleManagement(t *testing.T) {
 		t.Errorf("Expected 1 rule, got %d", len(ruleNames))
 	}
 
-	rule, exists := hook.GetRule("test")
+	_, exists := hook.GetRule("test")
 	if !exists {
 		t.Error("Rule 'test' should exist")
 	}
-	if !rule.Enabled() {
+	if !hook.IsEnabled("test") {
 		t.Error("Rule should be enabled by default")
 	}
 

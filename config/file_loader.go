@@ -11,7 +11,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/spf13/viper"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/core/validator"
 	"github.com/kochabx/kit/errors"
 )
@@ -62,7 +62,7 @@ func (l *FileLoader) Load(target any) error {
 
 	// Apply default values from struct tags AFTER unmarshalling
 	// This fills in defaults only for zero-value fields not present in config file
-	if err := tag.ApplyDefaults(target); err != nil {
+	if err := defaults.Apply(target); err != nil {
 		return errors.New(500, "failed to apply defaults: %v", err)
 	}
 

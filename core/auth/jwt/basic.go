@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 )
 
 // BasicAuthenticator 基础认证器
@@ -16,7 +16,7 @@ type BasicAuthenticator struct {
 // NewBasicAuthenticator 创建基础认证器
 func NewBasicAuthenticator(opts ...Option) (*BasicAuthenticator, error) {
 	config := &Config{}
-	if err := tag.ApplyDefaults(config); err != nil {
+	if err := defaults.Apply(config); err != nil {
 		return nil, fmt.Errorf("apply defaults: %w", err)
 	}
 
@@ -37,7 +37,7 @@ func NewBasicAuthenticator(opts ...Option) (*BasicAuthenticator, error) {
 
 // New 从配置创建基础认证器
 func New(config *Config) (*BasicAuthenticator, error) {
-	if err := tag.ApplyDefaults(config); err != nil {
+	if err := defaults.Apply(config); err != nil {
 		return nil, fmt.Errorf("apply defaults: %w", err)
 	}
 

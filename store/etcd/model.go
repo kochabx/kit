@@ -3,7 +3,7 @@ package etcd
 import (
 	"time"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 )
 
 // Config ETCD 配置
@@ -22,5 +22,5 @@ type Config struct {
 }
 
 func (c *Config) init() error {
-	return tag.ApplyDefaults(c)
+	return defaults.Apply(c)
 }

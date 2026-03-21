@@ -3,7 +3,7 @@ package kafka
 import (
 	"time"
 
-	"github.com/kochabx/kit/core/tag"
+	"github.com/kochabx/kit/core/defaults"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -58,7 +58,7 @@ const (
 
 // ApplyDefaults 应用默认值
 func (c *Config) ApplyDefaults() error {
-	return tag.ApplyDefaults(c)
+	return defaults.Apply(c)
 }
 
 // balancer 获取 kafka-go 的 Balancer 实现
