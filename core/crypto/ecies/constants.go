@@ -46,4 +46,3 @@ const (
 	// CurrentVersion is the current protocol version
 	CurrentVersion byte = 0x01
 )
-

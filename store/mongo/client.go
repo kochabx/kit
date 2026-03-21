@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 
-	"go.mongodb.org/mongo-driver/mongo"
-	"go.mongodb.org/mongo-driver/mongo/options"
-	"go.mongodb.org/mongo-driver/mongo/readpref"
+	"go.mongodb.org/mongo-driver/v2/mongo"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
+	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
 
 	"github.com/kochabx/kit/log"
 )
@@ -75,7 +75,7 @@ func (m *Client) connect() error {
 		SetConnectTimeout(m.config.Timeout).
 		SetServerSelectionTimeout(m.config.Timeout)
 
-	client, err := mongo.Connect(context.TODO(), opts)
+	client, err := mongo.Connect(opts)
 	if err != nil {
 		return ErrConnectionFailed
 	}
