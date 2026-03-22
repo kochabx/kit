@@ -387,3 +387,225 @@ SkipPaths: []string{
 }
 ```
 
+---
+
+## 框架集成
+
+本包所有中间件均返回标准的 `func(http.Handler) http.Handler`，天然兼容任何基于 `net/http` 的框架，也可通过适配器接入其他框架。
+
+### 适配器原理
+
+适配器的核心思路：将 `net/http` 中间件包裹成目标框架的 Handler 类型，同时保持请求/响应对象的双向同步。
+
+```go
+// 通用适配模式
+func adaptMiddleware(m func(http.Handler) http.Handler) TargetHandlerFunc {
+    return func(ctx *TargetContext) {
+        m(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            ctx.Request = r  // 将修改后的 *http.Request 同步回框架上下文
+            ctx.Next()
+        })).ServeHTTP(ctx.Writer, ctx.Request)
+    }
+}
+```
+
+---
+
+### net/http 标准库
+
+无需适配，直接使用。
+
+```go
+mux := http.NewServeMux()
+mux.Handle("/api/", middleware.Auth(authCfg)(
+    middleware.Logger()(
+        middleware.Recovery()(
+            myHandler,
+        ),
+    ),
+))
+http.ListenAndServe(":8080", mux)
+```
+
+多个中间件可通过辅助函数链式组合：
+
+```go
+func chain(h http.Handler, middlewares ...func(http.Handler) http.Handler) http.Handler {
+    for i := len(middlewares) - 1; i >= 0; i-- {
+        h = middlewares[i](h)
+    }
+    return h
+}
+
+mux.Handle("/api/", chain(myHandler,
+    middleware.Recovery(),
+    middleware.Logger(),
+    middleware.Auth(authCfg),
+))
+```
+
+---
+
+### Gin
+
+**方式一：`gin.WrapH`（推荐，零侵入）**
+
+将整个处理链（中间件 + Handler）包装为 `gin.HandlerFunc`，适合在路由级别挂载。
+
+```go
+r := gin.New()
+r.GET("/users/:id", gin.WrapH(
+    middleware.Auth(authCfg)(
+        middleware.Logger()(myHandler),
+    ),
+))
+```
+
+**方式二：`adaptMiddleware` 适配器**
+
+将中间件转换为 `gin.HandlerFunc`，可直接传入 `r.Use()`，支持 Gin 的 `c.Next()` / `c.Abort()` 流程。
+
+```go
+// adaptMiddleware 将 net/http 中间件转换为 gin.HandlerFunc。
+// 中间件内对 *http.Request 的修改（如写入 context）会通过 c.Request = r 同步回 Gin 上下文。
+func adaptMiddleware(m func(http.Handler) http.Handler) gin.HandlerFunc {
+    return func(c *gin.Context) {
+        m(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            c.Request = r
+            c.Next()
+        })).ServeHTTP(c.Writer, c.Request)
+    }
+}
+
+r := gin.New()
+r.Use(adaptMiddleware(middleware.Recovery()))
+r.Use(adaptMiddleware(middleware.Logger()))
+r.Use(adaptMiddleware(middleware.Auth(authCfg)))
+
+r.GET("/users/:id", func(c *gin.Context) {
+    claims, _ := middleware.GetClaims[*UserClaims](c.Request.Context())
+    c.JSON(200, claims)
+})
+```
+
+> **注意**：`adaptMiddleware` 依赖 `c.Request = r` 将中间件写入 context 的值（如 Claims）透传给后续 Handler。若中间件仅修改响应（如 CORS 写 Header），则两种方式均可；若中间件会修改 `*http.Request`（如 Auth），必须确保 `c.Request = r` 被执行。
+
+---
+
+### Chi
+
+Chi 路由原生基于 `net/http`，无需任何适配，直接传入即可。
+
+```go
+r := chi.NewRouter()
+
+// 全局中间件
+r.Use(middleware.Recovery())
+r.Use(middleware.Logger())
+r.Use(middleware.Cors())
+
+// 路由组级别
+r.Group(func(r chi.Router) {
+    r.Use(middleware.Auth(authCfg))
+    r.Get("/users/{id}", myHandler)
+})
+```
+
+---
+
+### Echo
+
+Echo 的 Handler 类型为 `func(echo.Context) error`，通过 `echo.WrapMiddleware` 可直接将 `net/http` 中间件转换为 Echo 中间件。
+
+```go
+e := echo.New()
+
+// echo.WrapMiddleware 将 func(http.Handler) http.Handler 转换为 echo.MiddlewareFunc
+e.Use(echo.WrapMiddleware(middleware.Recovery()))
+e.Use(echo.WrapMiddleware(middleware.Logger()))
+e.Use(echo.WrapMiddleware(middleware.Cors()))
+e.Use(echo.WrapMiddleware(middleware.Auth(authCfg)))
+
+e.GET("/users/:id", func(c echo.Context) error {
+    claims, _ := middleware.GetClaims[*UserClaims](c.Request().Context())
+    return c.JSON(200, claims)
+})
+```
+
+若需要手动适配（不使用 `echo.WrapMiddleware`）：
+
+```go
+func adaptMiddleware(m func(http.Handler) http.Handler) echo.MiddlewareFunc {
+    return func(next echo.HandlerFunc) echo.HandlerFunc {
+        return func(c echo.Context) error {
+            var echoErr error
+            m(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                c.SetRequest(r)
+                echoErr = next(c)
+            })).ServeHTTP(c.Response(), c.Request())
+            return echoErr
+        }
+    }
+}
+
+e.Use(adaptMiddleware(middleware.Auth(authCfg)))
+```
+
+---
+
+### Gorilla Mux
+
+Gorilla Mux 基于 `net/http`，与标准库用法完全一致。
+
+```go
+r := mux.NewRouter()
+
+// 全局中间件（按添加顺序执行）
+r.Use(middleware.Recovery())
+r.Use(middleware.Logger())
+r.Use(middleware.Auth(authCfg))
+
+// 子路由单独挂载
+api := r.PathPrefix("/api").Subrouter()
+api.Use(middleware.Signature(signCfg))
+api.HandleFunc("/users/{id}", myHandlerFunc).Methods("GET")
+```
+
+---
+
+### Fiber
+
+Fiber 基于 `fasthttp` 而非 `net/http`，需通过 `adaptor` 包桥接。
+
+```go
+import "github.com/gofiber/adaptor/v2"
+
+app := fiber.New()
+
+// adaptor.HTTPMiddleware 将 func(http.Handler) http.Handler 转换为 fiber.Handler
+app.Use(adaptor.HTTPMiddleware(middleware.Recovery()))
+app.Use(adaptor.HTTPMiddleware(middleware.Logger()))
+app.Use(adaptor.HTTPMiddleware(middleware.Cors()))
+app.Use(adaptor.HTTPMiddleware(middleware.Auth(authCfg)))
+
+app.Get("/users/:id", func(c *fiber.Ctx) error {
+    // Fiber 的 context 与 net/http 独立，需通过 adaptor 转换后才能读取 context 值
+    return c.JSON(fiber.Map{"ok": true})
+})
+```
+
+> **注意**：Fiber 的 `adaptor.HTTPMiddleware` 会在每次请求时创建临时的 `http.Request` / `http.ResponseWriter` 并完成转换，存在一定性能开销。若对性能敏感，建议优先考虑原生 Fiber 中间件；对于非热路径（如认证、日志），使用 adaptor 是合理的权衡。
+
+---
+
+### 各框架兼容性一览
+
+| 框架 | 底层 | 适配方式 | Context 值透传 |
+|------|------|----------|----------------|
+| `net/http` | `net/http` | 原生，无需适配 | 完整支持 |
+| **Gin** | `net/http` | `gin.WrapH` 或 `adaptMiddleware` | `c.Request = r` 同步 |
+| **Chi** | `net/http` | 原生，无需适配 | 完整支持 |
+| **Echo** | `net/http` | `echo.WrapMiddleware` 或手动适配 | `c.SetRequest(r)` 同步 |
+| **Gorilla Mux** | `net/http` | 原生，无需适配 | 完整支持 |
+| **Fiber** | `fasthttp` | `adaptor.HTTPMiddleware` | 需通过 adaptor 转换，有开销 |
+

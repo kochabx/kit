@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/gin-gonic/gin"
 )
 
 // prefixPath 预编译的前缀路径
@@ -109,4 +111,24 @@ func shouldSkip(r *http.Request, matcher *PathMatcher, skipFunc func(*http.Reque
 		return true
 	}
 	return matcher.Match(r.URL.Path)
+}
+
+// AdaptToGin 将标准 net/http 中间件转换为 gin.HandlerFunc，可直接传入 r.Use() 或路由注册。
+//
+// 中间件内对 *http.Request 的任何修改（例如写入 context 的 Claims）会通过
+// c.Request = r 同步回 Gin 上下文，后续 Handler 可从 c.Request.Context() 中正常读取。
+//
+// 示例：
+//
+//	r := gin.New()
+//	r.Use(AdaptToGin(Recovery()))
+//	r.Use(AdaptToGin(Logger()))
+//	r.Use(AdaptToGin(Auth(authCfg)))
+func AdaptToGin(m func(http.Handler) http.Handler) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		m(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			c.Request = r
+			c.Next()
+		})).ServeHTTP(c.Writer, c.Request)
+	}
 }
