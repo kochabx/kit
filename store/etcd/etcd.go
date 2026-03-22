@@ -119,6 +119,6 @@ func (e *Etcd) Close() error {
 		return err
 	}
 
-	e.Client = nil // 清空引用，避免重复关闭
+	e.Client = nil
 	return nil
 }

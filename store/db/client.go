@@ -185,7 +185,9 @@ func (c *Client) Ping(ctx context.Context) error {
 // Close 关闭数据库连接
 func (c *Client) Close() error {
 	if c.sqlDB != nil {
-		return c.sqlDB.Close()
+		if err := c.sqlDB.Close(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

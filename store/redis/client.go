@@ -141,9 +141,10 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Close 关闭客户端
 func (c *Client) Close() error {
-	err := c.client.Close()
-	c.logger.Debug().Msg("redis client closed")
-	return err
+	if err := c.client.Close(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Stats 获取连接池统计信息
