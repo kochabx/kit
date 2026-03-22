@@ -213,7 +213,6 @@ func buildHandler(userHandler http.Handler, cfg *config) http.Handler {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"status":"ok"}`))
 		})
-		log.Debug().Msgf("[%s] GET %s", cfg.name, opts.Health.Path)
 	}
 
 	if opts.Metrics != nil {
@@ -226,12 +225,10 @@ func buildHandler(userHandler http.Handler, cfg *config) http.Handler {
 		mux.Handle(opts.Metrics.Path, promhttp.HandlerFor(httpmetrics.Prom.Registry(), promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
 		}))
-		log.Debug().Msgf("[%s] GET %s", cfg.name, opts.Metrics.Path)
 	}
 
 	if opts.Swagger != nil {
 		mux.Handle(prefixPath(opts.Swagger.Path), httpSwagger.WrapHandler)
-		log.Debug().Msgf("[%s] GET %s", cfg.name, prefixPath(opts.Swagger.Path))
 	}
 
 	if opts.OpenAPI != nil {
@@ -241,7 +238,6 @@ func buildHandler(userHandler http.Handler, cfg *config) http.Handler {
 			const instanceName = "openapi"
 			swag.Register(instanceName, openapiSpec(opts.OpenAPI.Spec))
 			mux.Handle(prefixPath(opts.OpenAPI.Path), httpSwagger.Handler(httpSwagger.InstanceName(instanceName)))
-			log.Debug().Msgf("[%s] GET %s", cfg.name, prefixPath(opts.OpenAPI.Path))
 		}
 	}
 
