@@ -3,8 +3,6 @@ package redis
 import (
 	"crypto/tls"
 	"time"
-
-	"github.com/kochabx/kit/core/defaults"
 )
 
 // Config Redis 统一配置（支持单机/集群/哨兵模式）
@@ -99,11 +97,6 @@ type Config struct {
 	// RouteRandomly 是否随机路由
 	// 启用后会随机选择节点
 	RouteRandomly bool
-}
-
-// ApplyDefaults 应用默认值
-func (c *Config) ApplyDefaults() error {
-	return defaults.Apply(c)
 }
 
 // Single 创建单机模式配置

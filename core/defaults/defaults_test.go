@@ -276,6 +276,68 @@ func TestApplyPointerScalar(t *testing.T) {
 	}
 }
 
+// TestApplyNilStructPointerWithoutDefaults verifies that a nil pointer to a struct
+// with NO default tags stays nil (e.g. *tls.Config).
+func TestApplyNilStructPointerWithoutDefaults(t *testing.T) {
+	type ExternalConfig struct {
+		ServerName string
+		MinVersion uint16
+	}
+
+	type Config struct {
+		Host string          `default:"localhost"`
+		Port int             `default:"8080"`
+		TLS  *ExternalConfig // no default tag, no defaults inside
+	}
+
+	cfg := &Config{}
+	if err := Apply(cfg); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	if cfg.Host != "localhost" {
+		t.Errorf("Expected Host=localhost, got %s", cfg.Host)
+	}
+	if cfg.Port != 8080 {
+		t.Errorf("Expected Port=8080, got %d", cfg.Port)
+	}
+	if cfg.TLS != nil {
+		t.Errorf("Expected TLS to remain nil, got %+v", cfg.TLS)
+	}
+}
+
+// TestApplyNilStructPointerWithDefaults verifies that a nil pointer to a struct
+// WITH default tags IS initialized and defaults applied.
+func TestApplyNilStructPointerWithDefaults(t *testing.T) {
+	type NestedConfig struct {
+		Host string `default:"127.0.0.1"`
+		Port int    `default:"3306"`
+	}
+
+	type Config struct {
+		Name   string        `default:"app"`
+		Nested *NestedConfig // has default tags inside
+	}
+
+	cfg := &Config{}
+	if err := Apply(cfg); err != nil {
+		t.Fatalf("Apply failed: %v", err)
+	}
+
+	if cfg.Name != "app" {
+		t.Errorf("Expected Name=app, got %s", cfg.Name)
+	}
+	if cfg.Nested == nil {
+		t.Fatal("Expected Nested to be initialized")
+	}
+	if cfg.Nested.Host != "127.0.0.1" {
+		t.Errorf("Expected Nested.Host=127.0.0.1, got %s", cfg.Nested.Host)
+	}
+	if cfg.Nested.Port != 3306 {
+		t.Errorf("Expected Nested.Port=3306, got %d", cfg.Nested.Port)
+	}
+}
+
 // Benchmark tests
 func BenchmarkApply(b *testing.B) {
 	for i := 0; i < b.N; i++ {

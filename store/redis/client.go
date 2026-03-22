@@ -7,6 +7,7 @@ import (
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/log"
 )
 
@@ -14,8 +15,6 @@ import (
 type Client struct {
 	client redis.UniversalClient
 	config *Config
-
-	// 日志
 	logger *log.Logger
 }
 
@@ -26,7 +25,7 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 		return nil, ErrInvalidConfig
 	}
 
-	if err := cfg.ApplyDefaults(); err != nil {
+	if err := defaults.Apply(cfg); err != nil {
 		return nil, err
 	}
 

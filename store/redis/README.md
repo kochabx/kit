@@ -570,7 +570,6 @@ Cluster(addrs ...string) *Config                      // 集群模式
 Sentinel(masterName string, addrs ...string) *Config  // 哨兵模式
 
 // 配置方法
-ApplyDefaults() error  // 应用默认值
 Validate() error       // 验证配置
 IsSingle() bool        // 是否单机模式
 IsCluster() bool       // 是否集群模式

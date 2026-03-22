@@ -59,34 +59,84 @@ type fieldMeta struct {
 }
 
 type structInfo struct {
-	fields []fieldMeta
+	fields      []fieldMeta
+	hasDefaults bool // whether this struct (or nested structs) carries any default tags
+	ready       chan struct{}
 }
 
 var cache sync.Map // map[cacheKey]*structInfo
 
 func getStructInfo(typ reflect.Type, tagName string) *structInfo {
+	return getStructInfoWith(typ, tagName, nil)
+}
+
+// getStructInfoWith computes or retrieves cached structInfo.
+// The visiting set tracks types currently being computed in this call stack
+// to handle recursive types without deadlocking on the ready channel.
+func getStructInfoWith(typ reflect.Type, tagName string, visiting map[cacheKey]struct{}) *structInfo {
 	key := cacheKey{typ: typ, tagName: tagName}
+
 	if v, ok := cache.Load(key); ok {
-		return v.(*structInfo)
+		info := v.(*structInfo)
+		// If we're already computing this type (recursive), return the sentinel as-is.
+		if _, cycling := visiting[key]; cycling {
+			return info
+		}
+		<-info.ready
+		return info
 	}
+
+	sentinel := &structInfo{ready: make(chan struct{})}
+	if actual, loaded := cache.LoadOrStore(key, sentinel); loaded {
+		info := actual.(*structInfo)
+		if _, cycling := visiting[key]; cycling {
+			return info
+		}
+		<-info.ready
+		return info
+	}
+
+	// Track that we're computing this type.
+	if visiting == nil {
+		visiting = make(map[cacheKey]struct{})
+	}
+	visiting[key] = struct{}{}
 
 	n := typ.NumField()
 	fields := make([]fieldMeta, 0, n)
+	hasDefaults := false
+
 	for i := range n {
 		f := typ.Field(i)
 		if !f.IsExported() {
 			continue
 		}
+		tag := f.Tag.Get(tagName)
 		fields = append(fields, fieldMeta{
 			index:    i,
 			field:    f,
-			tagValue: f.Tag.Get(tagName),
+			tagValue: tag,
 		})
+		if tag != "" {
+			hasDefaults = true
+			continue
+		}
+		// Check nested struct (or pointer-to-struct) for defaults.
+		ft := f.Type
+		if ft.Kind() == reflect.Pointer {
+			ft = ft.Elem()
+		}
+		if ft.Kind() == reflect.Struct {
+			if getStructInfoWith(ft, tagName, visiting).hasDefaults {
+				hasDefaults = true
+			}
+		}
 	}
 
-	info := &structInfo{fields: fields}
-	v, _ := cache.LoadOrStore(key, info)
-	return v.(*structInfo)
+	sentinel.fields = fields
+	sentinel.hasDefaults = hasDefaults
+	close(sentinel.ready) // unblock all waiters
+	return sentinel
 }
 
 // --- apply logic ---
@@ -142,9 +192,12 @@ func (ctx *context) applyField(fv reflect.Value, meta *fieldMeta) error {
 		return ctx.applySliceElements(fv)
 	}
 
-	// Pointer to struct: create if nil, then recurse
+	// Pointer to struct: recurse if non-nil, or create only if the struct has defaults
 	if kind == reflect.Pointer && meta.field.Type.Elem().Kind() == reflect.Struct {
 		if fv.IsNil() {
+			if !getStructInfo(meta.field.Type.Elem(), ctx.options.tagName).hasDefaults {
+				return nil
+			}
 			v := reflect.New(meta.field.Type.Elem())
 			fv.Set(v)
 			return ctx.enterStruct(v.Elem())

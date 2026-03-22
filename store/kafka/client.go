@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/log"
 	"github.com/segmentio/kafka-go"
 	"github.com/segmentio/kafka-go/sasl/plain"
@@ -30,7 +31,7 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 		return nil, ErrInvalidConfig
 	}
 
-	if err := cfg.ApplyDefaults(); err != nil {
+	if err := defaults.Apply(cfg); err != nil {
 		return nil, err
 	}
 

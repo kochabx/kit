@@ -3,7 +3,6 @@ package kafka
 import (
 	"time"
 
-	"github.com/kochabx/kit/core/defaults"
 	"github.com/segmentio/kafka-go"
 )
 
@@ -55,11 +54,6 @@ const (
 	BalancerLeastBytes Balancer = iota
 	BalancerHash
 )
-
-// ApplyDefaults 应用默认值
-func (c *Config) ApplyDefaults() error {
-	return defaults.Apply(c)
-}
 
 // balancer 获取 kafka-go 的 Balancer 实现
 func (c *Config) balancer() kafka.Balancer {
