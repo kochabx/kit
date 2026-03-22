@@ -354,33 +354,6 @@ signer := middleware.SignerFunc(func(data []byte, signature string) error {
 
 ---
 
-## XSS 防护中间件
-
-对请求中的 Query 参数、表单数据、JSON Body、Header 进行 XSS 过滤。默认使用 HTML 转义（`html.EscapeString`），过滤后数据对 Handler 透明。
-
-```go
-mw := middleware.Xss(middleware.XssConfig{
-    QueryEnabled: true, // 过滤 Query 参数
-    FormEnabled:  true, // 过滤表单 POST 数据
-    BodyEnabled:  true, // 过滤 JSON Body（递归处理嵌套结构）
-    SkipPaths:    []string{"/admin/**"},
-    SkipFunc: func(r *http.Request) bool {
-        return r.Header.Get("X-Trusted") == "1"
-    },
-})
-```
-
-自定义过滤器（如集成 bluemonday 等库）：
-
-```go
-mw := middleware.Xss(middleware.XssConfig{
-    BodyEnabled: true,
-    Sanitizer: middleware.SanitizerFunc(func(input string) string {
-        return bluemonday.UGCPolicy().Sanitize(input)
-    }),
-})
-```
-
 ### 配置选项
 
 | 字段 | 类型 | 默认值 | 说明 |

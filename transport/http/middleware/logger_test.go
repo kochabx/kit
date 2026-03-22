@@ -108,11 +108,10 @@ func TestLogger_DefaultStatus200(t *testing.T) {
 }
 
 func TestLogger_ClientIP_XRealIP(t *testing.T) {
-	var capturedIP string
 	// clientIP 函数本身可以直接测试
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", "1.2.3.4")
-	capturedIP = clientIP(req, true)
+	capturedIP := clientIP(req)
 	if capturedIP != "1.2.3.4" {
 		t.Errorf("X-Real-IP: clientIP = %q, want %q", capturedIP, "1.2.3.4")
 	}
@@ -121,7 +120,7 @@ func TestLogger_ClientIP_XRealIP(t *testing.T) {
 func TestLogger_ClientIP_XForwardedFor(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
-	ip := clientIP(req, true)
+	ip := clientIP(req)
 	if ip != "10.0.0.1" {
 		t.Errorf("X-Forwarded-For: clientIP = %q, want %q", ip, "10.0.0.1")
 	}
@@ -130,7 +129,7 @@ func TestLogger_ClientIP_XForwardedFor(t *testing.T) {
 func TestLogger_ClientIP_RemoteAddr(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "192.168.1.1:5678"
-	ip := clientIP(req, false)
+	ip := clientIP(req)
 	if ip != "192.168.1.1" {
 		t.Errorf("RemoteAddr: clientIP = %q, want %q", ip, "192.168.1.1")
 	}
