@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/kochabx/kit/log"
 )
@@ -19,6 +20,7 @@ type LoggerConfig struct {
 	RequestBody    bool                                               // 是否记录请求体
 	ResponseBody   bool                                               // 是否记录响应体
 	TrustedProxies bool                                               // 是否信任 X-Real-IP / X-Forwarded-For 头（仅在代理后部署时启用）
+	Trace          bool                                               // 是否从 context 注入 trace_id / span_id
 	SkipPaths      []string                                           // 跳过记录的路径
 	SkipFunc       func(*http.Request) bool                           // 动态跳过判断函数
 	Logger         *log.Logger                                        // 自定义日志记录器
@@ -133,6 +135,15 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 
 			if requestID := r.Header.Get("X-Request-Id"); requestID != "" {
 				event = event.Str("request_id", requestID)
+			}
+
+			if cfg.Trace {
+				span := trace.SpanFromContext(r.Context())
+				if sc := span.SpanContext(); sc.IsValid() {
+					event = event.
+					Str("trace_id", sc.TraceID().String()).
+					Str("span_id", sc.SpanID().String())
+				}
 			}
 
 			if cfg.Header {
