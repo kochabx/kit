@@ -8,25 +8,24 @@ import (
 
 // CorsConfig CORS 中间件配置
 type CorsConfig struct {
-	AllowOrigins     []string                 // 允许的源，支持 "*" 通配符
-	AllowMethods     []string                 // 允许的 HTTP 方法
-	AllowHeaders     []string                 // 允许的请求头
-	AllowCredentials bool                     // 是否允许携带凭证
-	ExposeHeaders    []string                 // 暴露给客户端的响应头
-	MaxAge           int                      // 预检请求缓存时间（秒）
-	SkipPaths        []string                 // 跳过处理的路径前缀
-	SkipFunc         func(*http.Request) bool // 动态跳过判断函数
+	Skip             SkipConfig // 跳过配置
+	AllowCredentials bool       // 是否允许携带凭证
+	MaxAge           int        // 预检请求缓存时间（秒）
+	AllowOrigins     []string   // 允许的源，支持 "*" 通配符
+	AllowMethods     []string   // 允许的 HTTP 方法
+	AllowHeaders     []string   // 允许的请求头
+	ExposeHeaders    []string   // 暴露给客户端的响应头
 }
 
 // DefaultCorsConfig 返回默认 CORS 配置
 func DefaultCorsConfig() CorsConfig {
 	return CorsConfig{
+		AllowCredentials: false, // 注意：当 AllowOrigins 为 "*" 时，AllowCredentials 必须为 false
+		MaxAge:           43200,
+		ExposeHeaders:    []string{},
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization", "X-Request-Id"},
-		AllowCredentials: false, // 注意：当 AllowOrigins 为 "*" 时，AllowCredentials 必须为 false
-		ExposeHeaders:    []string{},
-		MaxAge:           43200,
 	}
 }
 
@@ -44,11 +43,11 @@ func Cors(cfgs ...CorsConfig) func(http.Handler) http.Handler {
 	maxAgeHeader := strconv.Itoa(cfg.MaxAge)
 	credentialsHeader := strconv.FormatBool(cfg.AllowCredentials)
 
-	matcher := NewPathMatcher(cfg.SkipPaths)
+	matcher := NewPathMatcher(cfg.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.SkipFunc) {
+			if shouldSkip(r, matcher, cfg.Skip.Func) {
 				next.ServeHTTP(w, r)
 				return
 			}

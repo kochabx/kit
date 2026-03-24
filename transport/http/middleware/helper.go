@@ -105,6 +105,12 @@ func (pm *PathMatcher) Match(urlPath string) bool {
 	return false
 }
 
+// SkipConfig 中间件通用跳过配置
+type SkipConfig struct {
+	Paths []string                 // 跳过处理的路径
+	Func  func(*http.Request) bool // 动态跳过判断函数
+}
+
 // shouldSkip reports whether the request should be skipped.
 func shouldSkip(r *http.Request, matcher *PathMatcher, skipFunc func(*http.Request) bool) bool {
 	if skipFunc != nil && skipFunc(r) {

@@ -44,28 +44,33 @@ func HMACSHA256Signer(secret string) Signer {
 	})
 }
 
+// SignatureParts 控制签名数据中包含的请求组成部分
+type SignatureParts struct {
+	Params bool // 是否包含 Query 参数
+	Body   bool // 是否包含请求体
+	Path   bool // 是否包含请求路径
+	Method bool // 是否包含请求方法
+}
+
 // SignatureConfig 签名验证中间件配置
 type SignatureConfig struct {
-	Signer        Signer                                          // 签名验证器（必需）
-	HeaderName    string                                          // 签名头名称，默认 "X-Signature"
-	ParamsEnabled bool                                            // 是否包含 Query 参数
-	BodyEnabled   bool                                            // 是否包含请求体
-	PathEnabled   bool                                            // 是否包含请求路径
-	MethodEnabled bool                                            // 是否包含请求方法
-	SkipPaths     []string                                        // 跳过处理的路径前缀
-	SkipFunc      func(*http.Request) bool                        // 动态跳过判断函数
-	ErrorHandler  func(http.ResponseWriter, *http.Request, error) // 错误处理函数
-	Logger        *log.Logger                                     // 自定义日志记录器
+	Skip           SkipConfig                                      // 跳过配置
+	Parts          SignatureParts                                  // 签名数据组成部分
+	Signer         Signer                                          // 签名验证器（必需）
+	HeaderName     string                                          // 签名头名称，默认 "X-Signature"
+	SuccessHandler func(http.ResponseWriter, *http.Request)        // 成功回调
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理函数
+	Logger         *log.Logger                                     // 自定义日志记录器
 }
 
 // DefaultSignatureConfig 返回默认签名配置
 func DefaultSignatureConfig() SignatureConfig {
 	return SignatureConfig{
-		HeaderName:    "X-Signature",
-		ParamsEnabled: true,
-		BodyEnabled:   true,
-		PathEnabled:   false,
-		MethodEnabled: false,
+		HeaderName: "X-Signature",
+		Parts: SignatureParts{
+			Params: true,
+			Body:   true,
+		},
 	}
 }
 
@@ -94,11 +99,11 @@ func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 		}
 	}
 
-	matcher := NewPathMatcher(cfg.SkipPaths)
+	matcher := NewPathMatcher(cfg.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.SkipFunc) {
+			if shouldSkip(r, matcher, cfg.Skip.Func) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -123,6 +128,9 @@ func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 				return
 			}
 
+			if cfg.SuccessHandler != nil {
+				cfg.SuccessHandler(w, r)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -132,15 +140,15 @@ func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 func buildSignatureData(r *http.Request, cfg SignatureConfig) ([]byte, error) {
 	var builder strings.Builder
 
-	if cfg.MethodEnabled {
+	if cfg.Parts.Method {
 		builder.WriteString(r.Method)
 	}
 
-	if cfg.PathEnabled {
+	if cfg.Parts.Path {
 		builder.WriteString(r.URL.Path)
 	}
 
-	if cfg.ParamsEnabled {
+	if cfg.Parts.Params {
 		params := r.URL.Query()
 		if len(params) > 0 {
 			keys := make([]string, 0, len(params))
@@ -157,7 +165,7 @@ func buildSignatureData(r *http.Request, cfg SignatureConfig) ([]byte, error) {
 		}
 	}
 
-	if cfg.BodyEnabled {
+	if cfg.Parts.Body {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			return nil, err

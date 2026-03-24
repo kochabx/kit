@@ -14,16 +14,20 @@ import (
 	"github.com/kochabx/kit/log"
 )
 
+// LogFields 控制日志中各字段的记录开关
+type LogFields struct {
+	Header       bool // 是否记录请求头
+	RequestBody  bool // 是否记录请求体
+	ResponseBody bool // 是否记录响应体
+	Trace        bool // 是否从 context 注入 trace_id / span_id
+}
+
 // LoggerConfig 日志中间件配置
 type LoggerConfig struct {
-	Header       bool                                               // 是否记录请求头
-	RequestBody  bool                                               // 是否记录请求体
-	ResponseBody bool                                               // 是否记录响应体
-	Trace        bool                                               // 是否从 context 注入 trace_id / span_id
-	SkipPaths    []string                                           // 跳过记录的路径
-	SkipFunc     func(*http.Request) bool                           // 动态跳过判断函数
-	Logger       *log.Logger                                        // 自定义日志记录器
-	CustomFields func(*http.Request, *zerolog.Event) *zerolog.Event // 追加自定义日志字段
+	Skip     SkipConfig                                         // 跳过配置
+	Fields   LogFields                                          // 日志字段记录开关
+	Enricher func(*http.Request, *zerolog.Event) *zerolog.Event // 追加自定义日志字段
+	Logger   *log.Logger                                        // 自定义日志记录器
 }
 
 // statusResponseWriter 包装 http.ResponseWriter 以捕获状态码和响应体
@@ -79,11 +83,11 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 		cfg.Logger = log.G
 	}
 
-	matcher := NewPathMatcher(cfg.SkipPaths)
+	matcher := NewPathMatcher(cfg.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.SkipFunc) {
+			if shouldSkip(r, matcher, cfg.Skip.Func) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -91,7 +95,7 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 			start := time.Now()
 
 			var requestBody []byte
-			if cfg.RequestBody {
+			if cfg.Fields.RequestBody {
 				body, err := io.ReadAll(r.Body)
 				if err == nil {
 					requestBody = body
@@ -103,7 +107,7 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 				ResponseWriter: w,
 				status:         http.StatusOK,
 			}
-			if cfg.ResponseBody {
+			if cfg.Fields.ResponseBody {
 				rw.body = bytes.NewBuffer(nil)
 			}
 
@@ -133,7 +137,7 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 				event = event.Str("request_id", requestID)
 			}
 
-			if cfg.Trace {
+			if cfg.Fields.Trace {
 				span := trace.SpanFromContext(r.Context())
 				if sc := span.SpanContext(); sc.IsValid() {
 					event = event.
@@ -142,20 +146,20 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 				}
 			}
 
-			if cfg.Header {
+			if cfg.Fields.Header {
 				event = event.Any("headers", r.Header)
 			}
 
-			if cfg.RequestBody && len(requestBody) > 0 {
+			if cfg.Fields.RequestBody && len(requestBody) > 0 {
 				event = event.Bytes("request_body", requestBody)
 			}
 
-			if cfg.ResponseBody && rw.body != nil {
+			if cfg.Fields.ResponseBody && rw.body != nil {
 				event = event.Bytes("response_body", rw.body.Bytes())
 			}
 
-			if cfg.CustomFields != nil {
-				event = cfg.CustomFields(r, event)
+			if cfg.Enricher != nil {
+				event = cfg.Enricher(r, event)
 			}
 
 			event.Send()

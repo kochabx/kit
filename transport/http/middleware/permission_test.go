@@ -54,8 +54,8 @@ func TestPermission_SkipPaths(t *testing.T) {
 		return ErrForbidden // 如果被调用一定拒绝
 	})
 	mw := Permission(PermissionConfig{
-		Checker:   checker,
-		SkipPaths: []string{"/public"},
+		Checker: checker,
+		Skip:    SkipConfig{Paths: []string{"/public"}},
 	})
 
 	w := do(mw(okHandler), http.MethodGet, "/public", nil)
@@ -70,9 +70,9 @@ func TestPermission_SkipFunc(t *testing.T) {
 	})
 	mw := Permission(PermissionConfig{
 		Checker: checker,
-		SkipFunc: func(r *http.Request) bool {
+		Skip: SkipConfig{Func: func(r *http.Request) bool {
 			return r.Header.Get("X-Service") == "internal"
-		},
+		}},
 	})
 
 	w := do(mw(okHandler), http.MethodGet, "/any", func(r *http.Request) {

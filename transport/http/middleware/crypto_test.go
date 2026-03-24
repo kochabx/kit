@@ -115,8 +115,8 @@ func TestCrypto_SkipPaths(t *testing.T) {
 	})
 
 	mw := Crypto(CryptoConfig{
-		Decryptor: failDecryptor, // 如果被调用会返回错误
-		SkipPaths: []string{"/public"},
+		Decryptor: failDecryptor,
+		Skip:      SkipConfig{Paths: []string{"/public"}},
 	})
 
 	rawBody := "raw-unencrypted-body"

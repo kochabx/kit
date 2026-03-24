@@ -37,7 +37,7 @@ func TestLogger_PassesThrough(t *testing.T) {
 
 func TestLogger_SkipPaths(t *testing.T) {
 	mw := Logger(LoggerConfig{
-		SkipPaths: []string{"/health"},
+		Skip: SkipConfig{Paths: []string{"/health"}},
 	})
 
 	w := do(mw(okHandler), http.MethodGet, "/health", nil)
@@ -48,9 +48,9 @@ func TestLogger_SkipPaths(t *testing.T) {
 
 func TestLogger_SkipFunc(t *testing.T) {
 	mw := Logger(LoggerConfig{
-		SkipFunc: func(r *http.Request) bool {
+		Skip: SkipConfig{Func: func(r *http.Request) bool {
 			return r.Header.Get("X-Internal") == "1"
-		},
+		}},
 	})
 
 	w := do(mw(okHandler), http.MethodGet, "/any", func(r *http.Request) {
@@ -73,7 +73,7 @@ func TestLogger_RequestBodyPassedToNext(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"msg":"hello"}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
-	Logger(LoggerConfig{RequestBody: true})(inner).ServeHTTP(w, req)
+	Logger(LoggerConfig{Fields: LogFields{RequestBody: true}})(inner).ServeHTTP(w, req)
 
 	if downstreamBody != `{"msg":"hello"}` {
 		t.Errorf("downstream body = %q, want original body", downstreamBody)
@@ -89,7 +89,7 @@ func TestLogger_ResponseBodyCapture(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
-	Logger(LoggerConfig{ResponseBody: true})(inner).ServeHTTP(w, req)
+	Logger(LoggerConfig{Fields: LogFields{ResponseBody: true}})(inner).ServeHTTP(w, req)
 
 	if w.Body.String() != "response data" {
 		t.Errorf("client body = %q, want %q", w.Body.String(), "response data")

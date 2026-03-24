@@ -11,8 +11,9 @@ import (
 )
 
 var (
-	ErrUnauthorized = errors.Unauthorized("unauthorized")
-	ErrForbidden    = errors.Forbidden("forbidden")
+	ErrPermissionCheckerNil = errors.Internal("permission checker missing")
+	ErrUnauthorized         = errors.Unauthorized("unauthorized")
+	ErrForbidden            = errors.Forbidden("forbidden")
 )
 
 // PermissionChecker 权限检查器接口
@@ -29,11 +30,11 @@ func (f PermissionCheckerFunc) Check(ctx context.Context, r *http.Request) error
 
 // PermissionConfig 权限中间件配置
 type PermissionConfig struct {
-	Checker      PermissionChecker                               // 权限检查器（必需）
-	SkipPaths    []string                                        // 跳过检查的路径前缀
-	SkipFunc     func(*http.Request) bool                        // 动态跳过判断函数
-	ErrorHandler func(http.ResponseWriter, *http.Request, error) // 错误处理函数
-	Logger       *log.Logger                                     // 自定义日志记录器
+	Skip           SkipConfig                                      // 跳过配置
+	Checker        PermissionChecker                               // 权限检查器（必需）
+	SuccessHandler func(http.ResponseWriter, *http.Request)        // 成功回调
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理函数
+	Logger         *log.Logger                                     // 自定义日志记录器
 }
 
 // Permission 创建权限检查中间件
@@ -47,10 +48,6 @@ func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 		cfg.Logger = log.G
 	}
 
-	if cfg.Checker == nil {
-		panic("middleware: PermissionChecker is required")
-	}
-
 	if cfg.ErrorHandler == nil {
 		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			e := errors.FromError(err)
@@ -58,12 +55,17 @@ func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 		}
 	}
 
-	matcher := NewPathMatcher(cfg.SkipPaths)
+	matcher := NewPathMatcher(cfg.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.SkipFunc) {
+			if shouldSkip(r, matcher, cfg.Skip.Func) {
 				next.ServeHTTP(w, r)
+				return
+			}
+
+			if cfg.Checker == nil {
+				cfg.ErrorHandler(w, r, ErrPermissionCheckerNil)
 				return
 			}
 
@@ -76,6 +78,9 @@ func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 				return
 			}
 
+			if cfg.SuccessHandler != nil {
+				cfg.SuccessHandler(w, r)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

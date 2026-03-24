@@ -86,7 +86,7 @@ func TestCors_SkipPaths(t *testing.T) {
 	cfg := CorsConfig{
 		AllowOrigins: []string{"*"},
 		AllowMethods: []string{"GET"},
-		SkipPaths:    []string{"/internal"},
+		Skip:         SkipConfig{Paths: []string{"/internal"}},
 	}
 	handler := Cors(cfg)(okHandler)
 

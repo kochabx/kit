@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"bytes"
-	"encoding/base64"
 	"io"
 	"net/http"
 
@@ -30,12 +29,11 @@ func (f DecryptorFunc) Decrypt(ciphertext []byte) ([]byte, error) {
 
 // CryptoConfig 加解密中间件配置
 type CryptoConfig struct {
-	Decryptor    Decryptor                                       // 解密器（必需）
-	Base64Decode bool                                            // 是否对请求体进行 Base64 解码，默认 true
-	SkipPaths    []string                                        // 跳过处理的路径前缀
-	SkipFunc     func(*http.Request) bool                        // 动态跳过判断函数
-	ErrorHandler func(http.ResponseWriter, *http.Request, error) // 错误处理函数
-	Logger       *log.Logger                                     // 自定义日志记录器
+	Skip           SkipConfig                                      // 跳过配置
+	Decryptor      Decryptor                                       // 解密器（必需）
+	SuccessHandler func(http.ResponseWriter, *http.Request)        // 成功回调
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理函数
+	Logger         *log.Logger                                     // 自定义日志记录器
 }
 
 // ECIESDecryptor 创建基于 ECIES 的解密器
@@ -69,21 +67,17 @@ func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 		cfg.Logger = log.G
 	}
 
-	if !cfg.Base64Decode {
-		cfg.Base64Decode = true
-	}
-
 	if cfg.ErrorHandler == nil {
 		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 			kithttp.Fail(w, http.StatusBadRequest, ErrDecryptFailed)
 		}
 	}
 
-	matcher := NewPathMatcher(cfg.SkipPaths)
+	matcher := NewPathMatcher(cfg.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.SkipFunc) {
+			if shouldSkip(r, matcher, cfg.Skip.Func) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -100,18 +94,7 @@ func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 				return
 			}
 
-			ciphertext := body
-			if cfg.Base64Decode {
-				decoded, err := base64.StdEncoding.DecodeString(string(body))
-				if err != nil {
-					cfg.Logger.Error().Err(err).Msg("crypto: base64 decode failed")
-					cfg.ErrorHandler(w, r, err)
-					return
-				}
-				ciphertext = decoded
-			}
-
-			plaintext, err := cfg.Decryptor.Decrypt(ciphertext)
+			plaintext, err := cfg.Decryptor.Decrypt(body)
 			if err != nil {
 				cfg.Logger.Error().Err(err).Msg("crypto: decrypt failed")
 				cfg.ErrorHandler(w, r, err)
@@ -121,6 +104,9 @@ func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 			r.Body = io.NopCloser(bytes.NewBuffer(plaintext))
 			r.ContentLength = int64(len(plaintext))
 
+			if cfg.SuccessHandler != nil {
+				cfg.SuccessHandler(w, r)
+			}
 			next.ServeHTTP(w, r)
 		})
 	}

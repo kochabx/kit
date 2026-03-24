@@ -99,11 +99,10 @@ func ChainExtractor(extractors ...TokenExtractor) TokenExtractor {
 
 // AuthConfig 认证中间件配置
 type AuthConfig[T Claims] struct {
+	Skip           SkipConfig                                      // 跳过配置
 	Authenticator  Authenticator[T]                                // 认证器（必需）
 	Extractor      TokenExtractor                                  // Token 提取器，默认 BearerExtractor
 	ContextKey     string                                          // 上下文键，默认 "claims"
-	SkipPaths      []string                                        // 跳过认证的路径前缀
-	SkipFunc       func(*http.Request) bool                        // 动态跳过判断
 	SuccessHandler func(http.ResponseWriter, *http.Request, T)     // 成功回调
 	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理，默认返回 401
 }
@@ -122,11 +121,11 @@ func Auth[T Claims](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 		}
 	}
 
-	matcher := NewPathMatcher(cfg.SkipPaths)
+	matcher := NewPathMatcher(cfg.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.SkipFunc) {
+			if shouldSkip(r, matcher, cfg.Skip.Func) {
 				next.ServeHTTP(w, r)
 				return
 			}

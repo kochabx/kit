@@ -315,7 +315,7 @@ func TestAuth_SkipPaths(t *testing.T) {
 	auth := &mockAuthenticator{err: ErrTokenInvalid}
 	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
-		SkipPaths:     []string{"/health"},
+		Skip:          SkipConfig{Paths: []string{"/health"}},
 	})
 
 	handler := setupHandler(mw)
@@ -333,9 +333,9 @@ func TestAuth_SkipFunc(t *testing.T) {
 	auth := &mockAuthenticator{err: ErrTokenInvalid}
 	mw := Auth(AuthConfig[*TestClaims]{
 		Authenticator: auth,
-		SkipFunc: func(r *http.Request) bool {
+		Skip: SkipConfig{Func: func(r *http.Request) bool {
 			return r.Header.Get("X-Skip-Auth") == "true"
-		},
+		}},
 	})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

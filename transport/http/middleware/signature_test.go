@@ -29,8 +29,8 @@ func TestSignature_Valid_BodyOnly(t *testing.T) {
 	sig := computeHMAC([]byte(body))
 
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		BodyEnabled: true,
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Body: true},
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/pay", strings.NewReader(body))
@@ -48,9 +48,8 @@ func TestSignature_Valid_QueryOnly(t *testing.T) {
 	sig := computeHMAC([]byte(params))
 
 	mw := Signature(SignatureConfig{
-		Signer:        HMACSHA256Signer(testSecret),
-		ParamsEnabled: true,
-		BodyEnabled:   false,
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Params: true},
 	})
 
 	req := httptest.NewRequest(http.MethodGet, "/?a=1&b=2", nil)
@@ -65,8 +64,8 @@ func TestSignature_Valid_QueryOnly(t *testing.T) {
 
 func TestSignature_MissingHeader(t *testing.T) {
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		BodyEnabled: true,
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Body: true},
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("body"))
@@ -81,8 +80,8 @@ func TestSignature_MissingHeader(t *testing.T) {
 
 func TestSignature_Invalid(t *testing.T) {
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		BodyEnabled: true,
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Body: true},
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("body"))
@@ -97,9 +96,9 @@ func TestSignature_Invalid(t *testing.T) {
 
 func TestSignature_SkipPaths(t *testing.T) {
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		BodyEnabled: true,
-		SkipPaths:   []string{"/health"},
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Body: true},
+		Skip:   SkipConfig{Paths: []string{"/health"}},
 	})
 
 	// 无签名头，但路径被跳过，应直接通过
@@ -111,11 +110,11 @@ func TestSignature_SkipPaths(t *testing.T) {
 
 func TestSignature_SkipFunc(t *testing.T) {
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		BodyEnabled: true,
-		SkipFunc: func(r *http.Request) bool {
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Body: true},
+		Skip: SkipConfig{Func: func(r *http.Request) bool {
 			return r.Header.Get("X-Internal-Call") == "1"
-		},
+		}},
 	})
 
 	w := do(mw(okHandler), http.MethodPost, "/api", func(r *http.Request) {
@@ -131,9 +130,9 @@ func TestSignature_CustomHeaderName(t *testing.T) {
 	sig := computeHMAC([]byte(body))
 
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		HeaderName:  "X-My-Sig",
-		BodyEnabled: true,
+		Signer:     HMACSHA256Signer(testSecret),
+		HeaderName: "X-My-Sig",
+		Parts:      SignatureParts{Body: true},
 	})
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
@@ -149,8 +148,8 @@ func TestSignature_CustomHeaderName(t *testing.T) {
 func TestSignature_CustomErrorHandler(t *testing.T) {
 	customCalled := false
 	mw := Signature(SignatureConfig{
-		Signer:      HMACSHA256Signer(testSecret),
-		BodyEnabled: true,
+		Signer: HMACSHA256Signer(testSecret),
+		Parts:  SignatureParts{Body: true},
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			customCalled = true
 			w.WriteHeader(http.StatusUnauthorized)
@@ -209,8 +208,8 @@ func TestSignature_Gin(t *testing.T) {
 
 	r := ginEngine(http.MethodPost, "/sign",
 		Signature(SignatureConfig{
-			Signer:      HMACSHA256Signer(testSecret),
-			BodyEnabled: true,
+			Signer: HMACSHA256Signer(testSecret),
+			Parts:  SignatureParts{Body: true},
 		}),
 		okHandler,
 	)
@@ -228,8 +227,8 @@ func TestSignature_Gin(t *testing.T) {
 func TestSignature_Gin_Invalid(t *testing.T) {
 	r := ginEngine(http.MethodPost, "/sign",
 		Signature(SignatureConfig{
-			Signer:      HMACSHA256Signer(testSecret),
-			BodyEnabled: true,
+			Signer: HMACSHA256Signer(testSecret),
+			Parts:  SignatureParts{Body: true},
 		}),
 		okHandler,
 	)
