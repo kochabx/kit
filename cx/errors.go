@@ -3,36 +3,23 @@ package cx
 import "errors"
 
 var (
-	// ErrGroupNotFound is returned when a group is not found.
-	ErrGroupNotFound = errors.New("group not found")
-
-	// ErrComponentNotFound is returned when a component is not found.
+	// ErrComponentNotFound is returned when a key is not registered in the container.
 	ErrComponentNotFound = errors.New("component not found")
 
-	// ErrComponentAlreadyExists is returned when a component with the same name is already registered.
-	ErrComponentAlreadyExists = errors.New("component already exists")
+	// ErrComponentExists is returned when a key is already registered.
+	ErrComponentExists = errors.New("component already exists")
 
-	// ErrGroupAlreadyExists is returned when a group with the same name is already registered.
-	ErrGroupAlreadyExists = errors.New("group already exists")
+	// ErrCircularDependency is returned when a circular dependency is detected
+	// during the build phase.
+	ErrCircularDependency = errors.New("circular dependency")
 
-	// ErrInvalidComponent is returned when a component is nil or has an empty name.
-	ErrInvalidComponent = errors.New("invalid component")
+	// ErrTypeMismatch is returned when a Get type assertion fails.
+	ErrTypeMismatch = errors.New("type mismatch")
 
-	// ErrDependencyNotFound is returned when a required dependency cannot be resolved.
-	ErrDependencyNotFound = errors.New("dependency not found")
+	// ErrContainerNotIdle is returned when Provide/Supply is called outside
+	// StateNew or StateStopped.
+	ErrContainerNotIdle = errors.New("container is not idle")
 
-	// ErrCircularDependency is returned when a circular dependency is detected.
-	ErrCircularDependency = errors.New("circular dependency detected")
-
-	// ErrNotRunning is returned when an operation requires the container to be running.
-	ErrNotRunning = errors.New("container is not running")
-
-	// ErrAlreadyStarted is returned when Start is called on an already-started container.
-	ErrAlreadyStarted = errors.New("container already started")
-
-	// ErrDuplicateProvider is returned when two providers advertise the same dependency key.
-	ErrDuplicateProvider = errors.New("duplicate dependency provider")
-
-	// ErrNotRegisterable is returned when Provide is called in a non-registerable state.
-	ErrNotRegisterable = errors.New("container is not in a registerable state")
+	// ErrInvalidKey is returned when an empty key is provided.
+	ErrInvalidKey = errors.New("invalid key")
 )

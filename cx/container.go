@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,7 +22,7 @@ const (
 	StateRunning               // All components started
 	StateStopping              // Stop() in progress
 	StateStopped               // All components stopped
-	StateError                 // An unrecoverable error occurred
+	StateFailed                // Start or Stop failed
 )
 
 func (s State) String() string {
@@ -37,25 +37,25 @@ func (s State) String() string {
 		return "stopping"
 	case StateStopped:
 		return "stopped"
-	case StateError:
-		return "error"
+	case StateFailed:
+		return "failed"
 	default:
 		return "unknown"
 	}
 }
 
 // ---------------------------------------------------------------------------
-// HealthReport / ContainerMetrics
+// Health / Metrics
 // ---------------------------------------------------------------------------
 
-// ComponentHealth holds the health check result for a single component.
+// ComponentHealth holds the health-check result for a single component.
 type ComponentHealth struct {
-	Name    string
+	Key     string
 	Healthy bool
 	Error   error
 }
 
-// HealthReport aggregates health check results for all components.
+// HealthReport aggregates health-check results.
 type HealthReport struct {
 	Components []ComponentHealth
 	Healthy    bool
@@ -63,7 +63,6 @@ type HealthReport struct {
 
 // ContainerMetrics holds basic counts about the container.
 type ContainerMetrics struct {
-	GroupCount     int
 	ComponentCount int
 	State          State
 }
@@ -75,19 +74,9 @@ type ContainerMetrics struct {
 // Option configures a Container.
 type Option func(*Container)
 
-// WithStopTimeout sets the timeout used when stopping individual components.
+// WithStopTimeout sets the per-component timeout used during Stop.
 func WithStopTimeout(d time.Duration) Option {
 	return func(c *Container) { c.stopTimeout = d }
-}
-
-// WithGroup pre-registers a group with the given name and priority order.
-// Lower order values are started first and stopped last.
-func WithGroup(name string, order int) Option {
-	return func(c *Container) {
-		if _, exists := c.groups[name]; !exists {
-			c.groups[name] = newGroup(name, order)
-		}
-	}
 }
 
 // WithOnStart registers a hook that runs before the first component is started.
@@ -111,47 +100,59 @@ func WithOnStop(fn func(ctx context.Context) error) Option {
 }
 
 // ---------------------------------------------------------------------------
+// provider (internal)
+// ---------------------------------------------------------------------------
+
+type provider struct {
+	key         string
+	constructor func(*Container) (any, error)
+	value       any
+	built       bool
+}
+
+// ---------------------------------------------------------------------------
 // Container
 // ---------------------------------------------------------------------------
 
-// C is the package-level default Container. It is ready to use immediately
-// and can be replaced by calling New with the result stored in C.
+// C is the package-level default Container, ready to use immediately.
 var C *Container
 
 func init() { C = New() }
 
 // Container is a lightweight dependency-injection container that manages
-// component registration, dependency resolution, and a Start/Stop lifecycle.
+// component registration, lazy construction, and a Start/Stop lifecycle.
 //
-// Components are organised into named groups. Within each group they are
-// started in ascending Order and stopped in reverse order. Groups themselves
-// are started in ascending order and stopped in reverse order.
+// Components are registered as constructors via [Provide] or as ready-made
+// values via [Supply]. During [Container.Start] every constructor is invoked
+// (lazily – dependencies are built on first access). Values that implement
+// [Starter] are started in dependency order; values that implement [Stopper]
+// are stopped in reverse dependency order during [Container.Stop].
 type Container struct {
-	mu     sync.RWMutex
-	groups map[string]*group
-	state  State
+	mu        sync.RWMutex
+	providers map[string]*provider
+	keys      []string // registration order
 
+	// buildOrder records the order in which providers were actually
+	// constructed. Filled during Start, used for Start/Stop ordering.
+	buildOrder []string
+	// buildStack is a transient cycle-detection stack, only used during
+	// the build phase of Start.
+	buildStack []string
+
+	state       State
 	stopTimeout time.Duration
 
-	// depGraph stores the resolved dependency graph produced by Start.
-	// Keys are component names; values are the names they depend on.
-	depGraph map[string][]string
-
-	// Lifecycle hooks — each slice is called in registration order.
 	onStart    []func(ctx context.Context) error
 	onStarted  []func(ctx context.Context) error
 	onStopping []func(ctx context.Context) error
 	onStop     []func(ctx context.Context) error
 }
 
-// New creates an empty Container pre-populated with the five default groups.
+// New creates an empty Container.
 func New(opts ...Option) *Container {
 	c := &Container{
-		groups:      make(map[string]*group),
+		providers:   make(map[string]*provider),
 		stopTimeout: 30 * time.Second,
-	}
-	for name, order := range defaultGroupOrders {
-		c.groups[name] = newGroup(name, order)
 	}
 	for _, o := range opts {
 		o(c)
@@ -163,275 +164,191 @@ func New(opts ...Option) *Container {
 // Registration
 // ---------------------------------------------------------------------------
 
-// Provide registers comp in the named group. If order values are given the
-// first one is used; otherwise 0 is assumed.
-// Returns ErrGroupNotFound if the group has not been created, ErrAlreadyExists
-// if a component with the same name is already registered.
-func (c *Container) Provide(groupName string, comp Component, order ...int) error {
-	if comp == nil || comp.Name() == "" {
-		return fmt.Errorf("%w: component is nil or has empty name", ErrInvalidComponent)
+// Provide registers a lazily-invoked constructor under key.
+// The constructor is called during [Container.Start]; its dependencies are
+// resolved automatically when it calls [Get] on other keys.
+func Provide[T any](c *Container, key string, ctor func(*Container) (T, error)) error {
+	if key == "" {
+		return fmt.Errorf("%w: empty key", ErrInvalidKey)
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.state != StateNew && c.state != StateStopped {
-		return fmt.Errorf("%w: current state is %s", ErrNotRegisterable, c.state)
+		return fmt.Errorf("%w: current state is %s", ErrContainerNotIdle, c.state)
+	}
+	if _, exists := c.providers[key]; exists {
+		return fmt.Errorf("%w: %s", ErrComponentExists, key)
 	}
 
-	g, ok := c.groups[groupName]
-	if !ok {
-		return fmt.Errorf("%w: %s", ErrGroupNotFound, groupName)
+	c.providers[key] = &provider{
+		key: key,
+		constructor: func(cont *Container) (any, error) {
+			return ctor(cont)
+		},
 	}
-	if _, exists := g.components[comp.Name()]; exists {
-		return fmt.Errorf("%w: %s/%s", ErrComponentAlreadyExists, groupName, comp.Name())
-	}
-
-	o := 0
-	if len(order) > 0 {
-		o = order[0]
-	} else if ord, ok := comp.(Orderable); ok {
-		o = ord.Order()
-	}
-
-	d := &Descriptor{
-		Name:     comp.Name(),
-		Instance: comp,
-		Order:    o,
-		Group:    groupName,
-	}
-	g.add(d)
+	c.keys = append(c.keys, key)
 	return nil
 }
 
-// MustProvide is like Provide but panics on error.
-func (c *Container) MustProvide(groupName string, comp Component, order ...int) {
-	if err := c.Provide(groupName, comp, order...); err != nil {
+// MustProvide is like [Provide] but panics on error.
+func MustProvide[T any](c *Container, key string, ctor func(*Container) (T, error)) {
+	if err := Provide(c, key, ctor); err != nil {
 		panic(fmt.Sprintf("cx: MustProvide: %v", err))
 	}
 }
 
-// ProvideGroup creates a new group with the given name and priority order.
-// Returns ErrGroupAlreadyExists if the group already exists.
-func (c *Container) ProvideGroup(name string, order int) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if _, exists := c.groups[name]; exists {
-		return fmt.Errorf("%w: %s", ErrGroupAlreadyExists, name)
+// Supply registers a pre-constructed value under key.
+// Internally it wraps the value in a constructor so it participates in the
+// same build lifecycle as [Provide]-registered components.
+func Supply[T any](c *Container, key string, value T) error {
+	return Provide(c, key, func(_ *Container) (T, error) {
+		return value, nil
+	})
+}
+
+// MustSupply is like [Supply] but panics on error.
+func MustSupply[T any](c *Container, key string, value T) {
+	if err := Supply(c, key, value); err != nil {
+		panic(fmt.Sprintf("cx: MustSupply: %v", err))
 	}
-	c.groups[name] = newGroup(name, order)
-	return nil
-}
-
-// Convenience registration helpers for the five default groups.
-
-func (c *Container) ProvideConfig(comp Component, order ...int) error {
-	return c.Provide(ConfigGroup, comp, order...)
-}
-
-func (c *Container) MustProvideConfig(comp Component, order ...int) {
-	c.MustProvide(ConfigGroup, comp, order...)
-}
-
-func (c *Container) ProvideDatabase(comp Component, order ...int) error {
-	return c.Provide(DatabaseGroup, comp, order...)
-}
-
-func (c *Container) MustProvideDatabase(comp Component, order ...int) {
-	c.MustProvide(DatabaseGroup, comp, order...)
-}
-
-func (c *Container) ProvideService(comp Component, order ...int) error {
-	return c.Provide(ServiceGroup, comp, order...)
-}
-
-func (c *Container) MustProvideService(comp Component, order ...int) {
-	c.MustProvide(ServiceGroup, comp, order...)
-}
-
-func (c *Container) ProvideHandler(comp Component, order ...int) error {
-	return c.Provide(HandlerGroup, comp, order...)
-}
-
-func (c *Container) MustProvideHandler(comp Component, order ...int) {
-	c.MustProvide(HandlerGroup, comp, order...)
-}
-
-func (c *Container) ProvideController(comp Component, order ...int) error {
-	return c.Provide(ControllerGroup, comp, order...)
-}
-
-func (c *Container) MustProvideController(comp Component, order ...int) {
-	c.MustProvide(ControllerGroup, comp, order...)
 }
 
 // ---------------------------------------------------------------------------
 // Retrieval
 // ---------------------------------------------------------------------------
 
-// Get returns the component registered under group/name.
-func (c *Container) Get(groupName, name string) (Component, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	g, ok := c.groups[groupName]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrGroupNotFound, groupName)
-	}
-	d, ok := g.components[name]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s/%s", ErrComponentNotFound, groupName, name)
-	}
-	return d.Instance, nil
-}
-
-// MustGet is like Get but panics on error.
-func (c *Container) MustGet(groupName, name string) Component {
-	comp, err := c.Get(groupName, name)
-	if err != nil {
-		panic(fmt.Sprintf("cx: MustGet: %v", err))
-	}
-	return comp
-}
-
-// GetAll returns all components in the named group, sorted by Order.
-func (c *Container) GetAll(groupName string) ([]Component, error) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	g, ok := c.groups[groupName]
-	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrGroupNotFound, groupName)
-	}
-	descs := g.getSorted()
-	comps := make([]Component, len(descs))
-	for i, d := range descs {
-		comps[i] = d.Instance
-	}
-	return comps, nil
-}
-
-// Invoke returns the component at group/name cast to type T.
-// Returns an error when the lookup fails or the type assertion fails.
-func Invoke[T any](c *Container, groupName, name string) (T, error) {
+// Get returns the value registered under key, cast to type T.
+//
+// During [Container.Start] (StateStarting) an unbuilt dependency is
+// constructed on the fly (lazy build). After Start (StateRunning) the
+// cached value is returned directly.
+func Get[T any](c *Container, key string) (T, error) {
 	var zero T
-	comp, err := c.Get(groupName, name)
-	if err != nil {
-		return zero, err
+
+	c.mu.RLock()
+	p, exists := c.providers[key]
+	state := c.state
+	built := exists && p.built
+	var val any
+	if built {
+		val = p.value
 	}
-	t, ok := comp.(T)
+	c.mu.RUnlock()
+
+	if !exists {
+		return zero, fmt.Errorf("%w: %s", ErrComponentNotFound, key)
+	}
+
+	if !built {
+		if state == StateStarting {
+			if err := c.build(key); err != nil {
+				return zero, err
+			}
+			val = p.value
+		} else {
+			return zero, fmt.Errorf("%w: %s is not built (state: %s)", ErrComponentNotFound, key, state)
+		}
+	}
+
+	t, ok := val.(T)
 	if !ok {
-		return zero, fmt.Errorf("%w: %s/%s cannot be cast to requested type", ErrInvalidComponent, groupName, name)
+		return zero, fmt.Errorf("%w: key %q stores %T", ErrTypeMismatch, key, val)
 	}
 	return t, nil
 }
 
-// MustInvoke is like Invoke but panics on error.
-func MustInvoke[T any](c *Container, groupName, name string) T {
-	t, err := Invoke[T](c, groupName, name)
+// MustGet is like [Get] but panics on error.
+func MustGet[T any](c *Container, key string) T {
+	val, err := Get[T](c, key)
 	if err != nil {
-		panic(fmt.Sprintf("cx: MustInvoke: %v", err))
+		panic(fmt.Sprintf("cx: MustGet: %v", err))
 	}
-	return t
+	return val
 }
 
 // ---------------------------------------------------------------------------
-// Query helpers
+// Build (internal, single-goroutine during Start)
 // ---------------------------------------------------------------------------
 
-// Groups returns the names of all registered groups.
-func (c *Container) Groups() []string {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	names := make([]string, 0, len(c.groups))
-	for name := range c.groups {
-		names = append(names, name)
+func (c *Container) build(key string) error {
+	p := c.providers[key]
+	if p.built {
+		return nil
 	}
-	sort.Strings(names)
-	return names
-}
 
-// HasGroup reports whether a group with the given name is registered.
-func (c *Container) HasGroup(name string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	_, ok := c.groups[name]
-	return ok
-}
-
-// Has reports whether a component name/name exists in the given group.
-func (c *Container) Has(groupName, name string) bool {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	g, ok := c.groups[groupName]
-	if !ok {
-		return false
+	// Cycle detection: if key is already on the build stack we have a cycle.
+	for i, k := range c.buildStack {
+		if k == key {
+			cycle := make([]string, len(c.buildStack[i:])+1)
+			copy(cycle, c.buildStack[i:])
+			cycle[len(cycle)-1] = key
+			return fmt.Errorf("%w: %s", ErrCircularDependency, strings.Join(cycle, " → "))
+		}
 	}
-	_, ok = g.components[name]
-	return ok
-}
 
-// Count returns the total number of registered components across all groups.
-func (c *Container) Count() int {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	total := 0
-	for _, g := range c.groups {
-		total += len(g.components)
+	c.buildStack = append(c.buildStack, key)
+	val, err := p.constructor(c)
+	c.buildStack = c.buildStack[:len(c.buildStack)-1]
+
+	if err != nil {
+		return fmt.Errorf("construct %s: %w", key, err)
 	}
-	return total
-}
 
-// State returns the current lifecycle state.
-func (c *Container) State() State {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-	return c.state
+	p.value = val
+	p.built = true
+	c.buildOrder = append(c.buildOrder, key)
+	return nil
 }
 
 // ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-// Start resolves dependencies, then starts all components in group/order.
-// Hooks: onStart → components → onStarted.
-// If any component fails to start, already-started components are stopped in
-// reverse order (best-effort) before returning the error.
+// Start constructs all registered components and starts them in dependency
+// order. Hooks: onStart → Starter.Start (dependency order) → onStarted.
+//
+// If any component fails to start, already-started components are stopped
+// in reverse order (best-effort) before returning the error.
 func (c *Container) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.state != StateNew && c.state != StateStopped {
+		state := c.state
 		c.mu.Unlock()
-		return fmt.Errorf("cx: cannot start container in state %s", c.state)
+		return fmt.Errorf("cx: cannot start in state %s", state)
 	}
 	c.state = StateStarting
+	c.buildOrder = c.buildOrder[:0]
+	c.buildStack = c.buildStack[:0]
+	keys := make([]string, len(c.keys))
+	copy(keys, c.keys)
 	c.mu.Unlock()
 
-	inj := newInjector(c)
-	if err := inj.Resolve(ctx); err != nil {
-		c.mu.Lock()
-		c.state = StateError
-		c.mu.Unlock()
-		return fmt.Errorf("cx: dependency resolution failed: %w", err)
+	// ---- Build phase (single goroutine, no locks needed) ----
+	for _, key := range keys {
+		if err := c.build(key); err != nil {
+			c.mu.Lock()
+			c.state = StateFailed
+			c.mu.Unlock()
+			return fmt.Errorf("cx: %w", err)
+		}
 	}
 
-	c.mu.Lock()
-	c.depGraph = inj.Graph()
-	c.mu.Unlock()
-
-	// onStart hooks
+	// ---- onStart hooks ----
 	for _, fn := range c.onStart {
 		if err := fn(ctx); err != nil {
 			c.mu.Lock()
-			c.state = StateError
+			c.state = StateFailed
 			c.mu.Unlock()
 			return fmt.Errorf("cx: onStart hook: %w", err)
 		}
 	}
 
-	// Start components in group order, then component order within each group.
-	// Track what has been started so we can rollback on failure.
+	// ---- Start phase (dependency order) ----
 	type started struct {
-		stopper Stopper
-		group   string
-		name    string
+		key  string
+		stop func(context.Context) error
 	}
 	var startedComps []started
 
@@ -439,40 +356,33 @@ func (c *Container) Start(ctx context.Context) error {
 		for i := len(startedComps) - 1; i >= 0; i-- {
 			s := startedComps[i]
 			stopCtx, cancel := context.WithTimeout(context.Background(), c.stopTimeout)
-			_ = s.stopper.Stop(stopCtx) // best-effort
+			_ = s.stop(stopCtx) // best-effort
 			cancel()
 		}
 	}
 
-	groups := c.sortedGroups()
-	for _, g := range groups {
-		descs := func() []*Descriptor {
-			c.mu.RLock()
-			defer c.mu.RUnlock()
-			return g.getSorted()
-		}()
-		for _, d := range descs {
-			if s, ok := d.Instance.(Starter); ok {
-				if err := s.Start(ctx); err != nil {
-					rollback()
-					c.mu.Lock()
-					c.state = StateError
-					c.mu.Unlock()
-					return fmt.Errorf("cx: start %s/%s: %w", g.name, d.Name, err)
-				}
+	for _, key := range c.buildOrder {
+		p := c.providers[key]
+		if s, ok := p.value.(Starter); ok {
+			if err := s.Start(ctx); err != nil {
+				rollback()
+				c.mu.Lock()
+				c.state = StateFailed
+				c.mu.Unlock()
+				return fmt.Errorf("cx: start %s: %w", key, err)
 			}
-			if stopper, ok := d.Instance.(Stopper); ok {
-				startedComps = append(startedComps, started{stopper: stopper, group: g.name, name: d.Name})
-			}
+		}
+		if s, ok := p.value.(Stopper); ok {
+			startedComps = append(startedComps, started{key: key, stop: s.Stop})
 		}
 	}
 
-	// onStarted hooks — called exactly once, here.
+	// ---- onStarted hooks ----
 	for _, fn := range c.onStarted {
 		if err := fn(ctx); err != nil {
 			rollback()
 			c.mu.Lock()
-			c.state = StateError
+			c.state = StateFailed
 			c.mu.Unlock()
 			return fmt.Errorf("cx: onStarted hook: %w", err)
 		}
@@ -484,14 +394,15 @@ func (c *Container) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops all components in reverse group/order.
-// Hooks: onStopping → components (reverse) → onStop.
-// Errors from hooks and components are collected and returned as a joined error.
+// Stop stops all components in reverse dependency order.
+// Hooks: onStopping → Stopper.Stop (reverse) → onStop.
+// Errors are collected and returned as a joined error.
 func (c *Container) Stop(ctx context.Context) error {
 	c.mu.Lock()
-	if c.state != StateRunning && c.state != StateError {
+	if c.state != StateRunning && c.state != StateFailed {
+		state := c.state
 		c.mu.Unlock()
-		return fmt.Errorf("cx: cannot stop container in state %s", c.state)
+		return fmt.Errorf("cx: cannot stop in state %s", state)
 	}
 	c.state = StateStopping
 	c.mu.Unlock()
@@ -505,24 +416,16 @@ func (c *Container) Stop(ctx context.Context) error {
 		}
 	}
 
-	// Stop in reverse group order; within each group reverse component order.
-	groups := c.sortedGroups()
-	for i := len(groups) - 1; i >= 0; i-- {
-		g := groups[i]
-		descs := func() []*Descriptor {
-			c.mu.RLock()
-			defer c.mu.RUnlock()
-			return g.getSorted()
-		}()
-		for j := len(descs) - 1; j >= 0; j-- {
-			d := descs[j]
-			if s, ok := d.Instance.(Stopper); ok {
-				stopCtx, cancel := context.WithTimeout(ctx, c.stopTimeout)
-				if err := s.Stop(stopCtx); err != nil {
-					errs = append(errs, fmt.Errorf("cx: stop %s/%s: %w", g.name, d.Name, err))
-				}
-				cancel()
+	// Stop in reverse build order
+	for i := len(c.buildOrder) - 1; i >= 0; i-- {
+		key := c.buildOrder[i]
+		p := c.providers[key]
+		if s, ok := p.value.(Stopper); ok {
+			stopCtx, cancel := context.WithTimeout(ctx, c.stopTimeout)
+			if err := s.Stop(stopCtx); err != nil {
+				errs = append(errs, fmt.Errorf("cx: stop %s: %w", key, err))
 			}
+			cancel()
 		}
 	}
 
@@ -533,9 +436,16 @@ func (c *Container) Stop(ctx context.Context) error {
 		}
 	}
 
+	// Reset build state for potential Restart.
 	c.mu.Lock()
 	c.state = StateStopped
+	for _, p := range c.providers {
+		p.built = false
+		p.value = nil
+	}
+	c.buildOrder = c.buildOrder[:0]
 	c.mu.Unlock()
+
 	return errors.Join(errs...)
 }
 
@@ -548,32 +458,33 @@ func (c *Container) Restart(ctx context.Context) error {
 }
 
 // ---------------------------------------------------------------------------
-// Health check
+// Health check / Metrics
 // ---------------------------------------------------------------------------
 
-// HealthCheck runs the Check method of every component that implements Checker
-// and returns an aggregated report.
+// HealthCheck runs Check on every value that implements [Checker] and returns
+// an aggregated report.
 func (c *Container) HealthCheck(ctx context.Context) *HealthReport {
-	groups := c.sortedGroups()
-	report := &HealthReport{Healthy: true}
+	c.mu.RLock()
+	order := make([]string, len(c.buildOrder))
+	copy(order, c.buildOrder)
+	c.mu.RUnlock()
 
-	for _, g := range groups {
-		descs := func() []*Descriptor {
-			c.mu.RLock()
-			defer c.mu.RUnlock()
-			return g.getSorted()
-		}()
-		for _, d := range descs {
-			ch := ComponentHealth{Name: d.Name, Healthy: true}
-			if checker, ok := d.Instance.(Checker); ok {
-				if err := checker.Check(ctx); err != nil {
-					ch.Healthy = false
-					ch.Error = err
-					report.Healthy = false
-				}
+	report := &HealthReport{Healthy: true}
+	for _, key := range order {
+		c.mu.RLock()
+		p := c.providers[key]
+		val := p.value
+		c.mu.RUnlock()
+
+		ch := ComponentHealth{Key: key, Healthy: true}
+		if checker, ok := val.(Checker); ok {
+			if err := checker.Check(ctx); err != nil {
+				ch.Healthy = false
+				ch.Error = err
+				report.Healthy = false
 			}
-			report.Components = append(report.Components, ch)
 		}
+		report.Components = append(report.Components, ch)
 	}
 	return report
 }
@@ -582,41 +493,43 @@ func (c *Container) HealthCheck(ctx context.Context) *HealthReport {
 func (c *Container) Metrics() *ContainerMetrics {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	total := 0
-	for _, g := range c.groups {
-		total += len(g.components)
-	}
 	return &ContainerMetrics{
-		GroupCount:     len(c.groups),
-		ComponentCount: total,
+		ComponentCount: len(c.providers),
 		State:          c.state,
 	}
 }
 
-// DependencyGraph returns the resolved dependency graph produced during the
-// last successful Start. Each key is a component name and the value is the
-// sorted list of component names it depends on. Returns nil if the container
-// has never been started or has no dependency edges.
-func (c *Container) DependencyGraph() map[string][]string {
+// ---------------------------------------------------------------------------
+// Query helpers
+// ---------------------------------------------------------------------------
+
+// Keys returns all registered keys in registration order.
+func (c *Container) Keys() []string {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.depGraph
+	out := make([]string, len(c.keys))
+	copy(out, c.keys)
+	return out
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-// sortedGroups returns groups sorted by their order field (ascending).
-func (c *Container) sortedGroups() []*group {
+// Has reports whether a key is registered.
+func (c *Container) Has(key string) bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	groups := make([]*group, 0, len(c.groups))
-	for _, g := range c.groups {
-		groups = append(groups, g)
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		return groups[i].order < groups[j].order
-	})
-	return groups
+	_, exists := c.providers[key]
+	return exists
+}
+
+// Count returns the total number of registered components.
+func (c *Container) Count() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.providers)
+}
+
+// State returns the current lifecycle state.
+func (c *Container) State() State {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.state
 }

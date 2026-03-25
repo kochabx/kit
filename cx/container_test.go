@@ -3,749 +3,609 @@ package cx
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
-// Mock helpers
+// Test helpers
 // ---------------------------------------------------------------------------
 
-type mockComponent struct {
-	name    string
-	started bool
-	stopped bool
-	healthy bool
-	order   int
+type testConfig struct {
+	DSN string
 }
 
-func (m *mockComponent) Name() string { return m.name }
-func (m *mockComponent) Order() int   { return m.order }
-func (m *mockComponent) Start(_ context.Context) error {
-	m.started = true
-	return nil
+type testDB struct {
+	cfg     *testConfig
+	started bool
+	stopped bool
 }
-func (m *mockComponent) Stop(_ context.Context) error {
-	m.stopped = true
-	return nil
+
+func (d *testDB) Start(context.Context) error { d.started = true; return nil }
+func (d *testDB) Stop(context.Context) error  { d.stopped = true; return nil }
+
+type testService struct {
+	db      *testDB
+	healthy bool
+	started bool
+	stopped bool
 }
-func (m *mockComponent) Check(_ context.Context) error {
-	if !m.healthy {
+
+func (s *testService) Start(context.Context) error { s.started = true; return nil }
+func (s *testService) Stop(context.Context) error  { s.stopped = true; return nil }
+func (s *testService) Check(context.Context) error {
+	if !s.healthy {
 		return errors.New("unhealthy")
 	}
 	return nil
 }
 
-// mockProvider both provides a dependency and is a Component.
-type mockProvider struct {
-	mockComponent
-	depName string
-	depVal  any
+// failStarter always fails on Start.
+type failStarter struct{ stopped bool }
+
+func (f *failStarter) Start(context.Context) error { return errors.New("start failed") }
+func (f *failStarter) Stop(context.Context) error  { f.stopped = true; return nil }
+
+// orderRecorder records Start/Stop call order.
+type orderRecorder struct {
+	key    string
+	record *[]string
 }
 
-func (p *mockProvider) ProvidesDependency() string { return p.depName }
-func (p *mockProvider) GetDependency() any         { return p.depVal }
-
-// mockConsumer requires a dependency and records injected values.
-type mockConsumer struct {
-	mockComponent
-	required []string
-	injected map[string]any
+func (o *orderRecorder) Start(context.Context) error {
+	*o.record = append(*o.record, "start:"+o.key)
+	return nil
 }
-
-func (c *mockConsumer) RequiredDependencies() []string { return c.required }
-func (c *mockConsumer) SetDependency(name string, dep any) error {
-	if c.injected == nil {
-		c.injected = make(map[string]any)
-	}
-	c.injected[name] = dep
+func (o *orderRecorder) Stop(context.Context) error {
+	*o.record = append(*o.record, "stop:"+o.key)
 	return nil
 }
 
 // ---------------------------------------------------------------------------
-// Registration tests
+// Registration
 // ---------------------------------------------------------------------------
 
-func TestProvide_OK(t *testing.T) {
+func TestProvide_Get_Basic(t *testing.T) {
 	c := New()
-	comp := &mockComponent{name: "svc"}
-	if err := c.Provide(ServiceGroup, comp); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !c.Has(ServiceGroup, "svc") {
-		t.Fatal("component not found after Provide")
-	}
+	err := Provide(c, "config", func(_ *Container) (*testConfig, error) {
+		return &testConfig{DSN: "postgres://localhost"}, nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, c.Start(context.Background()))
+
+	cfg, err := Get[*testConfig](c, "config")
+	require.NoError(t, err)
+	assert.Equal(t, "postgres://localhost", cfg.DSN)
 }
 
-func TestProvide_GroupNotFound(t *testing.T) {
+func TestSupply_Get(t *testing.T) {
 	c := New()
-	err := c.Provide("nonexistent", &mockComponent{name: "x"})
-	if !errors.Is(err, ErrGroupNotFound) {
-		t.Fatalf("want ErrGroupNotFound, got %v", err)
-	}
+	cfg := &testConfig{DSN: "sqlite://memory"}
+	require.NoError(t, Supply(c, "config", cfg))
+	require.NoError(t, c.Start(context.Background()))
+
+	got, err := Get[*testConfig](c, "config")
+	require.NoError(t, err)
+	assert.Same(t, cfg, got)
 }
 
-func TestProvide_AlreadyExists(t *testing.T) {
+func TestProvide_DuplicateKey(t *testing.T) {
 	c := New()
-	comp := &mockComponent{name: "svc"}
-	_ = c.Provide(ServiceGroup, comp)
-	err := c.Provide(ServiceGroup, comp)
-	if !errors.Is(err, ErrComponentAlreadyExists) {
-		t.Fatalf("want ErrComponentAlreadyExists, got %v", err)
-	}
+	require.NoError(t, Supply(c, "x", 1))
+	err := Supply(c, "x", 2)
+	assert.ErrorIs(t, err, ErrComponentExists)
 }
 
-func TestMustProvide_Panics(t *testing.T) {
+func TestProvide_EmptyKey(t *testing.T) {
 	c := New()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic but did not panic")
+	err := Supply(c, "", 1)
+	assert.ErrorIs(t, err, ErrInvalidKey)
+}
+
+func TestProvide_NotIdle(t *testing.T) {
+	c := New()
+	require.NoError(t, Supply(c, "x", 1))
+	require.NoError(t, c.Start(context.Background()))
+	err := Supply(c, "y", 2)
+	assert.ErrorIs(t, err, ErrContainerNotIdle)
+}
+
+func TestMustProvide_Panic(t *testing.T) {
+	c := New()
+	require.NoError(t, Supply(c, "x", 1))
+	assert.Panics(t, func() {
+		MustSupply(c, "x", 2) // duplicate
+	})
+}
+
+func TestGet_NotFound(t *testing.T) {
+	c := New()
+	require.NoError(t, c.Start(context.Background()))
+	_, err := Get[int](c, "missing")
+	assert.ErrorIs(t, err, ErrComponentNotFound)
+}
+
+func TestGet_TypeMismatch(t *testing.T) {
+	c := New()
+	require.NoError(t, Supply(c, "x", 42))
+	require.NoError(t, c.Start(context.Background()))
+	_, err := Get[string](c, "x")
+	assert.ErrorIs(t, err, ErrTypeMismatch)
+}
+
+func TestGet_BeforeStart(t *testing.T) {
+	c := New()
+	require.NoError(t, Supply(c, "x", 42))
+	_, err := Get[int](c, "x")
+	assert.ErrorIs(t, err, ErrComponentNotFound)
+}
+
+func TestMustGet_Panic(t *testing.T) {
+	c := New()
+	require.NoError(t, c.Start(context.Background()))
+	assert.Panics(t, func() {
+		MustGet[int](c, "missing")
+	})
+}
+
+func TestGet_InterfaceType(t *testing.T) {
+	c := New()
+	require.NoError(t, Provide(c, "svc", func(_ *Container) (*testService, error) {
+		return &testService{healthy: true}, nil
+	}))
+	require.NoError(t, c.Start(context.Background()))
+
+	// Get as Checker interface
+	checker, err := Get[Checker](c, "svc")
+	require.NoError(t, err)
+	assert.NoError(t, checker.Check(context.Background()))
+}
+
+// ---------------------------------------------------------------------------
+// Dependency resolution & build order
+// ---------------------------------------------------------------------------
+
+func TestStart_DependencyOrder(t *testing.T) {
+	c := New()
+	var order []string
+
+	Provide(c, "service", func(c *Container) (*orderRecorder, error) {
+		_ = MustGet[*orderRecorder](c, "db") // depends on db
+		r := &orderRecorder{key: "service", record: &order}
+		return r, nil
+	})
+	Provide(c, "db", func(c *Container) (*orderRecorder, error) {
+		_ = MustGet[*orderRecorder](c, "config") // depends on config
+		r := &orderRecorder{key: "db", record: &order}
+		return r, nil
+	})
+	Provide(c, "config", func(_ *Container) (*orderRecorder, error) {
+		r := &orderRecorder{key: "config", record: &order}
+		return r, nil
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+
+	// Start order should be: config → db → service (dependency order)
+	assert.Equal(t, []string{"start:config", "start:db", "start:service"}, order)
+
+	order = nil
+	require.NoError(t, c.Stop(context.Background()))
+
+	// Stop order should be reverse: service → db → config
+	assert.Equal(t, []string{"stop:service", "stop:db", "stop:config"}, order)
+}
+
+func TestStart_DeepDependencyChain(t *testing.T) {
+	c := New()
+	var buildOrder []string
+
+	Provide(c, "a", func(c *Container) (string, error) {
+		MustGet[string](c, "b")
+		buildOrder = append(buildOrder, "a")
+		return "a", nil
+	})
+	Provide(c, "b", func(c *Container) (string, error) {
+		MustGet[string](c, "c")
+		buildOrder = append(buildOrder, "b")
+		return "b", nil
+	})
+	Provide(c, "c", func(_ *Container) (string, error) {
+		buildOrder = append(buildOrder, "c")
+		return "c", nil
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	assert.Equal(t, []string{"c", "b", "a"}, buildOrder)
+}
+
+func TestStart_CircularDependency(t *testing.T) {
+	c := New()
+	Provide(c, "a", func(c *Container) (int, error) {
+		_, err := Get[int](c, "b")
+		if err != nil {
+			return 0, err
 		}
-	}()
-	c.MustProvide("nonexistent", &mockComponent{name: "x"})
-}
-
-func TestProvideGroup_OK(t *testing.T) {
-	c := New()
-	if err := c.ProvideGroup("custom", 999); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !c.HasGroup("custom") {
-		t.Fatal("group not found after ProvideGroup")
-	}
-}
-
-func TestProvideGroup_AlreadyExists(t *testing.T) {
-	c := New()
-	err := c.ProvideGroup(ServiceGroup, 0)
-	if !errors.Is(err, ErrGroupAlreadyExists) {
-		t.Fatalf("want ErrGroupAlreadyExists, got %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Retrieval tests
-// ---------------------------------------------------------------------------
-
-func TestGet_OK(t *testing.T) {
-	c := New()
-	comp := &mockComponent{name: "db"}
-	_ = c.Provide(DatabaseGroup, comp)
-	got, err := c.Get(DatabaseGroup, "db")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != comp {
-		t.Fatal("retrieved wrong component")
-	}
-}
-
-func TestGet_ComponentNotFound(t *testing.T) {
-	c := New()
-	_, err := c.Get(ServiceGroup, "missing")
-	if !errors.Is(err, ErrComponentNotFound) {
-		t.Fatalf("want ErrComponentNotFound, got %v", err)
-	}
-}
-
-func TestMustGet_Panics(t *testing.T) {
-	c := New()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Fatal("expected panic but did not panic")
+		return 1, nil
+	})
+	Provide(c, "b", func(c *Container) (int, error) {
+		_, err := Get[int](c, "a")
+		if err != nil {
+			return 0, err
 		}
-	}()
-	c.MustGet(ServiceGroup, "missing")
+		return 2, nil
+	})
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrCircularDependency)
+	assert.Contains(t, err.Error(), "a → b → a")
 }
 
-func TestGetAll_Sorted(t *testing.T) {
+func TestStart_CircularDependency_ThreeWay(t *testing.T) {
 	c := New()
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "b", order: 2})
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "a", order: 1})
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "c", order: 3})
+	Provide(c, "a", func(c *Container) (int, error) {
+		_, err := Get[int](c, "b")
+		if err != nil {
+			return 0, err
+		}
+		return 1, nil
+	})
+	Provide(c, "b", func(c *Container) (int, error) {
+		_, err := Get[int](c, "c")
+		if err != nil {
+			return 0, err
+		}
+		return 2, nil
+	})
+	Provide(c, "c", func(c *Container) (int, error) {
+		_, err := Get[int](c, "a")
+		if err != nil {
+			return 0, err
+		}
+		return 3, nil
+	})
 
-	all, err := c.GetAll(ServiceGroup)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(all) != 3 {
-		t.Fatalf("want 3 components, got %d", len(all))
-	}
-	if all[0].Name() != "a" || all[1].Name() != "b" || all[2].Name() != "c" {
-		t.Fatal("components not returned in order")
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrCircularDependency)
+	assert.Contains(t, err.Error(), "a → b → c → a")
+}
+
+func TestStart_ConstructorError(t *testing.T) {
+	c := New()
+	Provide(c, "bad", func(_ *Container) (int, error) {
+		return 0, errors.New("init failed")
+	})
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "construct bad")
+	assert.Contains(t, err.Error(), "init failed")
+	assert.Equal(t, StateFailed, c.State())
+}
+
+func TestStart_LazyConstruction(t *testing.T) {
+	c := New()
+	constructed := false
+	Provide(c, "x", func(_ *Container) (int, error) {
+		constructed = true
+		return 42, nil
+	})
+
+	// Constructor NOT called at registration time
+	assert.False(t, constructed)
+
+	require.NoError(t, c.Start(context.Background()))
+	// Constructor called during Start
+	assert.True(t, constructed)
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle state machine
+// ---------------------------------------------------------------------------
+
+func TestStart_StateTransitions(t *testing.T) {
+	c := New()
+	assert.Equal(t, StateNew, c.State())
+
+	require.NoError(t, Supply(c, "x", 1))
+	require.NoError(t, c.Start(context.Background()))
+	assert.Equal(t, StateRunning, c.State())
+
+	require.NoError(t, c.Stop(context.Background()))
+	assert.Equal(t, StateStopped, c.State())
+}
+
+func TestStart_DoubleStart(t *testing.T) {
+	c := New()
+	require.NoError(t, c.Start(context.Background()))
+	err := c.Start(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot start")
+}
+
+func TestStop_NotRunning(t *testing.T) {
+	c := New()
+	err := c.Stop(context.Background())
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot stop")
+}
+
+// ---------------------------------------------------------------------------
+// Start rollback
+// ---------------------------------------------------------------------------
+
+func TestStart_Rollback(t *testing.T) {
+	c := New()
+
+	good := &testDB{}
+	Provide(c, "good", func(_ *Container) (*testDB, error) {
+		return good, nil
+	})
+	Provide(c, "bad", func(_ *Container) (*failStarter, error) {
+		return &failStarter{}, nil
+	})
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "start bad")
+
+	// "good" should have been rolled back (stopped)
+	assert.True(t, good.stopped)
+	assert.Equal(t, StateFailed, c.State())
+}
+
+// ---------------------------------------------------------------------------
+// Stop
+// ---------------------------------------------------------------------------
+
+func TestStop_ErrorAggregation(t *testing.T) {
+	c := New()
+	Provide(c, "a", func(_ *Container) (*badStopper, error) {
+		return &badStopper{name: "a"}, nil
+	})
+	Provide(c, "b", func(_ *Container) (*badStopper, error) {
+		return &badStopper{name: "b"}, nil
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	err := c.Stop(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "stop a")
+	assert.Contains(t, err.Error(), "stop b")
+	assert.Equal(t, StateStopped, c.State())
+}
+
+type badStopper struct{ name string }
+
+func (b *badStopper) Stop(context.Context) error {
+	return fmt.Errorf("%s stop error", b.name)
+}
+
+func TestStop_Timeout(t *testing.T) {
+	c := New(WithStopTimeout(50 * time.Millisecond))
+	Provide(c, "slow", func(_ *Container) (*slowStopper, error) {
+		return &slowStopper{}, nil
+	})
+	require.NoError(t, c.Start(context.Background()))
+
+	err := c.Stop(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "context deadline exceeded")
+}
+
+type slowStopper struct{}
+
+func (s *slowStopper) Stop(ctx context.Context) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(5 * time.Second):
+		return nil
 	}
 }
 
-func TestInvoke_TypeSafe(t *testing.T) {
-	c := New()
-	comp := &mockComponent{name: "cfg"}
-	_ = c.Provide(ConfigGroup, comp)
+// ---------------------------------------------------------------------------
+// Restart
+// ---------------------------------------------------------------------------
 
-	got, err := Invoke[*mockComponent](c, ConfigGroup, "cfg")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != comp {
-		t.Fatal("wrong value returned")
+func TestRestart(t *testing.T) {
+	c := New()
+	callCount := 0
+	Provide(c, "x", func(_ *Container) (int, error) {
+		callCount++
+		return callCount, nil
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	v1 := MustGet[int](c, "x")
+	assert.Equal(t, 1, v1)
+
+	require.NoError(t, c.Restart(context.Background()))
+	v2 := MustGet[int](c, "x")
+	assert.Equal(t, 2, v2) // constructor called again
+	assert.Equal(t, StateRunning, c.State())
+}
+
+func TestProvide_AfterStop(t *testing.T) {
+	c := New()
+	require.NoError(t, Supply(c, "x", 1))
+	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Stop(context.Background()))
+
+	// Should be able to register new components after Stop
+	require.NoError(t, Supply(c, "y", 2))
+	require.NoError(t, c.Start(context.Background()))
+
+	v, err := Get[int](c, "y")
+	require.NoError(t, err)
+	assert.Equal(t, 2, v)
+}
+
+// ---------------------------------------------------------------------------
+// Health check
+// ---------------------------------------------------------------------------
+
+func TestHealthCheck(t *testing.T) {
+	c := New()
+	Provide(c, "healthy", func(_ *Container) (*testService, error) {
+		return &testService{healthy: true}, nil
+	})
+	Provide(c, "unhealthy", func(_ *Container) (*testService, error) {
+		return &testService{healthy: false}, nil
+	})
+	Provide(c, "no-checker", func(_ *Container) (int, error) {
+		return 42, nil
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	report := c.HealthCheck(context.Background())
+
+	assert.False(t, report.Healthy)
+	assert.Len(t, report.Components, 3)
+
+	// Find specific results
+	for _, ch := range report.Components {
+		switch ch.Key {
+		case "healthy":
+			assert.True(t, ch.Healthy)
+			assert.NoError(t, ch.Error)
+		case "unhealthy":
+			assert.False(t, ch.Healthy)
+			assert.Error(t, ch.Error)
+		case "no-checker":
+			assert.True(t, ch.Healthy) // no Checker interface → healthy
+		}
 	}
 }
 
-func TestInvoke_WrongType(t *testing.T) {
-	c := New()
-	_ = c.Provide(ConfigGroup, &mockComponent{name: "cfg"})
-	_, err := Invoke[*mockProvider](c, ConfigGroup, "cfg")
-	if !errors.Is(err, ErrInvalidComponent) {
-		t.Fatalf("want ErrInvalidComponent, got %v", err)
-	}
+// ---------------------------------------------------------------------------
+// Hooks
+// ---------------------------------------------------------------------------
+
+func TestHooks_Order(t *testing.T) {
+	var order []string
+	c := New(
+		WithOnStart(func(context.Context) error {
+			order = append(order, "onStart")
+			return nil
+		}),
+		WithOnStarted(func(context.Context) error {
+			order = append(order, "onStarted")
+			return nil
+		}),
+		WithOnStopping(func(context.Context) error {
+			order = append(order, "onStopping")
+			return nil
+		}),
+		WithOnStop(func(context.Context) error {
+			order = append(order, "onStop")
+			return nil
+		}),
+	)
+
+	Provide(c, "svc", func(_ *Container) (*orderRecorder, error) {
+		return &orderRecorder{key: "svc", record: &order}, nil
+	})
+
+	require.NoError(t, c.Start(context.Background()))
+	require.NoError(t, c.Stop(context.Background()))
+
+	assert.Equal(t, []string{
+		"onStart",
+		"start:svc",
+		"onStarted",
+		"onStopping",
+		"stop:svc",
+		"onStop",
+	}, order)
+}
+
+func TestHooks_OnStartError(t *testing.T) {
+	c := New(WithOnStart(func(context.Context) error {
+		return errors.New("hook failed")
+	}))
+	Supply(c, "x", 1)
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "onStart hook")
+	assert.Equal(t, StateFailed, c.State())
+}
+
+func TestHooks_OnStartedError_Rollback(t *testing.T) {
+	c := New(WithOnStarted(func(context.Context) error {
+		return errors.New("hook failed")
+	}))
+
+	svc := &testDB{}
+	Provide(c, "svc", func(_ *Container) (*testDB, error) { return svc, nil })
+
+	err := c.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "onStarted hook")
+	assert.True(t, svc.stopped) // rollback
 }
 
 // ---------------------------------------------------------------------------
 // Query helpers
 // ---------------------------------------------------------------------------
 
-func TestCount(t *testing.T) {
+func TestKeys_Has_Count(t *testing.T) {
 	c := New()
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "a"})
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "b"})
-	if n := c.Count(); n != 2 {
-		t.Fatalf("want 2, got %d", n)
-	}
+	Supply(c, "a", 1)
+	Supply(c, "b", 2)
+	Supply(c, "c", 3)
+
+	assert.Equal(t, []string{"a", "b", "c"}, c.Keys())
+	assert.True(t, c.Has("a"))
+	assert.False(t, c.Has("z"))
+	assert.Equal(t, 3, c.Count())
 }
-
-// ---------------------------------------------------------------------------
-// Lifecycle tests
-// ---------------------------------------------------------------------------
-
-func TestStart_Stop(t *testing.T) {
-	c := New()
-	comp := &mockComponent{name: "svc", healthy: true}
-	_ = c.Provide(ServiceGroup, comp)
-
-	ctx := context.Background()
-	if err := c.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if c.State() != StateRunning {
-		t.Fatalf("expected Running, got %s", c.State())
-	}
-	if !comp.started {
-		t.Fatal("component was not started")
-	}
-
-	if err := c.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-	if c.State() != StateStopped {
-		t.Fatalf("expected Stopped, got %s", c.State())
-	}
-	if !comp.stopped {
-		t.Fatal("component was not stopped")
-	}
-}
-
-func TestStart_GroupOrder(t *testing.T) {
-	// Use hooks to record start order.
-	order2 := make([]string, 0)
-	c2 := New(
-		WithOnStart(func(_ context.Context) error {
-			order2 = append(order2, "onStart")
-			return nil
-		}),
-		WithOnStarted(func(_ context.Context) error {
-			order2 = append(order2, "onStarted")
-			return nil
-		}),
-	)
-	_ = c2.Provide(ConfigGroup, &mockComponent{name: "cfg"})
-	_ = c2.Provide(DatabaseGroup, &mockComponent{name: "db"})
-
-	if err := c2.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if order2[0] != "onStart" {
-		t.Fatalf("expected onStart first, got %s", order2[0])
-	}
-	if order2[len(order2)-1] != "onStarted" {
-		t.Fatalf("expected onStarted last, got %s", order2[len(order2)-1])
-	}
-}
-
-func TestOnStartedCalledOnce(t *testing.T) {
-	// This test guards against the double-call bug where onStarted hooks would
-	// be invoked both during component init and after all groups finish.
-	count := 0
-	c := New(
-		WithOnStarted(func(_ context.Context) error {
-			count++
-			return nil
-		}),
-	)
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "svc"})
-
-	if err := c.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("onStarted hook called %d times, want exactly 1", count)
-	}
-}
-
-func TestStart_InvalidState(t *testing.T) {
-	c := New()
-	_ = c.Start(context.Background())
-	// Second call while Running should fail.
-	err := c.Start(context.Background())
-	if err == nil {
-		t.Fatal("expected error on second Start")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Dependency injection tests
-// ---------------------------------------------------------------------------
-
-func TestDependencyInjection(t *testing.T) {
-	c := New()
-
-	prov := &mockProvider{
-		mockComponent: mockComponent{name: "token-provider"},
-		depName:       "auth-token",
-		depVal:        "secret-value",
-	}
-	cons := &mockConsumer{
-		mockComponent: mockComponent{name: "api-client"},
-		required:      []string{"auth-token"},
-	}
-
-	_ = c.Provide(ServiceGroup, prov)
-	_ = c.Provide(ServiceGroup, cons)
-
-	if err := c.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if cons.injected["auth-token"] != "secret-value" {
-		t.Fatalf("dependency not injected, got %v", cons.injected)
-	}
-}
-
-// TestCircularDependencyDetected is covered by TestCheckCycles_Direct.
-// Real-component cycle detection is tested there via the graph directly.
-
-func TestCheckCycles_Direct(t *testing.T) {
-	// Build a simple A depends on B, B depends on A cycle manually.
-	a := &node{comp: &mockComponent{name: "a"}}
-	b := &node{comp: &mockComponent{name: "b"}}
-	a.deps = []*node{b}
-	b.deps = []*node{a}
-	graph := map[string]*node{"a": a, "b": b}
-	if err := checkCycles(graph); !errors.Is(err, ErrCircularDependency) {
-		t.Fatalf("want ErrCircularDependency, got %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Health check tests
-// ---------------------------------------------------------------------------
-
-func TestHealthCheck(t *testing.T) {
-	c := New()
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "healthy", healthy: true})
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "unhealthy", healthy: false})
-
-	report := c.HealthCheck(context.Background())
-	if report.Healthy {
-		t.Fatal("expected overall unhealthy report")
-	}
-	found := false
-	for _, ch := range report.Components {
-		if ch.Name == "unhealthy" && !ch.Healthy {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("unhealthy component not in report")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Global C variable
-// ---------------------------------------------------------------------------
-
-func TestGlobalC(t *testing.T) {
-	if C == nil {
-		t.Fatal("global C must be non-nil after package init")
-	}
-	if C.State() != StateNew {
-		t.Fatalf("expected StateNew, got %s", C.State())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Restart tests
-// ---------------------------------------------------------------------------
-
-func TestRestart(t *testing.T) {
-	c := New()
-	comp := &mockComponent{name: "svc", healthy: true}
-	_ = c.Provide(ServiceGroup, comp)
-
-	ctx := context.Background()
-	if err := c.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if !comp.started {
-		t.Fatal("component should be started")
-	}
-
-	comp.started = false // reset to verify restart triggers Start again
-	if err := c.Restart(ctx); err != nil {
-		t.Fatalf("Restart: %v", err)
-	}
-	if c.State() != StateRunning {
-		t.Fatalf("expected Running after Restart, got %s", c.State())
-	}
-	if !comp.stopped {
-		t.Fatal("component should have been stopped during Restart")
-	}
-	if !comp.started {
-		t.Fatal("component should have been re-started during Restart")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Metrics tests
-// ---------------------------------------------------------------------------
 
 func TestMetrics(t *testing.T) {
 	c := New()
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "a"})
-	_ = c.Provide(DatabaseGroup, &mockComponent{name: "b"})
+	Supply(c, "x", 1)
+	Supply(c, "y", 2)
 
 	m := c.Metrics()
-	if m.ComponentCount != 2 {
-		t.Fatalf("want 2 components, got %d", m.ComponentCount)
-	}
-	if m.GroupCount != 5 { // 5 default groups
-		t.Fatalf("want 5 groups, got %d", m.GroupCount)
-	}
-	if m.State != StateNew {
-		t.Fatalf("want StateNew, got %s", m.State)
-	}
+	assert.Equal(t, 2, m.ComponentCount)
+	assert.Equal(t, StateNew, m.State)
 }
 
 // ---------------------------------------------------------------------------
-// Stop hooks tests
+// Concurrency
 // ---------------------------------------------------------------------------
 
-func TestOnStoppingAndOnStop(t *testing.T) {
-	var order []string
-	c := New(
-		WithOnStopping(func(_ context.Context) error {
-			order = append(order, "onStopping")
-			return nil
-		}),
-		WithOnStop(func(_ context.Context) error {
-			order = append(order, "onStop")
-			return nil
-		}),
-	)
-	comp := &mockComponent{name: "svc", healthy: true}
-	_ = c.Provide(ServiceGroup, comp)
-
-	ctx := context.Background()
-	_ = c.Start(ctx)
-	_ = c.Stop(ctx)
-
-	if len(order) != 2 {
-		t.Fatalf("expected 2 hook calls, got %d", len(order))
-	}
-	if order[0] != "onStopping" {
-		t.Fatalf("expected onStopping first, got %s", order[0])
-	}
-	if order[1] != "onStop" {
-		t.Fatalf("expected onStop last, got %s", order[1])
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Stop timeout tests
-// ---------------------------------------------------------------------------
-
-type slowStopper struct {
-	mockComponent
-	delay time.Duration
-}
-
-func (s *slowStopper) Stop(ctx context.Context) error {
-	select {
-	case <-time.After(s.delay):
-		s.stopped = true
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func TestStopTimeout(t *testing.T) {
-	c := New(WithStopTimeout(50 * time.Millisecond))
-	comp := &slowStopper{
-		mockComponent: mockComponent{name: "slow"},
-		delay:         5 * time.Second, // way longer than the 50ms timeout
-	}
-	_ = c.Provide(ServiceGroup, comp)
-
-	ctx := context.Background()
-	_ = c.Start(ctx)
-	// Stop should not hang — the per-component timeout should fire.
-	_ = c.Stop(ctx)
-
-	if c.State() != StateStopped {
-		t.Fatalf("expected Stopped, got %s", c.State())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Groups / HasGroup / Query helpers
-// ---------------------------------------------------------------------------
-
-func TestGroups(t *testing.T) {
+func TestConcurrentGet(t *testing.T) {
 	c := New()
-	groups := c.Groups()
-	if len(groups) != 5 {
-		t.Fatalf("expected 5 default groups, got %d", len(groups))
-	}
-	_ = c.ProvideGroup("custom", 999)
-	groups = c.Groups()
-	if len(groups) != 6 {
-		t.Fatalf("expected 6 groups after adding custom, got %d", len(groups))
-	}
-}
+	Supply(c, "x", 42)
+	require.NoError(t, c.Start(context.Background()))
 
-func TestStop_InvalidState(t *testing.T) {
-	c := New()
-	// Stop on a new container should fail.
-	err := c.Stop(context.Background())
-	if err == nil {
-		t.Fatal("expected error when stopping a non-running container")
+	var wg sync.WaitGroup
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			v, err := Get[int](c, "x")
+			assert.NoError(t, err)
+			assert.Equal(t, 42, v)
+		}()
 	}
+	wg.Wait()
 }
 
 // ---------------------------------------------------------------------------
-// Start rollback tests
+// Global container
 // ---------------------------------------------------------------------------
 
-type failingStarter struct {
-	mockComponent
-	failOnStart bool
-}
-
-func (f *failingStarter) Start(_ context.Context) error {
-	if f.failOnStart {
-		return errors.New("start failed")
-	}
-	f.started = true
-	return nil
-}
-
-func (f *failingStarter) Stop(_ context.Context) error {
-	f.stopped = true
-	return nil
-}
-
-func TestStart_RollbackOnFailure(t *testing.T) {
-	c := New()
-	ok1 := &failingStarter{mockComponent: mockComponent{name: "ok1", order: 1}}
-	ok2 := &failingStarter{mockComponent: mockComponent{name: "ok2", order: 2}}
-	bad := &failingStarter{mockComponent: mockComponent{name: "bad", order: 3}, failOnStart: true}
-
-	_ = c.Provide(ServiceGroup, ok1)
-	_ = c.Provide(ServiceGroup, ok2)
-	_ = c.Provide(ServiceGroup, bad)
-
-	err := c.Start(context.Background())
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	// ok1 and ok2 should have been rolled back (stopped).
-	if !ok1.stopped {
-		t.Fatal("ok1 should have been stopped during rollback")
-	}
-	if !ok2.stopped {
-		t.Fatal("ok2 should have been stopped during rollback")
-	}
-	if c.State() != StateError {
-		t.Fatalf("expected StateError, got %s", c.State())
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Duplicate provider tests
-// ---------------------------------------------------------------------------
-
-func TestDuplicateProvider(t *testing.T) {
-	c := New()
-	p1 := &mockProvider{
-		mockComponent: mockComponent{name: "p1"},
-		depName:       "shared-dep",
-		depVal:        "val1",
-	}
-	p2 := &mockProvider{
-		mockComponent: mockComponent{name: "p2"},
-		depName:       "shared-dep",
-		depVal:        "val2",
-	}
-	_ = c.Provide(ServiceGroup, p1)
-	_ = c.Provide(ServiceGroup, p2)
-
-	err := c.Start(context.Background())
-	if !errors.Is(err, ErrDuplicateProvider) {
-		t.Fatalf("want ErrDuplicateProvider, got %v", err)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Stop error aggregation tests
-// ---------------------------------------------------------------------------
-
-type failingStopper struct {
-	mockComponent
-	stopErr error
-}
-
-func (f *failingStopper) Start(_ context.Context) error { return nil }
-func (f *failingStopper) Stop(_ context.Context) error  { return f.stopErr }
-
-func TestStop_AggregatesErrors(t *testing.T) {
-	c := New()
-	s1 := &failingStopper{mockComponent: mockComponent{name: "s1"}, stopErr: errors.New("err1")}
-	s2 := &failingStopper{mockComponent: mockComponent{name: "s2"}, stopErr: errors.New("err2")}
-	_ = c.Provide(ServiceGroup, s1)
-	_ = c.Provide(ServiceGroup, s2)
-
-	_ = c.Start(context.Background())
-	err := c.Stop(context.Background())
-	if err == nil {
-		t.Fatal("expected aggregated error")
-	}
-	// Both errors should be present.
-	msg := err.Error()
-	if !errors.Is(err, err) { // basic sanity
-		t.Fatal("error should be valid")
-	}
-	if len(msg) == 0 {
-		t.Fatal("error message should be non-empty")
-	}
-	// The joined error should contain both component names.
-	if !(containsStr(msg, "s1") && containsStr(msg, "s2")) {
-		t.Fatalf("expected both s1 and s2 in error, got: %s", msg)
-	}
-}
-
-func TestStop_HookErrorsAggregated(t *testing.T) {
-	c := New(
-		WithOnStopping(func(_ context.Context) error { return errors.New("stopping-err") }),
-		WithOnStop(func(_ context.Context) error { return errors.New("stop-err") }),
-	)
-	_ = c.Provide(ServiceGroup, &mockComponent{name: "svc"})
-	_ = c.Start(context.Background())
-	err := c.Stop(context.Background())
-	if err == nil {
-		t.Fatal("expected error from hooks")
-	}
-	msg := err.Error()
-	if !(containsStr(msg, "stopping-err") && containsStr(msg, "stop-err")) {
-		t.Fatalf("expected both hook errors, got: %s", msg)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Provide state guard tests
-// ---------------------------------------------------------------------------
-
-func TestProvide_RejectsWhenRunning(t *testing.T) {
-	c := New()
-	_ = c.Start(context.Background())
-	err := c.Provide(ServiceGroup, &mockComponent{name: "late"})
-	if !errors.Is(err, ErrNotRegisterable) {
-		t.Fatalf("want ErrNotRegisterable, got %v", err)
-	}
-}
-
-func TestProvide_AllowsAfterStop(t *testing.T) {
-	c := New()
-	_ = c.Start(context.Background())
-	_ = c.Stop(context.Background())
-	err := c.Provide(ServiceGroup, &mockComponent{name: "new-svc"})
-	if err != nil {
-		t.Fatalf("Provide after Stop should succeed, got %v", err)
-	}
-}
-
-func TestDependencyGraph(t *testing.T) {
-	c := New()
-	prov := &mockProvider{
-		mockComponent: mockComponent{name: "db"},
-		depName:       "database",
-		depVal:        "pg-conn",
-	}
-	cons := &mockConsumer{
-		mockComponent: mockComponent{name: "svc"},
-		required:      []string{"database"},
-	}
-
-	c.MustProvide(DatabaseGroup, prov)
-	c.MustProvide(ServiceGroup, cons)
-
-	if err := c.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	graph := c.DependencyGraph()
-	if graph == nil {
-		t.Fatal("DependencyGraph returned nil after Start")
-	}
-	// svc depends on db
-	deps, ok := graph["svc"]
-	if !ok {
-		t.Fatal("expected svc in dependency graph")
-	}
-	if len(deps) != 1 || deps[0] != "db" {
-		t.Fatalf("svc deps = %v, want [db]", deps)
-	}
-	// db has no deps
-	dbDeps, ok := graph["db"]
-	if !ok {
-		t.Fatal("expected db in dependency graph")
-	}
-	if len(dbDeps) != 0 {
-		t.Fatalf("db deps = %v, want []", dbDeps)
-	}
-
-	_ = c.Stop(context.Background())
-}
-
-func TestDependencyGraph_BeforeStart(t *testing.T) {
-	c := New()
-	if graph := c.DependencyGraph(); graph != nil {
-		t.Fatalf("DependencyGraph before Start should be nil, got %v", graph)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-func containsStr(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (haystack == needle ||
-		len(needle) == 0 ||
-		findStr(haystack, needle))
-}
-
-func findStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+func TestGlobalC(t *testing.T) {
+	assert.NotNil(t, C)
+	assert.Equal(t, StateNew, C.State())
 }

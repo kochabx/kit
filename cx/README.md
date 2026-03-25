@@ -1,187 +1,185 @@
 # cx
 
-轻量级依赖注入容器，参考 [Uber dig/fx](https://github.com/uber-go/dig) 设计风格，专注于**组件生命周期管理**与**依赖注入**。
+轻量级泛型依赖注入容器，专注于**类型安全**、**惰性构造**与**生命周期管理**。
 
 ## 特性
 
-- 组件按 **Group**（组）分类管理，组间/组内均支持自定义初始化顺序
-- 内置五个默认组：`config → database → service → handler → controller`（按 order 升序启动）
-- 支持 `Provider / Consumer` 接口实现无反射依赖注入，并自动检测循环依赖与重复 Provider
-- 泛型 `Invoke[T]` / `MustInvoke[T]` 提供类型安全检索
-- `MustProvide*` 系列方法可直接在 `init()` 中调用，无需处理 error
-- 完整生命周期钩子：`OnStart / OnStarted / OnStopping / OnStop`
-- Start 失败自动回滚已启动组件；Stop 聚合所有错误而非静默丢弃
-- Provide 状态保护：仅 `StateNew` / `StateStopped` 时允许注册
-- 依赖图导出：`DependencyGraph()` 返回组件间依赖关系
-- 全局实例 `cx.C`，开箱即用
+- **泛型 API** — `Provide[T]` / `Supply[T]` / `Get[T]` 编译期类型安全
+- **惰性构造** — 构造函数在 `Start()` 时按依赖顺序自动调用，无需手动排序
+- **自动依赖排序** — 构造函数中调用 `Get` 获取依赖，容器自动追踪依赖关系并决定 Start/Stop 顺序
+- **循环依赖检测** — 构造阶段自动检测，报错包含完整路径（如 `A → B → C → A`）
+- **生命周期钩子** — `OnStart / OnStarted / OnStopping / OnStop` 四个时机
+- **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序停止
+- **停止错误聚合** — Stop 收集所有错误而非静默丢弃
+- **可选接口** — 值实现 `Starter` / `Stopper` / `Checker` 即可参与生命周期，零强制接口
+- **全局实例** — `cx.C` 开箱即用，`init()` 自注册模式无缝衔接
+- **零反射** — 泛型仅用于类型断言，无 `reflect` 调用
 
 ## 快速上手
 
 ```go
-import "github.com/kochabx/kit/cx"
+package main
 
-type RedisClient struct{ /* ... */ }
-func (r *RedisClient) Name() string                    { return "redis" }
-func (r *RedisClient) Start(ctx context.Context) error { /* connect */ return nil }
-func (r *RedisClient) Stop(ctx context.Context) error  { /* close   */ return nil }
+import (
+    "context"
+    "fmt"
 
-func init() {
-    cx.C.MustProvideDatabase(&RedisClient{})
-}
-
-func main() {
-    if err := cx.C.Start(context.Background()); err != nil {
-        log.Fatal(err)
-    }
-    defer cx.C.Stop(context.Background())
-    // ...
-}
-```
-
-## 接口一览
-
-| 接口 | 方法 | 说明 |
-|------|------|------|
-| `Component` | `Name() string` | 所有组件必须实现 |
-| `Starter` | `Start(ctx) error` | 启动时调用 |
-| `Stopper` | `Stop(ctx) error` | 停止时调用（逆序） |
-| `Checker` | `Check(ctx) error` | 健康检查 |
-| `Orderable` | `Order() int` | 自定义组内启动顺序 |
-| `Provider` | `ProvidesDependency() / GetDependency()` | 提供依赖（内嵌 Component） |
-| `Consumer` | `RequiredDependencies() / SetDependency()` | 声明并接收依赖（内嵌 Component） |
-
-## 默认 Group
-
-| 常量 | 值 | Order |
-|------|----|-------|
-| `ConfigGroup` | `"config"` | -100 |
-| `DatabaseGroup` | `"database"` | -80 |
-| `ServiceGroup` | `"service"` | -60 |
-| `HandlerGroup` | `"handler"` | -40 |
-| `ControllerGroup` | `"controller"` | -20 |
-
-## 注册 API
-
-```go
-// 通用
-c.Provide(groupName, comp, order...)
-c.MustProvide(groupName, comp, order...)
-
-// 便捷方法
-c.MustProvideConfig(comp)
-c.MustProvideDatabase(comp)
-c.MustProvideService(comp)
-c.MustProvideHandler(comp)
-c.MustProvideController(comp)
-
-// 新建自定义 Group
-c.ProvideGroup("custom", 10)
-```
-
-## 检索 API
-
-```go
-comp, err := c.Get(groupName, name)
-comp     := c.MustGet(groupName, name)
-comps, _ := c.GetAll(groupName)
-
-// 类型安全（泛型）
-client, err := cx.Invoke[*RedisClient](c, cx.DatabaseGroup, "redis")
-client      := cx.MustInvoke[*RedisClient](c, cx.DatabaseGroup, "redis")
-```
-
-## 查询 API
-
-```go
-c.Groups()              // 返回所有 group 名称（已排序）
-c.HasGroup("service")   // group 是否存在
-c.Has("service", "svc") // 组件是否存在
-c.Count()               // 所有组件总数
-c.State()               // 当前生命周期状态
-```
-
-## 生命周期
-
-```go
-c := cx.New(
-    cx.WithOnStart(func(ctx context.Context) error { /* before first Start */ return nil }),
-    cx.WithOnStarted(func(ctx context.Context) error { /* after all started */ return nil }),
-    cx.WithOnStopping(func(ctx context.Context) error { /* before first Stop */ return nil }),
-    cx.WithOnStop(func(ctx context.Context) error { /* after all stopped  */ return nil }),
-    cx.WithStopTimeout(10 * time.Second),
+    "github.com/kochabx/kit/cx"
 )
 
-c.Start(ctx)   // 依赖解析 → onStart → 按组启动 → onStarted
-c.Stop(ctx)    // onStopping → 逆序停止 → onStop（错误聚合返回）
-c.Restart(ctx) // Stop + Start
-c.State()      // StateNew / StateStarting / StateRunning / StateStopping / StateStopped / StateError
-```
+type Config struct {
+    DSN string
+}
 
-**Start 失败回滚**：若某组件 Start 失败，已启动的组件会按逆序自动 Stop。
+type DB struct {
+    cfg *Config
+}
 
-**Stop 错误聚合**：所有组件和钩子的 Stop 错误通过 `errors.Join` 聚合返回，不会因单个失败而跳过后续组件。
+func (d *DB) Start(ctx context.Context) error {
+    fmt.Println("DB connected:", d.cfg.DSN)
+    return nil
+}
 
-## 依赖注入
-
-```go
-// Provider — 暴露一个依赖值
-type TokenProvider struct{}
-func (t *TokenProvider) Name() string              { return "token-provider" }
-func (t *TokenProvider) ProvidesDependency() string { return "auth-token" }
-func (t *TokenProvider) GetDependency() any         { return "secret" }
-
-// Consumer — 声明并接收依赖
-type APIClient struct{ token string }
-func (a *APIClient) Name() string                       { return "api-client" }
-func (a *APIClient) RequiredDependencies() []string      { return []string{"auth-token"} }
-func (a *APIClient) SetDependency(name string, v any) error {
-    if name == "auth-token" { a.token = v.(string) }
+func (d *DB) Stop(ctx context.Context) error {
+    fmt.Println("DB disconnected")
     return nil
 }
 
 func init() {
-    cx.C.MustProvideService(&TokenProvider{})
-    cx.C.MustProvideService(&APIClient{})
-}
-// 调用 cx.C.Start(ctx) 时自动完成注入
-```
+    // 注册配置（预构造值）
+    cx.MustSupply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"})
 
-自动检测：**循环依赖**（`ErrCircularDependency`）、**重复 Provider**（`ErrDuplicateProvider`）、**缺失依赖**（`ErrDependencyNotFound`）。
-
-## 依赖图导出
-
-```go
-graph := c.DependencyGraph() // map[string][]string
-// key: 组件名, value: 它所依赖的组件名列表（已排序）
-// 例: {"api-client": ["token-provider"], "token-provider": []}
-```
-
-`Start()` 成功后可用，未启动时返回 `nil`。
-
-## 健康检查与指标
-
-```go
-report := c.HealthCheck(ctx)
-fmt.Println(report.Healthy) // true / false
-for _, ch := range report.Components {
-    fmt.Printf("%s: healthy=%v err=%v\n", ch.Name, ch.Healthy, ch.Error)
+    // 注册数据库（惰性构造函数）
+    cx.MustProvide(cx.C, "db", func(c *cx.Container) (*DB, error) {
+        cfg := cx.MustGet[*Config](c, "config")
+        return &DB{cfg: cfg}, nil
+    })
 }
 
-m := c.Metrics() // ContainerMetrics{GroupCount, ComponentCount, State}
+func main() {
+    ctx := context.Background()
+
+    // 启动：自动按依赖顺序构造 config → db，然后调用 db.Start()
+    if err := cx.C.Start(ctx); err != nil {
+        panic(err)
+    }
+
+    // 类型安全检索
+    db := cx.MustGet[*DB](cx.C, "db")
+    fmt.Printf("DB: %+v\n", db)
+
+    // 停止：逆序调用 db.Stop()
+    if err := cx.C.Stop(ctx); err != nil {
+        panic(err)
+    }
+}
 ```
 
-## 哨兵错误
+## 核心概念
 
-| 错误 | 说明 |
+### 注册
+
+```go
+// 构造函数注册（惰性，Start 时调用）
+cx.Provide[T](c, "key", func(c *cx.Container) (T, error) { ... })
+
+// 预构造值注册
+cx.Supply[T](c, "key", value)
+
+// panic 版本，适合 init()
+cx.MustProvide[T](c, "key", ctor)
+cx.MustSupply[T](c, "key", value)
+```
+
+### 检索
+
+```go
+val, err := cx.Get[T](c, "key")  // 类型安全，返回 error
+val := cx.MustGet[T](c, "key")   // 类型安全，panic on error
+```
+
+### 依赖声明
+
+在构造函数中调用 `Get` 即为声明依赖，容器自动追踪：
+
+```go
+cx.Provide(c, "service", func(c *cx.Container) (*Service, error) {
+    db := cx.MustGet[*DB](c, "db")           // 声明依赖 db
+    cache := cx.MustGet[*Cache](c, "cache")  // 声明依赖 cache
+    return &Service{db: db, cache: cache}, nil
+})
+```
+
+构造顺序自动为：`db, cache → service`。
+
+### 生命周期接口
+
+全部可选，按需实现：
+
+```go
+type Starter interface { Start(ctx context.Context) error }  // 初始化
+type Stopper interface { Stop(ctx context.Context) error }   // 清理
+type Checker interface { Check(ctx context.Context) error }  // 健康检查
+```
+
+### 容器生命周期
+
+```
+StateNew → StateStarting → StateRunning → StateStopping → StateStopped
+                                                ↓
+                                           StateFailed
+```
+
+- **Start**：构造所有组件（惰性递归） → `onStart` 钩子 → 调用 `Starter.Start()`（依赖序） → `onStarted` 钩子
+- **Stop**：`onStopping` 钩子 → 调用 `Stopper.Stop()`（构造逆序） → `onStop` 钩子 → 重置构造状态
+- **Restart**：Stop + Start（构造函数重新调用）
+
+### 容器选项
+
+```go
+c := cx.New(
+    cx.WithStopTimeout(10 * time.Second),  // 每组件停止超时（默认 30s）
+    cx.WithOnStart(func(ctx context.Context) error { ... }),
+    cx.WithOnStarted(func(ctx context.Context) error { ... }),
+    cx.WithOnStopping(func(ctx context.Context) error { ... }),
+    cx.WithOnStop(func(ctx context.Context) error { ... }),
+)
+```
+
+## API 速查
+
+| 函数 | 说明 |
 |------|------|
-| `ErrGroupNotFound` | 指定的 group 不存在 |
-| `ErrComponentNotFound` | 指定的组件不存在 |
-| `ErrComponentAlreadyExists` | 同名组件已注册 |
-| `ErrGroupAlreadyExists` | 同名 group 已存在 |
-| `ErrInvalidComponent` | 组件为 nil 或 Name 为空 |
-| `ErrDependencyNotFound` | Consumer 依赖的 key 无对应 Provider |
-| `ErrCircularDependency` | 检测到依赖循环 |
-| `ErrDuplicateProvider` | 多个 Provider 声明同一 key |
-| `ErrNotRegisterable` | 非 New/Stopped 状态下调用 Provide |
-| `ErrNotRunning` | 非运行状态下执行运行时操作 |
-| `ErrAlreadyStarted` | 容器已启动 |
+| `Provide[T](c, key, ctor)` | 注册惰性构造函数 |
+| `Supply[T](c, key, val)` | 注册预构造值 |
+| `Get[T](c, key)` | 类型安全检索 |
+| `MustGet[T](c, key)` | 检索（panic 版） |
+| `MustProvide[T]` / `MustSupply[T]` | 注册（panic 版） |
+| `c.Start(ctx)` | 构造 + 启动所有组件 |
+| `c.Stop(ctx)` | 逆序停止所有组件 |
+| `c.Restart(ctx)` | Stop + Start |
+| `c.HealthCheck(ctx)` | 聚合健康检查 |
+| `c.Metrics()` | 容器统计 |
+| `c.Keys()` | 所有注册 key（注册序） |
+| `c.Has(key)` | key 是否已注册 |
+| `c.Count()` | 组件总数 |
+| `c.State()` | 当前状态 |
+
+## 错误类型
+
+| 错误 | 场景 |
+|------|------|
+| `ErrComponentNotFound` | Get 时 key 不存在 |
+| `ErrComponentExists` | Provide 时 key 重复 |
+| `ErrCircularDependency` | 构造阶段检测到循环依赖 |
+| `ErrTypeMismatch` | Get[T] 类型断言失败 |
+| `ErrContainerNotIdle` | 非 New/Stopped 状态下注册 |
+| `ErrInvalidKey` | key 为空字符串 |
+
+## 与 cxgen 配合
+
+`cxgen` 工具自动扫描项目中所有导入 `cx` 且包含 `init()` 函数的包，生成空导入文件确保 `init()` 执行：
+
+```bash
+go run ./cmd/cxgen gen ./... -o wire_gen.go
+```
