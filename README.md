@@ -16,7 +16,7 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 |------|------|
 | [app](app/) | 应用生命周期管理，多服务启动、信号处理、优雅关闭 |
 | [config](config/) | 配置加载与热更新，支持 YAML/JSON/TOML、环境变量覆盖、结构体绑定与校验 |
-| [cx](cx/) | 依赖注入容器，支持分组、模块化注册与生命周期管理 |
+| [cx](cx/) | 轻量级泛型依赖注入容器，自动依赖排序、循环检测、启动回滚与生命周期管理 |
 | [errors](errors/) | 结构化错误定义、包装与错误链处理 |
 | [log](log/) | 基于 Zerolog 的结构化日志，支持脱敏、轮转与全局日志器 |
 
@@ -244,17 +244,35 @@ app.New(
 
 ### [cx](cx/README.md)
 
-轻量级依赖注入容器，受 Uber dig/fx 启发：
+轻量级泛型依赖注入容器，专注于类型安全、惰性构造与生命周期管理：
 
-- 组件按 Group 分类管理，内置 `config → database → service → handler → controller` 五组
-- 支持 `Provider / Consumer` 接口实现无反射依赖注入，自动检测循环依赖
-- 完整生命周期钩子：`OnStart / OnStarted / OnStopping / OnStop`
-- 全局实例 `cx.C` 开箱即用，`MustProvide*` 系列方法可在 `init()` 中直接调用
+- **泛型 API** — `Provide[T]` / `Supply[T]` / `Get[T]` 编译期类型安全，零反射
+- **自动依赖排序** — 构造函数中调用 `Get` 即声明依赖，容器自动追踪并决定 Start/Stop 顺序
+- **循环依赖检测** — 构造阶段自动检测，报错包含完整路径（如 `A → B → C → A`）
+- **可选生命周期接口** — 实现 `Starter` / `Stopper` / `Checker` 即可参与生命周期
+- **完整生命周期钩子** — `OnStart / OnStarted / OnStopping / OnStop` 四个时机
+- **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序停止
+- **全局实例** — `cx.C` 开箱即用，`MustProvide*` 系列适合在 `init()` 中调用
 
 ```go
-cx.C.MustProvideDatabase(&RedisClient{})
-cx.C.MustProvideService(&UserService{})
+// 注册配置（预构造值）
+cx.MustSupply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"})
+
+// 注册数据库（惰性构造，依赖自动解析）
+cx.MustProvide(cx.C, "db", func(c *cx.Container) (*DB, error) {
+    cfg := cx.MustGet[*Config](c, "config")
+    return &DB{cfg: cfg}, nil
+})
+
 cx.C.Start(ctx)
+db := cx.MustGet[*DB](cx.C, "db")
+cx.C.Stop(ctx)
+```
+
+配合 `cxgen` 工具自动扫描并生成 `init()` 空导入文件：
+
+```bash
+go run ./cmd/cxgen gen ./... -o wire_gen.go
 ```
 
 ### [transport/http](transport/http/)
