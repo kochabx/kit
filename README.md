@@ -59,7 +59,7 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 | [observability/metrics](observability/metrics/) | Prometheus 指标采集，集成至 HTTP 服务 |
 | [core/validator](core/validator/) | 数据校验，支持多语言错误输出与自定义规则 |
 | [core/defaults](core/defaults/) | 结构体标签默认值注入，支持嵌套、切片、Map 等场景 |
-| [core/util](core/util/) | 上下文工具、类型转换、ID 生成、树结构、二维码等通用工具 |
+| [core/util](core/util/) | 上下文工具、字符串转换、树结构、二维码生成等通用工具 |
 
 ## 快速开始
 
@@ -136,7 +136,6 @@ import (
 	"context"
 	"net/http"
 	"strconv"
-	"net/http"
 	"time"
 
 	"github.com/kochabx/kit/app"
@@ -297,7 +296,6 @@ go run ./cmd/cxgen gen ./... -o wire_gen.go
 | `Permission` | 权限校验 |
 | `Recovery` | Panic 恢复 |
 | `Signature` | 请求签名验证 |
-| `XSS` | XSS 过滤与防护 |
 
 ### [log](log/README.md)
 
@@ -352,6 +350,8 @@ Redis 支持的分布式限流：
 ```text
 kit/
 ├── app/                     # 应用生命周期管理
+├── cmd/
+│   └── cxgen/               # cx 依赖注入空导入文件生成工具
 ├── config/                  # 配置管理
 ├── errors/                  # 错误定义与包装
 ├── cx/                      # 依赖注入容器
@@ -382,12 +382,16 @@ kit/
     ├── rate/                # 分布式限流
     ├── scheduler/           # 分布式任务调度
     ├── util/                # 通用工具
+    │   ├── convert/         # 字符串类型转换
+    │   ├── qrcode/          # 二维码生成
+    │   └── tree/            # 树结构工具
     └── validator/           # 数据校验
 ```
 
 ## 开发命令
 
 ```bash
+make all          # 完整本地校验（fmt + vet + test）
 make fmt          # 代码格式化
 make vet          # 静态检查
 make test         # 全量测试（含 race detector）
@@ -395,11 +399,15 @@ make build        # 编译验证
 
 make install      # 安装工具依赖
 make upgrade      # 升级依赖
+make mod-tidy     # 整理并校验 Go 模块依赖
 
+make generate     # 生成所有代码（proto + wire + swag）
 make proto        # 生成 protobuf 代码
 make wire         # 运行 wire 依赖注入代码生成
 make swag         # 生成 Swagger 文档
 
+make clean        # 清理生成物
+make info         # 显示项目信息
 make help         # 查看所有命令
 ```
 
