@@ -1,7 +1,8 @@
-package dig
+package cx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -132,6 +133,10 @@ type Container struct {
 
 	stopTimeout time.Duration
 
+	// depGraph stores the resolved dependency graph produced by Start.
+	// Keys are component names; values are the names they depend on.
+	depGraph map[string][]string
+
 	// Lifecycle hooks — each slice is called in registration order.
 	onStart    []func(ctx context.Context) error
 	onStarted  []func(ctx context.Context) error
@@ -170,6 +175,10 @@ func (c *Container) Provide(groupName string, comp Component, order ...int) erro
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	if c.state != StateNew && c.state != StateStopped {
+		return fmt.Errorf("%w: current state is %s", ErrNotRegisterable, c.state)
+	}
+
 	g, ok := c.groups[groupName]
 	if !ok {
 		return fmt.Errorf("%w: %s", ErrGroupNotFound, groupName)
@@ -198,7 +207,7 @@ func (c *Container) Provide(groupName string, comp Component, order ...int) erro
 // MustProvide is like Provide but panics on error.
 func (c *Container) MustProvide(groupName string, comp Component, order ...int) {
 	if err := c.Provide(groupName, comp, order...); err != nil {
-		panic(fmt.Sprintf("dig: MustProvide: %v", err))
+		panic(fmt.Sprintf("cx: MustProvide: %v", err))
 	}
 }
 
@@ -279,7 +288,7 @@ func (c *Container) Get(groupName, name string) (Component, error) {
 func (c *Container) MustGet(groupName, name string) Component {
 	comp, err := c.Get(groupName, name)
 	if err != nil {
-		panic(fmt.Sprintf("dig: MustGet: %v", err))
+		panic(fmt.Sprintf("cx: MustGet: %v", err))
 	}
 	return comp
 }
@@ -319,7 +328,7 @@ func Invoke[T any](c *Container, groupName, name string) (T, error) {
 func MustInvoke[T any](c *Container, groupName, name string) T {
 	t, err := Invoke[T](c, groupName, name)
 	if err != nil {
-		panic(fmt.Sprintf("dig: MustInvoke: %v", err))
+		panic(fmt.Sprintf("cx: MustInvoke: %v", err))
 	}
 	return t
 }
@@ -384,11 +393,13 @@ func (c *Container) State() State {
 
 // Start resolves dependencies, then starts all components in group/order.
 // Hooks: onStart → components → onStarted.
+// If any component fails to start, already-started components are stopped in
+// reverse order (best-effort) before returning the error.
 func (c *Container) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.state != StateNew && c.state != StateStopped {
 		c.mu.Unlock()
-		return fmt.Errorf("dig: cannot start container in state %s", c.state)
+		return fmt.Errorf("cx: cannot start container in state %s", c.state)
 	}
 	c.state = StateStarting
 	c.mu.Unlock()
@@ -398,8 +409,12 @@ func (c *Container) Start(ctx context.Context) error {
 		c.mu.Lock()
 		c.state = StateError
 		c.mu.Unlock()
-		return fmt.Errorf("dig: dependency resolution failed: %w", err)
+		return fmt.Errorf("cx: dependency resolution failed: %w", err)
 	}
+
+	c.mu.Lock()
+	c.depGraph = inj.Graph()
+	c.mu.Unlock()
 
 	// onStart hooks
 	for _, fn := range c.onStart {
@@ -407,11 +422,28 @@ func (c *Container) Start(ctx context.Context) error {
 			c.mu.Lock()
 			c.state = StateError
 			c.mu.Unlock()
-			return fmt.Errorf("dig: onStart hook: %w", err)
+			return fmt.Errorf("cx: onStart hook: %w", err)
 		}
 	}
 
 	// Start components in group order, then component order within each group.
+	// Track what has been started so we can rollback on failure.
+	type started struct {
+		stopper Stopper
+		group   string
+		name    string
+	}
+	var startedComps []started
+
+	rollback := func() {
+		for i := len(startedComps) - 1; i >= 0; i-- {
+			s := startedComps[i]
+			stopCtx, cancel := context.WithTimeout(context.Background(), c.stopTimeout)
+			_ = s.stopper.Stop(stopCtx) // best-effort
+			cancel()
+		}
+	}
+
 	groups := c.sortedGroups()
 	for _, g := range groups {
 		descs := func() []*Descriptor {
@@ -422,11 +454,15 @@ func (c *Container) Start(ctx context.Context) error {
 		for _, d := range descs {
 			if s, ok := d.Instance.(Starter); ok {
 				if err := s.Start(ctx); err != nil {
+					rollback()
 					c.mu.Lock()
 					c.state = StateError
 					c.mu.Unlock()
-					return fmt.Errorf("dig: start %s/%s: %w", g.name, d.Name, err)
+					return fmt.Errorf("cx: start %s/%s: %w", g.name, d.Name, err)
 				}
+			}
+			if stopper, ok := d.Instance.(Stopper); ok {
+				startedComps = append(startedComps, started{stopper: stopper, group: g.name, name: d.Name})
 			}
 		}
 	}
@@ -434,10 +470,11 @@ func (c *Container) Start(ctx context.Context) error {
 	// onStarted hooks — called exactly once, here.
 	for _, fn := range c.onStarted {
 		if err := fn(ctx); err != nil {
+			rollback()
 			c.mu.Lock()
 			c.state = StateError
 			c.mu.Unlock()
-			return fmt.Errorf("dig: onStarted hook: %w", err)
+			return fmt.Errorf("cx: onStarted hook: %w", err)
 		}
 	}
 
@@ -449,20 +486,22 @@ func (c *Container) Start(ctx context.Context) error {
 
 // Stop stops all components in reverse group/order.
 // Hooks: onStopping → components (reverse) → onStop.
+// Errors from hooks and components are collected and returned as a joined error.
 func (c *Container) Stop(ctx context.Context) error {
 	c.mu.Lock()
 	if c.state != StateRunning && c.state != StateError {
 		c.mu.Unlock()
-		return fmt.Errorf("dig: cannot stop container in state %s", c.state)
+		return fmt.Errorf("cx: cannot stop container in state %s", c.state)
 	}
 	c.state = StateStopping
 	c.mu.Unlock()
 
+	var errs []error
+
 	// onStopping hooks
 	for _, fn := range c.onStopping {
 		if err := fn(ctx); err != nil {
-			// Log but do not abort — we must attempt to stop all components.
-			_ = err
+			errs = append(errs, fmt.Errorf("cx: onStopping hook: %w", err))
 		}
 	}
 
@@ -479,25 +518,25 @@ func (c *Container) Stop(ctx context.Context) error {
 			d := descs[j]
 			if s, ok := d.Instance.(Stopper); ok {
 				stopCtx, cancel := context.WithTimeout(ctx, c.stopTimeout)
-				err := s.Stop(stopCtx)
-				cancel()
-				if err != nil {
-					// Log but continue stopping remaining components.
-					_ = err
+				if err := s.Stop(stopCtx); err != nil {
+					errs = append(errs, fmt.Errorf("cx: stop %s/%s: %w", g.name, d.Name, err))
 				}
+				cancel()
 			}
 		}
 	}
 
 	// onStop hooks
 	for _, fn := range c.onStop {
-		_ = fn(ctx)
+		if err := fn(ctx); err != nil {
+			errs = append(errs, fmt.Errorf("cx: onStop hook: %w", err))
+		}
 	}
 
 	c.mu.Lock()
 	c.state = StateStopped
 	c.mu.Unlock()
-	return nil
+	return errors.Join(errs...)
 }
 
 // Restart stops then starts the container.
@@ -552,6 +591,16 @@ func (c *Container) Metrics() *ContainerMetrics {
 		ComponentCount: total,
 		State:          c.state,
 	}
+}
+
+// DependencyGraph returns the resolved dependency graph produced during the
+// last successful Start. Each key is a component name and the value is the
+// sorted list of component names it depends on. Returns nil if the container
+// has never been started or has no dependency edges.
+func (c *Container) DependencyGraph() map[string][]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.depGraph
 }
 
 // ---------------------------------------------------------------------------

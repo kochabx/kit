@@ -1,4 +1,4 @@
-package dig
+package cx
 
 import (
 	"context"
@@ -13,12 +13,21 @@ type injector struct {
 	// resolved dependency values keyed by the dependency name advertised via
 	// Provider.ProvidesDependency().
 	deps map[string]any
+
+	// providerNames tracks which component provides each dependency key,
+	// used for duplicate detection error messages.
+	providerNames map[string]string
+
+	// graph is populated after a successful Resolve and can be exported
+	// via Graph().
+	graph map[string]*node
 }
 
 func newInjector(c *Container) *injector {
 	return &injector{
-		c:    c,
-		deps: make(map[string]any),
+		c:             c,
+		deps:          make(map[string]any),
+		providerNames: make(map[string]string),
 	}
 }
 
@@ -32,7 +41,13 @@ func (inj *injector) Resolve(ctx context.Context) error {
 		if p, ok := comp.(Provider); ok {
 			name := p.ProvidesDependency()
 			if name != "" {
+				if existing, dup := inj.deps[name]; dup {
+					_ = existing
+					return fmt.Errorf("%w: dependency %q provided by both %s and %s",
+						ErrDuplicateProvider, name, inj.providerNames[name], comp.Name())
+				}
 				inj.deps[name] = p.GetDependency()
+				inj.providerNames[name] = comp.Name()
 			}
 		}
 	}
@@ -54,6 +69,9 @@ func (inj *injector) Resolve(ctx context.Context) error {
 			return err
 		}
 	}
+
+	// 4. Save graph for later export.
+	inj.graph = graph
 	return nil
 }
 
@@ -215,4 +233,27 @@ func topoSort(graph map[string]*node) []*node {
 		result[len(stack)-1-i] = n
 	}
 	return result
+}
+
+// Graph returns the dependency graph as map[string][]string after a successful
+// Resolve. Each key is a component name; each value is the sorted list of
+// component names it depends on.
+func (inj *injector) Graph() map[string][]string {
+	return exportGraph(inj.graph)
+}
+
+// exportGraph converts the internal node graph to a map[string][]string where
+// each key is a component name and the value is the list of component names it
+// depends on (i.e. its providers).
+func exportGraph(graph map[string]*node) map[string][]string {
+	out := make(map[string][]string, len(graph))
+	for name, n := range graph {
+		deps := make([]string, 0, len(n.deps))
+		for _, d := range n.deps {
+			deps = append(deps, d.comp.Name())
+		}
+		sort.Strings(deps)
+		out[name] = deps
+	}
+	return out
 }

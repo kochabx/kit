@@ -1,4 +1,4 @@
-package dig
+package cx
 
 import "errors"
 
@@ -29,4 +29,10 @@ var (
 
 	// ErrAlreadyStarted is returned when Start is called on an already-started container.
 	ErrAlreadyStarted = errors.New("container already started")
+
+	// ErrDuplicateProvider is returned when two providers advertise the same dependency key.
+	ErrDuplicateProvider = errors.New("duplicate dependency provider")
+
+	// ErrNotRegisterable is returned when Provide is called in a non-registerable state.
+	ErrNotRegisterable = errors.New("container is not in a registerable state")
 )

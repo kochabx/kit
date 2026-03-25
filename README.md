@@ -16,7 +16,7 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 |------|------|
 | [app](app/) | 应用生命周期管理，多服务启动、信号处理、优雅关闭 |
 | [config](config/) | 配置加载与热更新，支持 YAML/JSON/TOML、环境变量覆盖、结构体绑定与校验 |
-| [dig](dig/) | 依赖注入容器，支持分组、模块化注册与生命周期管理 |
+| [cx](cx/) | 依赖注入容器，支持分组、模块化注册与生命周期管理 |
 | [errors](errors/) | 结构化错误定义、包装与错误链处理 |
 | [log](log/) | 基于 Zerolog 的结构化日志，支持脱敏、轮转与全局日志器 |
 
@@ -242,17 +242,19 @@ app.New(
 - 通过 `config.New(target)` 解绑到任意结构体，自动注入 `default` 标签默认值
 - 支持 `Watch()` 热更新配置，触发用户回调
 
-### [ioc](ioc/README.md)
+### [cx](cx/README.md)
 
-轻量级依赖注入容器：
+轻量级依赖注入容器，受 Uber dig/fx 启发：
 
-- `ContainerBuilder` 提供流式 API，支持内置命名空间（`config`、`database`、`baseComponent`、`handler`、`controller`）及自定义顺序
-- 按命名空间优先级有序初始化与关闭，便于管理复杂服务依赖
+- 组件按 Group 分类管理，内置 `config → database → service → handler → controller` 五组
+- 支持 `Provider / Consumer` 接口实现无反射依赖注入，自动检测循环依赖
+- 完整生命周期钩子：`OnStart / OnStarted / OnStopping / OnStop`
+- 全局实例 `cx.C` 开箱即用，`MustProvide*` 系列方法可在 `init()` 中直接调用
 
 ```go
-container, err := ioc.NewContainerBuilder().
-    WithDefaultNamespaces().
-    Build()
+cx.C.MustProvideDatabase(&RedisClient{})
+cx.C.MustProvideService(&UserService{})
+cx.C.Start(ctx)
 ```
 
 ### [transport/http](transport/http/)
@@ -334,7 +336,7 @@ kit/
 ├── app/                     # 应用生命周期管理
 ├── config/                  # 配置管理
 ├── errors/                  # 错误定义与包装
-├── ioc/                     # 依赖注入容器
+├── cx/                      # 依赖注入容器
 ├── log/                     # 日志系统
 │   ├── desensitize/         # 脱敏子包
 │   └── writer/              # 输出目标（控制台、文件、轮转）
@@ -390,7 +392,7 @@ make help         # 查看所有命令
 1. **[app](app/) + [config](config/README.md)**：理解应用启动与配置模型
 2. **[log](log/README.md) + [errors](errors/)**：建立日志与错误规范
 3. **[transport/http](transport/http/) 或 [transport/grpc](transport/grpc/)**：搭建服务入口
-4. 按需接入 **[store/db](store/db/)、[store/redis](store/redis/README.md)、[ioc](ioc/README.md)**
+4. 按需接入 **[store/db](store/db/)、[store/redis](store/redis/README.md)、[cx](cx/README.md)**
 5. 高阶能力：**[core/scheduler](core/scheduler/README.md)、[core/rate](core/rate/)、[core/auth/jwt](core/auth/jwt/)**
 
 ## 许可证
