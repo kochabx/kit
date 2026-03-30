@@ -2,8 +2,12 @@ package http
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"net/http"
 
+	gv "github.com/go-playground/validator/v10"
+
+	"github.com/kochabx/kit/core/validator"
 	"github.com/kochabx/kit/errors"
 )
 
@@ -77,6 +81,11 @@ func writeJSON(w http.ResponseWriter, v any) {
 func extractErrorMessage(err error) string {
 	if err == nil {
 		return defaultErrorMsg
+	}
+	// go-playground/validator or kit validator errors: return err.Error() directly.
+	var gvErrs gv.ValidationErrors
+	if stderrors.As(err, &gvErrs) || validator.IsValidationError(err) {
+		return err.Error()
 	}
 	if e := errors.FromError(err); e != nil {
 		return e.Message
