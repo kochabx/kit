@@ -132,9 +132,14 @@ func shouldSkip(r *http.Request, matcher *PathMatcher, skipFunc func(*http.Reque
 //	r.Use(AdaptToGin(Auth(authCfg)))
 func AdaptToGin(m func(http.Handler) http.Handler) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		nextCalled := false
 		m(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
 			c.Request = r
 			c.Next()
 		})).ServeHTTP(c.Writer, c.Request)
+		if !nextCalled {
+			c.Abort()
+		}
 	}
 }
