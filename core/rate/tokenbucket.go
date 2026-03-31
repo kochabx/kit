@@ -3,6 +3,7 @@ package rate
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -14,42 +15,56 @@ var (
 	tokenBucketLuaScript = redis.NewScript(tokenBucketLua)
 )
 
+// TokenBucketLimiter 基于 Redis + Lua 的分布式令牌桶限流器。
 type TokenBucketLimiter struct {
-	client    redis.UniversalClient
-	bucketKey string
-	capacity  int
-	rate      int
-	script    *redis.Script
+	client   redis.UniversalClient
+	capacity int // 桶容量
+	rate     int // 每秒填充令牌数
 }
 
-func NewTokenBucketLimiter(client redis.UniversalClient, bucketKey string, capacity, rate int) *TokenBucketLimiter {
+// NewTokenBucketLimiter 创建令牌桶限流器。
+//   - capacity: 桶的最大令牌数（突发容量）
+//   - rate: 每秒填充的令牌数
+func NewTokenBucketLimiter(client redis.UniversalClient, capacity, rate int) *TokenBucketLimiter {
 	return &TokenBucketLimiter{
-		client:    client,
-		bucketKey: bucketKey,
-		capacity:  capacity,
-		rate:      rate,
-		script:    tokenBucketLuaScript,
+		client:   client,
+		capacity: capacity,
+		rate:     rate,
 	}
 }
 
-func (lim *TokenBucketLimiter) Allow() bool {
-	return lim.AllowN(time.Now(), 1)
-}
+// Allow 实现 Limiter 接口。
+func (l *TokenBucketLimiter) Allow(ctx context.Context, key string, n int) (Result, error) {
+	if n <= 0 {
+		n = 1
+	}
 
-func (lim *TokenBucketLimiter) AllowN(t time.Time, n int) bool {
-	return lim.AllowNCtx(context.Background(), t, n)
-}
+	nowMs := time.Now().UnixMilli()
 
-func (lim *TokenBucketLimiter) AllowNCtx(ctx context.Context, t time.Time, n int) bool {
-	return lim.reserveN(ctx, t, n)
-}
-
-func (lim *TokenBucketLimiter) reserveN(ctx context.Context, t time.Time, n int) bool {
-	now := t.Unix()
-	result, err := lim.script.Run(ctx, lim.client, []string{lim.bucketKey}, lim.capacity, lim.rate, now, n).Result()
+	raw, err := tokenBucketLuaScript.Run(ctx, l.client, []string{key},
+		l.capacity, l.rate, nowMs, n,
+	).Int64Slice()
 	if err != nil {
-		return false
+		return Result{}, fmt.Errorf("rate: token bucket script error: %w", err)
 	}
 
-	return result.(int64) == 1
+	allowed := raw[0] == 1
+	remaining := raw[1]
+
+	res := Result{
+		Allowed:   allowed,
+		Remaining: remaining,
+		Limit:     int64(l.capacity),
+	}
+
+	if !allowed {
+		// 需要等待 deficit 个令牌填充的时间
+		deficit := max(int64(n)-remaining, 0)
+		res.RetryAfter = time.Duration(deficit) * time.Second / time.Duration(l.rate)
+	}
+
+	// 从空桶填满的时间
+	res.ResetAt = time.Now().Add(time.Duration(int64(l.capacity)-remaining) * time.Second / time.Duration(l.rate))
+
+	return res, nil
 }

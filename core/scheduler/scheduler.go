@@ -124,7 +124,7 @@ func New(opts ...Option) (*Scheduler, error) {
 		dlq:            NewDeadLetterQueue(client, options.Namespace, options.DLQEnabled, options.DLQMaxSize),
 		cronParser:     NewCronParser(),
 		retryStrategy:  NewExponentialBackoff(options.Retry.BaseDelay, options.Retry.MaxDelay, options.Retry.Multiplier, options.Retry.Jitter),
-		rateLimiter:    rate.NewTokenBucketLimiter(client, options.Namespace+":ratelimit", options.RateLimit.Burst, options.RateLimit.Rate),
+		rateLimiter:    rate.NewTokenBucketLimiter(client, options.RateLimit.Burst, options.RateLimit.Rate),
 		circuitBreaker: NewCircuitBreaker(options.CircuitBreaker.Enabled, options.CircuitBreaker.MaxFailures, options.CircuitBreaker.Timeout),
 		metrics:        NewMetrics(options.Namespace, options.Metrics.Enabled),
 		logger:         logger,
@@ -445,9 +445,14 @@ func (s *Scheduler) submitTask(ctx context.Context, task *Task) (string, error) 
 	}
 
 	// 限流检查
-	if s.opts.RateLimit.Enabled && !s.rateLimiter.Allow() {
-		s.metrics.RecordRateLimitRejected()
-		return "", ErrRateLimitExceeded
+	if s.opts.RateLimit.Enabled {
+		result, err := s.rateLimiter.Allow(ctx, s.opts.Namespace+":ratelimit", 1)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("rate limiter error, allowing request")
+		} else if !result.Allowed {
+			s.metrics.RecordRateLimitRejected()
+			return "", ErrRateLimitExceeded
+		}
 	}
 
 	// 熔断检查
@@ -529,9 +534,14 @@ func BatchSubmitWithSerializer[T any](s *Scheduler, ctx context.Context, taskTyp
 	tasks := make([]*Task, 0, len(payloads))
 	for _, payload := range payloads {
 		// 限流检查
-		if s.opts.RateLimit.Enabled && !s.rateLimiter.Allow() {
-			s.metrics.RecordRateLimitRejected()
-			continue
+		if s.opts.RateLimit.Enabled {
+			result, err := s.rateLimiter.Allow(ctx, s.opts.Namespace+":ratelimit", 1)
+			if err != nil {
+				s.logger.Warn().Err(err).Msg("rate limiter error, allowing request")
+			} else if !result.Allowed {
+				s.metrics.RecordRateLimitRejected()
+				continue
+			}
 		}
 
 		// 序列化 payload

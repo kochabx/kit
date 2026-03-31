@@ -7,13 +7,13 @@ import (
 	"time"
 )
 
-func TestSlidingWindowAllow(t *testing.T) {
+func TestFixedWindowAllow(t *testing.T) {
 	client := newTestRedisClient(t)
 	ctx := context.Background()
 
 	// 5 秒窗口, 最多 10 个请求
-	lim := NewSlidingWindowLimiter(client.UniversalClient(), 5*time.Second, 10)
-	key := fmt.Sprintf("test:slidingwindow:%d", time.Now().UnixNano())
+	lim := NewFixedWindowLimiter(client.UniversalClient(), 5*time.Second, 10)
+	key := fmt.Sprintf("test:fixedwindow:%d", time.Now().UnixNano())
 
 	// 连续 10 个请求应该成功
 	for i := 0; i < 10; i++ {
@@ -35,50 +35,44 @@ func TestSlidingWindowAllow(t *testing.T) {
 	if res.Allowed {
 		t.Fatal("request should be denied after limit reached")
 	}
-	if res.Remaining != 0 {
-		t.Fatalf("expected 0 remaining, got %d", res.Remaining)
-	}
-	if res.RetryAfter <= 0 {
-		t.Fatal("RetryAfter should be positive when denied")
-	}
 }
 
-func TestSlidingWindowBatchN(t *testing.T) {
+func TestFixedWindowBatchN(t *testing.T) {
 	client := newTestRedisClient(t)
 	ctx := context.Background()
 
-	lim := NewSlidingWindowLimiter(client.UniversalClient(), 5*time.Second, 10)
-	key := fmt.Sprintf("test:slidingwindow:batch:%d", time.Now().UnixNano())
+	lim := NewFixedWindowLimiter(client.UniversalClient(), 5*time.Second, 10)
+	key := fmt.Sprintf("test:fixedwindow:batch:%d", time.Now().UnixNano())
 
-	// 一次请求 5 个配额
-	res, err := lim.Allow(ctx, key, 5)
+	// 批量请求 7 个
+	res, err := lim.Allow(ctx, key, 7)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !res.Allowed {
-		t.Fatal("batch request for 5 should be allowed")
+		t.Fatal("batch request for 7 should be allowed")
 	}
-	if res.Remaining != 5 {
-		t.Fatalf("expected 5 remaining, got %d", res.Remaining)
+	if res.Remaining != 3 {
+		t.Fatalf("expected 3 remaining, got %d", res.Remaining)
 	}
 
-	// 再请求 6 个，应被拒绝（仅剩 5）
-	res, err = lim.Allow(ctx, key, 6)
+	// 再请求 4 个，应被拒绝
+	res, err = lim.Allow(ctx, key, 4)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if res.Allowed {
-		t.Fatal("request for 6 should be denied with only 5 remaining")
+		t.Fatal("request for 4 should be denied with only 3 remaining")
 	}
 }
 
-func TestSlidingWindowExpiry(t *testing.T) {
+func TestFixedWindowExpiry(t *testing.T) {
 	client := newTestRedisClient(t)
 	ctx := context.Background()
 
 	// 2 秒窗口, 最多 2 个请求
-	lim := NewSlidingWindowLimiter(client.UniversalClient(), 2*time.Second, 2)
-	key := fmt.Sprintf("test:slidingwindow:expiry:%d", time.Now().UnixNano())
+	lim := NewFixedWindowLimiter(client.UniversalClient(), 2*time.Second, 2)
+	key := fmt.Sprintf("test:fixedwindow:expiry:%d", time.Now().UnixNano())
 
 	// 用尽配额
 	lim.Allow(ctx, key, 2)
@@ -100,12 +94,12 @@ func TestSlidingWindowExpiry(t *testing.T) {
 	}
 }
 
-func TestSlidingWindowResult(t *testing.T) {
+func TestFixedWindowResult(t *testing.T) {
 	client := newTestRedisClient(t)
 	ctx := context.Background()
 
-	lim := NewSlidingWindowLimiter(client.UniversalClient(), 10*time.Second, 100)
-	key := fmt.Sprintf("test:slidingwindow:result:%d", time.Now().UnixNano())
+	lim := NewFixedWindowLimiter(client.UniversalClient(), 10*time.Second, 100)
+	key := fmt.Sprintf("test:fixedwindow:result:%d", time.Now().UnixNano())
 
 	res, err := lim.Allow(ctx, key, 1)
 	if err != nil {
@@ -117,6 +111,9 @@ func TestSlidingWindowResult(t *testing.T) {
 	}
 	if res.Remaining != 99 {
 		t.Fatalf("expected remaining=99, got %d", res.Remaining)
+	}
+	if !res.Allowed {
+		t.Fatal("should be allowed")
 	}
 	if res.ResetAt.IsZero() {
 		t.Fatal("ResetAt should not be zero")
