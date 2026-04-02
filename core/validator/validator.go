@@ -3,43 +3,59 @@ package validator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 
-	"github.com/go-playground/locales/en"
-	"github.com/go-playground/locales/zh"
+	"github.com/go-playground/locales"
 	ut "github.com/go-playground/universal-translator"
 	gv "github.com/go-playground/validator/v10"
-	en_translations "github.com/go-playground/validator/v10/translations/en"
-	zh_translations "github.com/go-playground/validator/v10/translations/zh"
 )
 
-// Validate 是使用 JSON 字段名、英文为默认语言的包级 Validator，
-// 可直接用于简单场景。
-var Validate = New()
+// Validator 是结构体 / 变量校验接口。
+type Validator interface {
+	// Struct 校验非 nil 结构体指针的所有导出字段，失败时返回 *ValidationError。
+	// 通过 WithLocaleExtractor 设置的 Locale 用于翻译错误消息。
+	Struct(ctx context.Context, s any) error
 
-// validatorImpl 是 Validator 的具体实现。
-type validatorImpl struct {
-	v           *gv.Validate
-	translators map[Lang]ut.Translator
-	defaultLang Lang
+	// Var 按 tag 表达式（如 "required,email"）校验单个值。
+	Var(ctx context.Context, field any, tag string) error
+}
+
+// validator 是 Validator 的具体实现。
+type validator struct {
+	v               *gv.Validate
+	translators     map[Locale]ut.Translator
+	defaultLocale   Locale
+	localeExtractor func(context.Context) (Locale, bool)
 }
 
 // New 按选项创建一个新的 Validator。
 // 零选项默认值：默认语言 en，启用 [en, zh]，字段名取自 json tag。
-func New(opts ...Option) Validator {
-	cfg := defaultConfig()
-	for _, o := range opts {
-		o(cfg)
+func New(opts ...Option) (Validator, error) {
+	o := defaultOptions()
+	for _, fn := range opts {
+		fn(o)
 	}
-	return build(cfg)
+	return build(o)
 }
 
-func build(cfg *config) *validatorImpl {
+// MustNew 同 New，但在出错时 panic。
+func MustNew(opts ...Option) Validator {
+	v, err := New(opts...)
+	if err != nil {
+		panic(fmt.Sprintf("validator: %v", err))
+	}
+	return v
+}
+
+var Validate = MustNew()
+
+func build(o *options) (*validator, error) {
 	v := gv.New()
 
-	if cfg.fieldNameTag != "" {
-		tag := cfg.fieldNameTag
+	if o.fieldNameTag != "" {
+		tag := o.fieldNameTag
 		v.RegisterTagNameFunc(func(fld reflect.StructField) string {
 			name := strings.SplitN(fld.Tag.Get(tag), ",", 2)[0]
 			if name == "-" || name == "" {
@@ -49,66 +65,67 @@ func build(cfg *config) *validatorImpl {
 		})
 	}
 
-	enLocale := en.New()
-	zhLocale := zh.New()
-	uni := ut.New(enLocale, enLocale, zhLocale)
+	// 收集所有 locale 实例，构建 UniversalTranslator
+	defaultEntry, ok := o.locales[o.defaultLocale]
+	if !ok {
+		return nil, fmt.Errorf("validator: default locale %q not in enabled locales", o.defaultLocale)
+	}
+	allLocs := make([]locales.Translator, 0, len(o.locales))
+	for _, entry := range o.locales {
+		allLocs = append(allLocs, entry.Loc)
+	}
+	uni := ut.New(defaultEntry.Loc, allLocs...)
 
-	translators := make(map[Lang]ut.Translator, len(cfg.enabledLangs))
-	for _, lang := range cfg.enabledLangs {
-		switch lang {
-		case LangEn:
-			if trans, ok := uni.GetTranslator("en"); ok {
-				translators[LangEn] = trans
-				_ = en_translations.RegisterDefaultTranslations(v, trans)
-			}
-		case LangZh:
-			if trans, ok := uni.GetTranslator("zh"); ok {
-				translators[LangZh] = trans
-				_ = zh_translations.RegisterDefaultTranslations(v, trans)
-			}
+	translators := make(map[Locale]ut.Translator, len(o.locales))
+	for locale, entry := range o.locales {
+		trans, found := uni.GetTranslator(entry.Loc.Locale())
+		if !found {
+			return nil, fmt.Errorf("validator: translator not found for locale %q", locale)
+		}
+		if err := entry.Register(v, trans); err != nil {
+			return nil, fmt.Errorf("validator: register %s translations: %w", locale, err)
+		}
+		translators[locale] = trans
+	}
+
+	for _, cv := range o.validations {
+		if err := v.RegisterValidation(cv.tag, cv.fn, cv.callEvenIfNull); err != nil {
+			return nil, fmt.Errorf("validator: register validation %q: %w", cv.tag, err)
 		}
 	}
 
-	return &validatorImpl{
-		v:           v,
-		translators: translators,
-		defaultLang: cfg.defaultLang,
+	for _, sv := range o.structValidations {
+		v.RegisterStructValidation(sv.fn, sv.types...)
 	}
+
+	return &validator{
+		v:               v,
+		translators:     translators,
+		defaultLocale:   o.defaultLocale,
+		localeExtractor: o.localeExtractor,
+	}, nil
 }
 
-func (vi *validatorImpl) Struct(s any) error {
-	return vi.StructCtx(context.Background(), s)
-}
-
-func (vi *validatorImpl) StructCtx(ctx context.Context, s any) error {
-	if s == nil {
-		return ErrNilTarget
-	}
+func (vi *validator) Struct(ctx context.Context, s any) error {
 	return vi.wrap(ctx, vi.v.StructCtx(ctx, s))
 }
 
-func (vi *validatorImpl) Var(field any, tag string) error {
-	return vi.VarCtx(context.Background(), field, tag)
-}
-
-func (vi *validatorImpl) VarCtx(ctx context.Context, field any, tag string) error {
+func (vi *validator) Var(ctx context.Context, field any, tag string) error {
 	return vi.wrap(ctx, vi.v.VarCtx(ctx, field, tag))
 }
 
-func (vi *validatorImpl) RegisterValidation(tag string, fn gv.Func, callValidationEvenIfNull ...bool) error {
-	return vi.v.RegisterValidation(tag, fn, callValidationEvenIfNull...)
+// resolveLocale 按优先级解析 Locale：localeExtractor → defaultLocale。
+func (vi *validator) resolveLocale(ctx context.Context) Locale {
+	if vi.localeExtractor != nil {
+		if l, ok := vi.localeExtractor(ctx); ok {
+			return l
+		}
+	}
+	return vi.defaultLocale
 }
 
-func (vi *validatorImpl) RegisterStructValidation(fn func(gv.StructLevel), types ...any) {
-	vi.v.RegisterStructValidation(fn, types...)
-}
-
-func (vi *validatorImpl) RegisterTagNameFunc(fn gv.TagNameFunc) {
-	vi.v.RegisterTagNameFunc(fn)
-}
-
-// wrap 将底层 gv.ValidationErrors 转换为公共 ValidationErrors 类型。
-func (vi *validatorImpl) wrap(ctx context.Context, err error) error {
+// wrap 将底层 gv.ValidationErrors 转换为 *ValidationError。
+func (vi *validator) wrap(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -117,18 +134,14 @@ func (vi *validatorImpl) wrap(ctx context.Context, err error) error {
 		return err
 	}
 
-	lang := vi.defaultLang
-	if l, ok := ctx.Value(ctxLangKey{}).(Lang); ok {
-		lang = l
-	}
+	locale := vi.resolveLocale(ctx)
 
-	trans := vi.translators[lang]
+	trans := vi.translators[locale]
 	if trans == nil {
-		trans = vi.translators[vi.defaultLang]
+		trans = vi.translators[vi.defaultLocale]
 	}
 
-	fieldErrors := make([]FieldError, len(verrs))
-	msgs := make([]string, len(verrs))
+	violations := make([]Violation, len(verrs))
 	for i, fe := range verrs {
 		var msg string
 		if trans != nil {
@@ -136,17 +149,13 @@ func (vi *validatorImpl) wrap(ctx context.Context, err error) error {
 		} else {
 			msg = fe.Error()
 		}
-		fieldErrors[i] = &fieldError{
-			field:   fe.Field(),
-			tag:     fe.Tag(),
-			value:   fe.Value(),
-			message: msg,
+		violations[i] = Violation{
+			Field:   fe.Field(),
+			Tag:     fe.Tag(),
+			Value:   fe.Value(),
+			Message: msg,
 		}
-		msgs[i] = msg
 	}
 
-	return &validationErrors{
-		fields:  fieldErrors,
-		message: strings.Join(msgs, "; "),
-	}
+	return newValidationError(violations)
 }

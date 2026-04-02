@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"crypto/sha256"
 	"io"
 	"os"
@@ -68,7 +69,7 @@ func (l *FileLoader) Load(target any) error {
 
 	// Validate configuration
 	if l.validate != nil {
-		if err := l.validate.Struct(target); err != nil {
+		if err := l.validate.Struct(context.Background(), target); err != nil {
 			return errors.New(400, "config validation failed: %v", err)
 		}
 	}

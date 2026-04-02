@@ -84,7 +84,7 @@ func extractErrorMessage(err error) string {
 	}
 	// go-playground/validator or kit validator errors: return err.Error() directly.
 	var gvErrs gv.ValidationErrors
-	if stderrors.As(err, &gvErrs) || validator.IsValidationError(err) {
+	if stderrors.As(err, &gvErrs) || validator.AsValidationError(err) {
 		return err.Error()
 	}
 	if e := errors.FromError(err); e != nil {

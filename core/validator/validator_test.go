@@ -21,27 +21,68 @@ type testUser struct {
 // ---- 构造 ----
 
 func TestNew(t *testing.T) {
-	assert.NotNil(t, New())
+	v, err := New()
+	require.NoError(t, err)
+	assert.NotNil(t, v)
 }
 
-func TestValidate(t *testing.T) {
-	assert.NotNil(t, Validate)
+func TestNew_InvalidOptions(t *testing.T) {
+	// 空 locales → defaultLocale 找不到 translator
+	_, err := New(func(o *options) { o.locales = map[Locale]LocaleEntry{} })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in enabled locales")
+}
+
+func TestNew_DefaultLocaleNotInEnabled(t *testing.T) {
+	// defaultLocale 设为一个不在 locales 中的值
+	_, err := New(func(o *options) {
+		delete(o.locales, LocaleZH)
+		o.defaultLocale = LocaleZH
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in enabled locales")
+}
+
+func TestNew_InvalidCustomValidation(t *testing.T) {
+	_, err := New(WithValidation("", func(fl gv.FieldLevel) bool { return true }))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "Key cannot be empty")
+}
+
+func TestNew_NilCustomValidationFunc(t *testing.T) {
+	_, err := New(WithValidation("foo", nil))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "function cannot be empty")
+}
+
+func TestMustNew(t *testing.T) {
+	assert.NotPanics(t, func() { MustNew() })
+}
+
+func TestMustNew_Panics(t *testing.T) {
+	assert.Panics(t, func() { MustNew(func(o *options) { o.locales = map[Locale]LocaleEntry{} }) })
+}
+
+func TestDefault(t *testing.T) {
+	v := Validate
+	assert.NotNil(t, v)
+	assert.Same(t, v, Validate) // 同一实例
 }
 
 func TestNewWithOptions(t *testing.T) {
-	v := New(
-		WithDefaultLang(LangZh),
-		WithLangs(LangEn, LangZh),
+	v, err := New(
+		WithDefaultLocale(LocaleZH),
 		WithFieldNameTag("json"),
 	)
+	require.NoError(t, err)
 	assert.NotNil(t, v)
 }
 
 // ---- Struct ----
 
 func TestStruct_Valid(t *testing.T) {
-	v := New()
-	err := v.Struct(&testUser{
+	v := MustNew()
+	err := v.Struct(context.Background(), &testUser{
 		Name:     "Alice",
 		Email:    "alice@example.com",
 		Age:      25,
@@ -50,29 +91,23 @@ func TestStruct_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestStruct_Nil(t *testing.T) {
-	err := New().Struct(nil)
-	assert.ErrorIs(t, err, ErrNilTarget)
-}
-
-func TestStruct_Invalid_ReturnsValidationErrors(t *testing.T) {
-	v := New()
-	err := v.Struct(&testUser{
+func TestStruct_Invalid_ReturnsValidationError(t *testing.T) {
+	v := MustNew()
+	err := v.Struct(context.Background(), &testUser{
 		Name:     "",    // required
 		Email:    "bad", // email
 		Age:      10,    // gte=18
 		Username: "ab",  // min=3
 	})
 	require.Error(t, err)
-	assert.True(t, IsValidationError(err))
-
-	var ve ValidationErrors
+	require.True(t, AsValidationError(err))
+	var ve *ValidationError
 	require.True(t, errors.As(err, &ve))
-	assert.Len(t, ve.Fields(), 4)
+	assert.Len(t, ve.Violations(), 4)
 }
 
 func TestStruct_ErrorMessage_NotEmpty(t *testing.T) {
-	err := New().Struct(&testUser{Name: ""})
+	err := MustNew().Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 	assert.NotEmpty(t, err.Error())
 }
@@ -80,151 +115,192 @@ func TestStruct_ErrorMessage_NotEmpty(t *testing.T) {
 // ---- 字段名映射 ----
 
 func TestFieldName_JSONTag(t *testing.T) {
-	// 默认使用 json tag，字段名应为小写
-	v := New()
-	err := v.Struct(&testUser{Name: ""})
+	v := MustNew()
+	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 
-	for _, fe := range FieldErrors(err) {
-		if fe.Tag() == "required" {
-			assert.Equal(t, "name", fe.Field(), "预期 json tag 中的字段名")
-			break
+	require.True(t, AsValidationError(err))
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	for _, vi := range ve.Violations() {
+		if vi.Tag == "required" {
+			assert.Equal(t, "name", vi.Field, "预期 json tag 中的字段名")
+			return
 		}
 	}
+	t.Fatal("未找到 required violation")
 }
 
 func TestFieldName_GoStructField(t *testing.T) {
-	// 不使用任何 tag 时，使用 Go 结构体字段名
-	v := New(WithFieldNameTag(""))
-	err := v.Struct(&testUser{Name: ""})
+	v := MustNew(WithFieldNameTag(""))
+	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 
-	for _, fe := range FieldErrors(err) {
-		if fe.Tag() == "required" {
-			assert.Equal(t, "Name", fe.Field(), "预期 Go 结构体字段名")
-			break
+	require.True(t, AsValidationError(err))
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	for _, vi := range ve.Violations() {
+		if vi.Tag == "required" {
+			assert.Equal(t, "Name", vi.Field, "预期 Go 结构体字段名")
+			return
 		}
 	}
+	t.Fatal("未找到 required violation")
 }
 
-// ---- 语言 / 翻译 ----
+// ---- Locale / 翻译 ----
 
-func TestStructCtx_DefaultLangEn(t *testing.T) {
-	v := New()
-	err := v.Struct(&testUser{Name: ""})
+func TestStruct_DefaultLocaleEN(t *testing.T) {
+	v := MustNew()
+	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
 }
 
-func TestStructCtx_LangZh(t *testing.T) {
-	v := New()
-	ctx := ContextWithLang(context.Background(), LangZh)
-	err := v.StructCtx(ctx, &testUser{Name: ""})
-	require.Error(t, err)
-	// zh 翻译结果与 en 不同（不含 "required" 英文单词）
-	assert.NotContains(t, err.Error(), "required")
-}
-
-func TestStructCtx_DefaultLangZh(t *testing.T) {
-	v := New(WithDefaultLang(LangZh))
-	err := v.Struct(&testUser{Name: ""})
+func TestStruct_LocaleExtractorZH(t *testing.T) {
+	v := MustNew(WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
+		return LocaleZH, true
+	}))
+	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "required")
 }
 
-// ---- Var / VarCtx ----
+func TestStruct_DefaultLocaleZH(t *testing.T) {
+	v := MustNew(WithDefaultLocale(LocaleZH))
+	err := v.Struct(context.Background(), &testUser{Name: ""})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "required")
+}
+
+// ---- WithLocaleExtractor ----
+
+type myLangKey struct{}
+
+func TestLocaleExtractor_UsesContext(t *testing.T) {
+	v := MustNew(WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
+		if lang, ok := ctx.Value(myLangKey{}).(Locale); ok {
+			return lang, true
+		}
+		return "", false
+	}))
+
+	ctx := context.WithValue(context.Background(), myLangKey{}, LocaleZH)
+	err := v.Struct(ctx, &testUser{Name: ""})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "required")
+}
+
+func TestLocaleExtractor_FallbackToDefault(t *testing.T) {
+	// localeExtractor 返回 false → 回退到 defaultLocale (EN)
+	v := MustNew(WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
+		return "", false
+	}))
+
+	err := v.Struct(context.Background(), &testUser{Name: ""})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "required")
+}
+
+func TestLocaleExtractor_UnsupportedLocaleFallback(t *testing.T) {
+	// localeExtractor 返回不在 locales 中的 locale → 退回 defaultLocale
+	v := MustNew(WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
+		return Locale("fr"), true
+	}))
+
+	err := v.Struct(context.Background(), &testUser{Name: ""})
+	require.Error(t, err)
+	// 回退到默认 EN，应包含英文 required 消息
+	assert.Contains(t, err.Error(), "required")
+}
+
+// ---- Var ----
 
 func TestVar(t *testing.T) {
-	v := New()
-	assert.NoError(t, v.Var("test@example.com", "email"))
-	assert.Error(t, v.Var("bad-email", "email"))
-	assert.Error(t, v.Var("", "required"))
-	assert.NoError(t, v.Var("hello", "required"))
+	v := MustNew()
+	ctx := context.Background()
+	assert.NoError(t, v.Var(ctx, "test@example.com", "email"))
+	assert.Error(t, v.Var(ctx, "bad-email", "email"))
+	assert.Error(t, v.Var(ctx, "", "required"))
+	assert.NoError(t, v.Var(ctx, "hello", "required"))
 }
 
-func TestVarCtx(t *testing.T) {
-	v := New()
-	ctx := ContextWithLang(context.Background(), LangEn)
-	err := v.VarCtx(ctx, "", "required")
+func TestVar_WithLocale(t *testing.T) {
+	v := MustNew(WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
+		return LocaleEN, true
+	}))
+	err := v.Var(context.Background(), "", "required")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
 }
 
-// ---- FieldError 属性 ----
+// ---- Violation 属性 ----
 
-func TestFieldError_Attributes(t *testing.T) {
-	v := New()
-	err := v.Struct(&testUser{Name: "", Email: "bad"})
+func TestViolation_Attributes(t *testing.T) {
+	v := MustNew()
+	err := v.Struct(context.Background(), &testUser{Name: "", Email: "bad"})
 	require.Error(t, err)
 
-	fes := FieldErrors(err)
-	require.NotEmpty(t, fes)
+	require.True(t, AsValidationError(err))
+	var ve *ValidationError
+	require.True(t, errors.As(err, &ve))
+	violations := ve.Violations()
+	require.NotEmpty(t, violations)
 
-	for _, fe := range fes {
-		assert.NotEmpty(t, fe.Field())
-		assert.NotEmpty(t, fe.Tag())
-		assert.NotEmpty(t, fe.Message())
+	for _, vi := range violations {
+		assert.NotEmpty(t, vi.Field)
+		assert.NotEmpty(t, vi.Tag)
+		assert.NotEmpty(t, vi.Message)
 	}
 }
 
-// ---- 自定义校验 ----
+// ---- 自定义校验（通过选项注册） ----
 
-func TestRegisterValidation(t *testing.T) {
-	v := New()
-	err := v.RegisterValidation("nonempty_str", func(fl gv.FieldLevel) bool {
+func TestWithValidation(t *testing.T) {
+	v := MustNew(WithValidation("nonempty_str", func(fl gv.FieldLevel) bool {
 		return fl.Field().String() != ""
-	})
-	require.NoError(t, err)
+	}))
 
 	type payload struct {
 		Val string `validate:"nonempty_str"`
 	}
-	assert.NoError(t, v.Struct(&payload{Val: "ok"}))
-	assert.Error(t, v.Struct(&payload{Val: ""}))
+	ctx := context.Background()
+	assert.NoError(t, v.Struct(ctx, &payload{Val: "ok"}))
+	assert.Error(t, v.Struct(ctx, &payload{Val: ""}))
 }
 
-func TestRegisterStructValidation(t *testing.T) {
+func TestWithStructValidation(t *testing.T) {
 	type dateRange struct {
 		Start int `validate:"required"`
 		End   int `validate:"required"`
 	}
 
-	v := New()
-	v.RegisterStructValidation(func(sl gv.StructLevel) {
+	v := MustNew(WithStructValidation(func(sl gv.StructLevel) {
 		dr := sl.Current().Interface().(dateRange)
 		if dr.Start > dr.End {
 			sl.ReportError(dr.End, "end", "End", "gtstart", "")
 		}
-	}, dateRange{})
+	}, dateRange{}))
 
-	assert.NoError(t, v.Struct(&dateRange{Start: 1, End: 10}))
-	assert.Error(t, v.Struct(&dateRange{Start: 10, End: 1}))
+	ctx := context.Background()
+	assert.NoError(t, v.Struct(ctx, &dateRange{Start: 1, End: 10}))
+	assert.Error(t, v.Struct(ctx, &dateRange{Start: 10, End: 1}))
 }
 
 // ---- 错误工具 ----
 
-func TestIsValidationError(t *testing.T) {
-	v := New()
-	err := v.Struct(&testUser{Name: ""})
-	assert.True(t, IsValidationError(err))
-	assert.False(t, IsValidationError(errors.New("plain error")))
-	assert.False(t, IsValidationError(nil))
-}
-
-func TestFieldErrors_Helper(t *testing.T) {
-	v := New()
-	err := v.Struct(&testUser{Name: ""})
-	fes := FieldErrors(err)
-	assert.NotEmpty(t, fes)
-
-	assert.Nil(t, FieldErrors(nil))
-	assert.Nil(t, FieldErrors(errors.New("plain")))
+func TestAsValidationError(t *testing.T) {
+	v := MustNew()
+	err := v.Struct(context.Background(), &testUser{Name: ""})
+	assert.True(t, AsValidationError(err))
+	assert.False(t, AsValidationError(nil))
+	assert.False(t, AsValidationError(errors.New("plain")))
 }
 
 // ---- 并发安全 ----
 
 func TestConcurrentValidation(t *testing.T) {
-	v := New()
+	v := MustNew()
 	done := make(chan struct{}, 20)
 	for i := 0; i < 20; i++ {
 		go func(i int) {
@@ -235,7 +311,7 @@ func TestConcurrentValidation(t *testing.T) {
 				Age:      25,
 				Username: "user123",
 			}
-			assert.NoError(t, v.Struct(u))
+			assert.NoError(t, v.Struct(context.Background(), u))
 		}(i)
 	}
 	for i := 0; i < 20; i++ {
@@ -246,7 +322,8 @@ func TestConcurrentValidation(t *testing.T) {
 // ---- 基准 ----
 
 func BenchmarkStruct_Valid(b *testing.B) {
-	v := New()
+	v := MustNew()
+	ctx := context.Background()
 	u := &testUser{
 		Name:     "Alice",
 		Email:    "alice@example.com",
@@ -255,15 +332,16 @@ func BenchmarkStruct_Valid(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = v.Struct(u)
+		_ = v.Struct(ctx, u)
 	}
 }
 
 func BenchmarkStruct_Invalid(b *testing.B) {
-	v := New()
+	v := MustNew()
+	ctx := context.Background()
 	u := &testUser{Name: "", Email: "bad", Age: -1, Username: "ab"}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_ = v.Struct(u)
+		_ = v.Struct(ctx, u)
 	}
 }
