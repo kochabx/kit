@@ -11,6 +11,8 @@ type Violation struct {
 	Field string
 	// Tag 是失败的校验约束标签（如 "required"）。
 	Tag string
+	// Param 是校验约束的参数值（如 gte=18 中的 "18"），无参数时为空字符串。
+	Param string
 	// Value 是校验时的字段值。
 	Value any
 	// Message 是经翻译的、人类可读的错误消息。

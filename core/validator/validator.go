@@ -152,6 +152,7 @@ func (vi *validator) wrap(ctx context.Context, err error) error {
 		violations[i] = Violation{
 			Field:   fe.Field(),
 			Tag:     fe.Tag(),
+			Param:   fe.Param(),
 			Value:   fe.Value(),
 			Message: msg,
 		}
