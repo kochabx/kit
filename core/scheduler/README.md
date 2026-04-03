@@ -27,18 +27,20 @@
 - ✅ **零额外开销**：泛型单态化，无运行时性能损失
 
 ### 可靠性
-- ✅ **失败重试**：指数退避 + 随机抖动
+- ✅ **失败重试**：指数退避 + 随机抖动，ACK 自动重试（最多3次）
 - ✅ **死信队列**：超过重试次数的任务自动进入DLQ
 - ✅ **任务超时**：自动超时控制
-- ✅ **优雅关闭**：等待运行中任务完成
-- ✅ **协程池**：基于 ants 的高性能协程池管理
+- ✅ **优雅关闭**：等待运行中任务完成，Start() 失败自动回滚已启动的组件
+- ✅ **协程池**：基于 ants 的 NonBlocking 协程池，池满时自动降级为同步执行
+- ✅ **锁续期**：长时间运行的任务自动续期分布式锁，防止锁被误夺
+- ✅ **原子去重**：基于 SetNX 的原子去重，杜绝并发窗口
 
 ### 保护机制
 - ✅ **限流**：令牌桶算法防止过载
 - ✅ **熔断**：自动熔断保护
 
 ### 可观测性
-- ✅ **Prometheus指标**：任务、队列、Worker等全方位监控
+- ✅ **Prometheus指标**：任务、队列、Worker等全方位监控，支持标签基数防护
 - ✅ **结构化日志**：基于zerolog的高性能日志
 - ✅ **健康检查**：HTTP健康检查接口
 
@@ -105,8 +107,11 @@ func (h *EmailHandler) Handle(ctx context.Context, payload EmailPayload) error {
     return sendEmail(payload.To, payload.Subject, payload.Body)
 }
 
-// 注册到 Scheduler
-scheduler.Register(s.Registry(), "send_email", &EmailHandler{})
+// 注册到 Scheduler（推荐：自动注册 Metrics 标签）
+scheduler.SchedulerRegister(s, "send_email", &EmailHandler{})
+
+// 或直接注册到 Registry（不会自动注册 Metrics 标签）
+// scheduler.Register(s.Registry(), "send_email", &EmailHandler{})
 
 // 方式 2：使用函数式风格
 type SMSPayload struct {
@@ -114,7 +119,7 @@ type SMSPayload struct {
     Message string `json:"message"`
 }
 
-scheduler.Register(s.Registry(), "send_sms", 
+scheduler.SchedulerRegister(s, "send_sms", 
     scheduler.HandlerFunc[SMSPayload](
         func(ctx context.Context, payload SMSPayload) error {
             return sendSMS(payload.Phone, payload.Message)
@@ -618,15 +623,16 @@ strategy := scheduler.NewCustomRetry([]time.Duration{
 - 调度器会自动接管超时的 Pending 消息，实现故障恢复
 
 **Worker 管理**
-- 每个 Worker 使用 ants 协程池管理并发任务
+- 每个 Worker 使用 ants NonBlocking 协程池管理并发任务，池满时自动降级为同步执行
 - 自动注册并维持租约（Lease）
-- 心跳续约机制，租约过期自动清理
+- 心跳续约时同时延长当前任务的分布式锁，防止长时间任务的锁被误夺
+- ACK 確认失败自动重试（最多3次）
 - 支持优雅关闭，等待运行中任务完成
 
 **分布式锁**
 - 基于 Redis Lua 脚本实现
 - 防止同一任务被多个 Worker 重复执行
-- 支持锁续期和安全释放
+- 支持锁续期（Extend）和安全释放
 
 ## 📝 最佳实践
 
@@ -682,10 +688,17 @@ strategy := scheduler.NewCustomRetry([]time.Duration{
 - 建议为 Cron 任务设置较低的 `MaxRetry`，避免长时间阻塞
 
 ### 11. 性能优化
-- 启用对象池：系统已内置 map 对象池和 strings.Builder 池
+- 启用对象池：系统已内置 map 对象池，Stream key 预计算缓存
 - 合理设置 `BatchSize`，控制每次扫描延迟队列的任务数
 - 调整 `ScanInterval`，平衡延迟和性能
 - 使用批量提交 `BatchSubmit` 提高吞吐量
+- `RemoveReady` 采用分批扫描（每批100条），找到即返回，避免全量扫描
+- `MoveDelayedToReady` Pipeline 失败时逐条检查结果，最大化成功任务数
+
+### 12. Metrics 安全
+- 使用 `SchedulerRegister` 注册 handler，会自动将 taskType 加入白名单
+- 未注册的 taskType 会被统一标记为 `"unknown"`，防止 Prometheus 标签基数爆炸
+- 如果直接使用 `Register(s.Registry(), ...)` 注册，需手动调用 `s.Metrics().RegisterTaskType(taskType)`
 
 ## 🧪 测试
 
@@ -714,7 +727,11 @@ func New(opts ...Option) (*Scheduler, error)
 func (s *Scheduler) Start(ctx context.Context) error
 func (s *Scheduler) Shutdown(ctx context.Context) error
 
-// 注册处理器
+// 注册处理器（推荐，自动注册 Metrics 标签白名单）
+func SchedulerRegister[T any](s *Scheduler, taskType string, handler Handler[T]) error
+func SchedulerRegisterWithSerializer[T any](s *Scheduler, taskType string, handler Handler[T], serializer Serializer) error
+
+// 获取组件
 func (s *Scheduler) Registry() *Registry
 func (s *Scheduler) SetSerializer(serializer Serializer)
 

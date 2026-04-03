@@ -67,9 +67,14 @@ type Scheduler struct {
 	metricsServer *http.Server
 	healthServer  *http.Server
 
-	mapPool       *sync.Pool   // map对象池
-	statsCache    atomic.Value // 统计信息缓存 *QueueStats
-	lastStatsTime atomic.Int64 // 上次更新统计的时间戳
+	mapPool    *sync.Pool                    // map对象池
+	statsCache atomic.Pointer[statsSnapshot] // 统计信息缓存（原子指针，避免竞态）
+}
+
+// statsSnapshot 统计信息快照（合并时间戳和数据，确保原子更新）
+type statsSnapshot struct {
+	stats     *QueueStats
+	updatedAt int64 // unix seconds
 }
 
 // New 创建调度器
@@ -140,7 +145,7 @@ func New(opts ...Option) (*Scheduler, error) {
 
 	// 创建Workers
 	s.workers = make([]*Worker, options.Worker.Count)
-	for i := 0; i < options.Worker.Count; i++ {
+	for i := range options.Worker.Count {
 		s.workers[i] = NewWorker(s)
 	}
 
@@ -155,12 +160,20 @@ func New(opts ...Option) (*Scheduler, error) {
 
 // SchedulerRegister 在 Scheduler 上注册泛型任务处理器
 func SchedulerRegister[T any](s *Scheduler, taskType string, handler Handler[T]) error {
-	return Register(s.registry, taskType, handler)
+	if err := Register(s.registry, taskType, handler); err != nil {
+		return err
+	}
+	s.metrics.RegisterTaskType(taskType)
+	return nil
 }
 
 // SchedulerRegisterWithSerializer 使用指定序列化器在 Scheduler 上注册泛型任务处理器
 func SchedulerRegisterWithSerializer[T any](s *Scheduler, taskType string, handler Handler[T], serializer Serializer) error {
-	return RegisterWithSerializer(s.registry, taskType, handler, serializer)
+	if err := RegisterWithSerializer(s.registry, taskType, handler, serializer); err != nil {
+		return err
+	}
+	s.metrics.RegisterTaskType(taskType)
+	return nil
 }
 
 // Registry 获取任务注册表
@@ -187,6 +200,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	// 启动Prometheus指标服务
 	if s.opts.Metrics.Enabled {
 		if err := s.startMetricsServer(); err != nil {
+			s.running.Store(false)
 			return fmt.Errorf("failed to start metrics server: %w", err)
 		}
 	}
@@ -194,6 +208,11 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	// 启动健康检查服务
 	if s.opts.Health.Enabled {
 		if err := s.healthChecker.Start(s.opts.Health.Port, s.opts.Health.Path); err != nil {
+			// 回滚：关闭已启动的 metrics server
+			if s.metricsServer != nil {
+				s.metricsServer.Shutdown(ctx)
+			}
+			s.running.Store(false)
 			return fmt.Errorf("failed to start health server: %w", err)
 		}
 	}
@@ -203,9 +222,24 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	go s.scheduleLoop(s.ctx)
 
 	// 启动所有Workers
-	for _, worker := range s.workers {
+	for i, worker := range s.workers {
 		if err := worker.Start(s.ctx); err != nil {
 			s.logger.Error().Err(err).Str("worker_id", worker.id).Msg("failed to start worker")
+			// 回滚：停止已启动的 workers
+			for j := 0; j < i; j++ {
+				s.workers[j].Stop(ctx)
+			}
+			// 回滚：取消调度循环
+			s.cancel()
+			s.wg.Wait()
+			// 回滚：关闭 HTTP 服务
+			if s.metricsServer != nil {
+				s.metricsServer.Shutdown(ctx)
+			}
+			if s.healthChecker != nil {
+				s.healthChecker.Stop(ctx)
+			}
+			s.running.Store(false)
 			return err
 		}
 	}
@@ -355,10 +389,9 @@ func (s *Scheduler) reclaimPendingMessages(ctx context.Context) {
 
 // updateQueueMetrics 更新队列指标
 func (s *Scheduler) updateQueueMetrics(ctx context.Context) {
-	// 检查缓存是否过期
+	// 检查缓存是否过期（原子读单个指针，无竞态）
 	now := time.Now().Unix()
-	lastUpdate := s.lastStatsTime.Load()
-	if now-lastUpdate < statsCacheSeconds {
+	if snap := s.statsCache.Load(); snap != nil && now-snap.updatedAt < statsCacheSeconds {
 		return // 使用缓存，避免频繁查询
 	}
 
@@ -367,9 +400,8 @@ func (s *Scheduler) updateQueueMetrics(ctx context.Context) {
 		return
 	}
 
-	// 更新缓存
-	s.statsCache.Store(stats)
-	s.lastStatsTime.Store(now)
+	// 原子更新缓存快照
+	s.statsCache.Store(&statsSnapshot{stats: stats, updatedAt: now})
 
 	s.metrics.RecordQueueSize("delayed", float64(stats.DelayedCount))
 	s.metrics.RecordQueueSize("ready_high", float64(stats.HighCount))
@@ -462,22 +494,22 @@ func (s *Scheduler) submitTask(ctx context.Context, task *Task) (string, error) 
 
 	// 去重检查
 	if task.DeduplicationKey != "" {
-		duplicate, existingTaskID, err := s.dedup.Check(ctx, task.DeduplicationKey)
-		if err != nil {
-			return "", fmt.Errorf("deduplication check failed: %w", err)
-		}
-		if duplicate {
-			s.logger.Debug().Str("task_id", existingTaskID).Str("dedup_key", task.DeduplicationKey).Msg("task duplicate")
-			return existingTaskID, ErrTaskDuplicate
-		}
-
-		// 设置去重记录
 		ttl := task.DeduplicationTTL
 		if ttl == 0 {
 			ttl = s.opts.DedupDefaultTTL
 		}
-		if err := s.dedup.Set(ctx, task.DeduplicationKey, task.ID, ttl); err != nil {
-			return "", fmt.Errorf("failed to set deduplication record: %w", err)
+		set, err := s.dedup.SetNX(ctx, task.DeduplicationKey, task.ID, ttl)
+		if err != nil {
+			return "", fmt.Errorf("deduplication check failed: %w", err)
+		}
+		if !set {
+			// 已存在，获取已有的任务ID
+			existingTaskID, _ := s.dedup.GetTaskID(ctx, task.DeduplicationKey)
+			if existingTaskID == "" {
+				existingTaskID = "unknown"
+			}
+			s.logger.Debug().Str("task_id", existingTaskID).Str("dedup_key", task.DeduplicationKey).Msg("task duplicate")
+			return existingTaskID, ErrTaskDuplicate
 		}
 	}
 
@@ -596,25 +628,19 @@ func BatchSubmitWithSerializer[T any](s *Scheduler, ctx context.Context, taskTyp
 	taskIDs := make([]string, 0, len(tasks))
 
 	for _, task := range tasks {
-		// 去重检查
+		// 去重检查（使用原子操作 SetNX 避免 Check+Set 竞态）
 		if task.DeduplicationKey != "" {
-			duplicate, existingTaskID, err := s.dedup.Check(ctx, task.DeduplicationKey)
-			if err != nil {
-				s.logger.Error().Err(err).Str("task_id", task.ID).Msg("deduplication check failed in batch")
-				continue
-			}
-			if duplicate {
-				s.logger.Debug().Str("task_id", existingTaskID).Str("dedup_key", task.DeduplicationKey).Msg("task duplicate in batch")
-				continue
-			}
-
-			// 设置去重记录
 			ttl := task.DeduplicationTTL
 			if ttl == 0 {
 				ttl = s.opts.DedupDefaultTTL
 			}
-			if err := s.dedup.Set(ctx, task.DeduplicationKey, task.ID, ttl); err != nil {
-				s.logger.Error().Err(err).Str("task_id", task.ID).Msg("failed to set deduplication record in batch")
+			set, err := s.dedup.SetNX(ctx, task.DeduplicationKey, task.ID, ttl)
+			if err != nil {
+				s.logger.Error().Err(err).Str("task_id", task.ID).Msg("deduplication check failed in batch")
+				continue
+			}
+			if !set {
+				s.logger.Debug().Str("task_id", task.ID).Str("dedup_key", task.DeduplicationKey).Msg("task duplicate in batch")
 				continue
 			}
 		}
@@ -746,6 +772,8 @@ func (s *Scheduler) returnMapToPool(m map[string]any) {
 	if len(m) > mapPoolMaxSize {
 		return
 	}
+	// 清空map，防止下次使用时读到残留数据
+	clear(m)
 	s.mapPool.Put(m)
 }
 

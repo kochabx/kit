@@ -50,15 +50,15 @@ func NewWorker(scheduler *Scheduler) *Worker {
 	}
 	w.currentTaskID.Store("")
 
-	// 创建协程池
+	// 创建协程池（非阻塞模式，满时返回错误由 processLoop fallback 同步处理）
 	concurrency := scheduler.opts.Worker.Concurrency
 	if concurrency <= 0 {
 		concurrency = 5 // 默认并发5
 	}
-	pool, err := ants.NewPool(concurrency, ants.WithPreAlloc(true))
+	pool, err := ants.NewPool(concurrency, ants.WithPreAlloc(true), ants.WithNonblocking(true))
 	if err != nil {
 		scheduler.logger.Error().Err(err).Msg("failed to create worker pool, using default")
-		pool, _ = ants.NewPool(concurrency)
+		pool, _ = ants.NewPool(concurrency, ants.WithNonblocking(true))
 	}
 	w.pool = pool
 
@@ -222,7 +222,18 @@ func (w *Worker) renew(ctx context.Context) error {
 	pipe.Expire(ctx, workerKey, w.scheduler.opts.Worker.LeaseTTL)
 
 	_, err := pipe.Exec(ctx)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// 续期当前持有的任务锁，防止长时间任务的锁过期被其他 worker 抢占
+	if taskID := w.getCurrentTaskID(); taskID != "" {
+		if _, extErr := w.scheduler.lock.Extend(ctx, taskID, w.id, w.scheduler.opts.LockTimeout); extErr != nil {
+			w.logger.Warn().Err(extErr).Str("task_id", taskID).Msg("failed to extend task lock")
+		}
+	}
+
+	return nil
 }
 
 // fetchLoop 任务拉取循环 (流水线第一阶段)
@@ -268,27 +279,19 @@ func (w *Worker) processLoop(ctx context.Context) {
 
 	w.logger.Info().Msg("worker process loop started")
 
-	for {
-		select {
-		case <-ctx.Done():
-			w.logger.Info().Msg("worker process loop stopped: context cancelled")
-			return
-		case item, ok := <-w.taskBuffer:
-			if !ok {
-				w.logger.Info().Msg("task buffer closed, exiting")
-				return
-			}
-			// 使用协程池并发处理任务
-			err := w.pool.Submit(func() {
-				w.handleTask(ctx, item)
-			})
-			if err != nil {
-				w.logger.Error().Err(err).Str("task_id", item.taskID).Msg("failed to submit task to pool")
-				// 如果提交失败，同步处理
-				w.handleTask(ctx, item)
-			}
+	for item := range w.taskBuffer {
+		// 使用协程池并发处理任务
+		err := w.pool.Submit(func() {
+			w.handleTask(ctx, item)
+		})
+		if err != nil {
+			w.logger.Error().Err(err).Str("task_id", item.taskID).Msg("failed to submit task to pool")
+			// 如果提交失败，同步处理
+			w.handleTask(ctx, item)
 		}
 	}
+
+	w.logger.Info().Msg("task buffer closed, exiting process loop")
 }
 
 // handleTask 处理单个任务（在协程池中执行）
@@ -298,8 +301,13 @@ func (w *Worker) handleTask(ctx context.Context, item *taskItem) {
 
 	// ACK/NACK
 	if err == nil {
-		if ackErr := w.scheduler.queue.AckMessage(ctx, item.priority, item.msgID); ackErr != nil {
-			w.logger.Error().Err(ackErr).Str("task_id", item.taskID).Msg("failed to ack")
+		// ACK 带有限重试，防止消息留在 pending 导致重复执行
+		for i := 0; i < 3; i++ {
+			if ackErr := w.scheduler.queue.AckMessage(ctx, item.priority, item.msgID); ackErr != nil {
+				w.logger.Error().Err(ackErr).Str("task_id", item.taskID).Int("attempt", i+1).Msg("failed to ack, retrying")
+				continue
+			}
+			break
 		}
 	} else {
 		w.logger.Error().Err(err).Str("task_id", item.taskID).Msg("task processing failed")

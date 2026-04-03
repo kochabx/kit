@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,28 +14,28 @@ import (
 type Queue struct {
 	client          *redis.Client
 	namespace       string
-	consumerName    string // Worker唯一标识
-	strBuilderPool  *sync.Pool
+	consumerName    string      // Worker唯一标识
 	priorities      [3]Priority // 预分配优先级数组
 	keyDelayedCache string      // 缓存延迟队列key
 	keyGroupCache   string      // 缓存消费者组key
+	keyStreamHigh   string      // 缓存高优先级stream key
+	keyStreamNormal string      // 缓存普通优先级stream key
+	keyStreamLow    string      // 缓存低优先级stream key
 }
 
 // NewQueue 创建队列管理器
 func NewQueue(client *redis.Client, namespace string) *Queue {
 	q := &Queue{
-		client:    client,
-		namespace: namespace,
-		strBuilderPool: &sync.Pool{
-			New: func() any {
-				return &strings.Builder{}
-			},
-		},
+		client:     client,
+		namespace:  namespace,
 		priorities: [3]Priority{PriorityHigh, PriorityNormal, PriorityLow},
 	}
 	// 预计算常用key
 	q.keyDelayedCache = fmt.Sprintf("%s:delayed", namespace)
 	q.keyGroupCache = fmt.Sprintf("%s:consumers", namespace)
+	q.keyStreamHigh = fmt.Sprintf("%s:stream:high", namespace)
+	q.keyStreamNormal = fmt.Sprintf("%s:stream:normal", namespace)
+	q.keyStreamLow = fmt.Sprintf("%s:stream:low", namespace)
 	return q
 }
 
@@ -50,26 +49,16 @@ func (q *Queue) keyDelayed() string {
 	return q.keyDelayedCache
 }
 
-// keyStream 就绪队列Stream key
+// keyStream 就绪队列Stream key（使用预计算缓存）
 func (q *Queue) keyStream(priority Priority) string {
-	b := q.strBuilderPool.Get().(*strings.Builder)
-	defer func() {
-		b.Reset()
-		q.strBuilderPool.Put(b)
-	}()
-
-	b.WriteString(q.namespace)
-	b.WriteString(":stream:")
-
 	switch {
 	case priority >= PriorityHigh:
-		b.WriteString("high")
+		return q.keyStreamHigh
 	case priority >= PriorityNormal:
-		b.WriteString("normal")
+		return q.keyStreamNormal
 	default:
-		b.WriteString("low")
+		return q.keyStreamLow
 	}
-	return b.String()
 }
 
 // keyConsumerGroup 消费者组名
@@ -117,7 +106,7 @@ func (q *Queue) PopReady(ctx context.Context, timeout int) (string, Priority, st
 	groupName := q.keyGroupCache
 
 	// 按优先级尝试读取（高优先级优先）- 使用预分配数组
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		priority := q.priorities[i]
 		streamKey := q.keyStream(priority)
 
@@ -127,7 +116,7 @@ func (q *Queue) PopReady(ctx context.Context, timeout int) (string, Priority, st
 			Consumer: q.consumerName,
 			Streams:  []string{streamKey, ">"},
 			Count:    1,
-			Block:    0, // 不阻塞
+			Block:    -1, // 不阻塞：负值使 go-redis 省略 BLOCK 参数
 		}).Result()
 
 		if err != nil {
@@ -143,7 +132,10 @@ func (q *Queue) PopReady(ctx context.Context, timeout int) (string, Priority, st
 
 		if len(results) > 0 && len(results[0].Messages) > 0 {
 			msg := results[0].Messages[0]
-			taskID := msg.Values["task_id"].(string)
+			taskID, ok := msg.Values["task_id"].(string)
+			if !ok {
+				continue
+			}
 			msgID := msg.ID
 
 			return taskID, priority, msgID, nil
@@ -153,7 +145,7 @@ func (q *Queue) PopReady(ctx context.Context, timeout int) (string, Priority, st
 	// 所有优先级都没有任务，进行阻塞等待
 	// 构建streams参数 - 使用预分配数组
 	streams := make([]string, 6) // 3 streams + 3 ">"
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		streams[i] = q.keyStream(q.priorities[i])
 		streams[i+3] = ">"
 	}
@@ -183,12 +175,15 @@ func (q *Queue) PopReady(ctx context.Context, timeout int) (string, Priority, st
 	for _, result := range results {
 		if len(result.Messages) > 0 {
 			msg := result.Messages[0]
-			taskID := msg.Values["task_id"].(string)
+			taskID, ok := msg.Values["task_id"].(string)
+			if !ok {
+				continue
+			}
 			msgID := msg.ID
 
 			// 根据 stream key 确定优先级 - 使用预分配数组
 			var priority Priority
-			for i := 0; i < 3; i++ {
+			for i := range 3 {
 				if result.Stream == q.keyStream(q.priorities[i]) {
 					priority = q.priorities[i]
 					break
@@ -272,9 +267,17 @@ func (q *Queue) MoveDelayedToReady(ctx context.Context, now int64, limit int) (i
 		moved++
 	}
 
-	_, err = pipe.Exec(ctx)
+	cmders, err := pipe.Exec(ctx)
 	if err != nil && err != redis.Nil {
-		return moved, err
+		// 检查各 command 结果，统计实际成功数
+		actualMoved := int64(0)
+		for _, cmd := range cmders {
+			if cmd.Err() == nil {
+				actualMoved++
+			}
+		}
+		// 每个任务对应 XAdd + ZRem 两条命令，实际移动数 = 成功的 XAdd 数
+		return actualMoved / 2, err
 	}
 
 	return moved, nil
@@ -289,26 +292,36 @@ func (q *Queue) RemoveDelayed(ctx context.Context, taskID string) error {
 func (q *Queue) RemoveReady(ctx context.Context, taskID string) error {
 	// 需要从所有优先级的 Stream 中查找并删除该任务
 	groupName := q.keyGroupCache
+	const batchSize = 100
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		streamKey := q.keyStream(q.priorities[i])
 
-		// 读取 Stream 中的所有消息（不使用消费组）
-		messages, err := q.client.XRange(ctx, streamKey, "-", "+").Result()
-		if err != nil {
-			continue
-		}
+		// 分批扫描 Stream，找到后立即返回（避免全量扫描）
+		lastID := "-"
+		for {
+			messages, err := q.client.XRangeN(ctx, streamKey, lastID, "+", int64(batchSize)).Result()
+			if err != nil || len(messages) == 0 {
+				break
+			}
 
-		// 查找匹配的消息并删除
-		for _, msg := range messages {
-			if taskIDVal, ok := msg.Values["task_id"]; ok {
-				if taskIDVal.(string) == taskID {
-					// 删除消息
-					q.client.XDel(ctx, streamKey, msg.ID)
-					// 从消费组的 Pending 列表中也删除
-					q.client.XAck(ctx, streamKey, groupName, msg.ID)
+			for _, msg := range messages {
+				lastID = msg.ID
+				if taskIDVal, ok := msg.Values["task_id"]; ok {
+					if taskIDVal.(string) == taskID {
+						q.client.XDel(ctx, streamKey, msg.ID)
+						q.client.XAck(ctx, streamKey, groupName, msg.ID)
+						return nil
+					}
 				}
 			}
+
+			if len(messages) < batchSize {
+				break // 已到末尾
+			}
+			// XRange 是闭区间，需要跳过最后一条已处理的消息
+			// 通过在 lastID 后追加以确保不重复（Redis stream ID 是递增的）
+			lastID = lastID + "\x00"
 		}
 	}
 
@@ -391,8 +404,10 @@ func (q *Queue) ClaimStaleMessages(ctx context.Context, priority Priority, idleT
 			}).Result()
 
 			if err == nil && len(claimed) > 0 {
-				taskID := claimed[0].Values["task_id"].(string)
-				claimedTaskIDs = append(claimedTaskIDs, taskID)
+				taskID, ok := claimed[0].Values["task_id"].(string)
+				if ok {
+					claimedTaskIDs = append(claimedTaskIDs, taskID)
+				}
 			}
 		}
 	}

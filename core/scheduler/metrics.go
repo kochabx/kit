@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"sync"
+
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 )
@@ -8,6 +10,9 @@ import (
 // Metrics Prometheus指标收集器
 type Metrics struct {
 	enabled bool
+
+	// 已注册的任务类型白名单，防止标签基数爆炸
+	registeredTypes sync.Map
 
 	// 任务提交指标
 	TaskSubmitted *prometheus.CounterVec // 任务提交总数
@@ -184,7 +189,7 @@ func (m *Metrics) RecordTaskSubmitted(taskType string, priority Priority) {
 	} else {
 		priorityStr = "low"
 	}
-	m.TaskSubmitted.WithLabelValues(taskType, priorityStr).Inc()
+	m.TaskSubmitted.WithLabelValues(m.sanitizeTaskType(taskType), priorityStr).Inc()
 }
 
 // RecordTaskExecuted 记录任务执行
@@ -192,8 +197,9 @@ func (m *Metrics) RecordTaskExecuted(taskType string, status TaskStatus, duratio
 	if !m.enabled {
 		return
 	}
-	m.TaskExecuted.WithLabelValues(taskType, string(status)).Inc()
-	m.TaskDuration.WithLabelValues(taskType).Observe(duration)
+	safeType := m.sanitizeTaskType(taskType)
+	m.TaskExecuted.WithLabelValues(safeType, string(status)).Inc()
+	m.TaskDuration.WithLabelValues(safeType).Observe(duration)
 }
 
 // RecordQueueSize 记录队列大小
@@ -272,7 +278,7 @@ func (m *Metrics) RecordTaskRetry(taskType string, retryCount int) {
 	default:
 		retryStr = "6+"
 	}
-	m.TaskRetry.WithLabelValues(taskType, retryStr).Inc()
+	m.TaskRetry.WithLabelValues(m.sanitizeTaskType(taskType), retryStr).Inc()
 }
 
 // RecordDeadLetterCount 记录死信队列任务数
@@ -297,4 +303,20 @@ func (m *Metrics) RecordCircuitBreakerState(name string, state CircuitState) {
 		return
 	}
 	m.CircuitBreakerState.WithLabelValues(name).Set(float64(state))
+}
+
+// RegisterTaskType 注册任务类型到白名单（在 handler 注册时调用）
+func (m *Metrics) RegisterTaskType(taskType string) {
+	if !m.enabled {
+		return
+	}
+	m.registeredTypes.Store(taskType, struct{}{})
+}
+
+// sanitizeTaskType 校验任务类型，未注册的归入 "unknown" 防止基数爆炸
+func (m *Metrics) sanitizeTaskType(taskType string) string {
+	if _, ok := m.registeredTypes.Load(taskType); ok {
+		return taskType
+	}
+	return "unknown"
 }

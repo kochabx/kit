@@ -72,6 +72,9 @@ type DeduplicationStore interface {
 
 	// Extend 延长去重记录的TTL
 	Extend(ctx context.Context, dedupKey string, ttl time.Duration) error
+
+	// GetTaskID 获取去重键对应的任务ID
+	GetTaskID(ctx context.Context, dedupKey string) (string, error)
 }
 
 // DeadLetterStore 死信队列存储接口
