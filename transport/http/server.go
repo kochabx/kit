@@ -3,7 +3,7 @@ package http
 import (
 	"context"
 	"crypto/tls"
-	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -149,7 +149,7 @@ func NewServer(handler http.Handler, opts ...Option) *Server {
 		opt(&cfg)
 	}
 
-	if !transport.ValidateAddress(cfg.addr) {
+	if !transport.ValidAddress(cfg.addr) {
 		log.Warn().Msgf("invalid address %q, falling back to %s", cfg.addr, defaultAddr)
 		cfg.addr = defaultAddr
 	}
@@ -177,24 +177,23 @@ func NewServer(handler http.Handler, opts ...Option) *Server {
 // wraps the user handler; otherwise the user handler is returned as-is.
 func (s *Server) Handler() http.Handler { return s.srv.Handler }
 
-// Run starts the server. If TLS cert/key files were configured via WithTLS,
-// the server uses HTTPS. Returns nil on clean shutdown (ErrServerClosed).
-func (s *Server) Run() error {
-	log.Info().Msgf("%s server listening on %s", s.name, s.srv.Addr)
-	var err error
+// Start implements cx.Starter, starting the server in the background and returning immediately.
+func (s *Server) Start(_ context.Context) error {
+	lis, err := net.Listen("tcp", s.srv.Addr)
+	if err != nil {
+		return err
+	}
 	if s.tlsCertFile != "" {
-		err = s.srv.ListenAndServeTLS(s.tlsCertFile, s.tlsKeyFile)
+		go s.srv.ServeTLS(lis, s.tlsCertFile, s.tlsKeyFile)
 	} else {
-		err = s.srv.ListenAndServe()
+		go s.srv.Serve(lis)
 	}
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
-	}
-	return err
+	log.Info().Msgf("%s server listening on %s", s.name, s.srv.Addr)
+	return nil
 }
 
-// Shutdown gracefully stops the server with the given context deadline.
-func (s *Server) Shutdown(ctx context.Context) error {
+// Stop gracefully stops the server.
+func (s *Server) Stop(ctx context.Context) error {
 	return s.srv.Shutdown(ctx)
 }
 

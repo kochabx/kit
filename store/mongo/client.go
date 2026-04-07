@@ -102,6 +102,21 @@ func (m *Client) Close() error {
 	return nil
 }
 
+// Start 实现 cx.Starter，验证 MongoDB 连接可用。
+func (m *Client) Start(ctx context.Context) error {
+	return m.Ping(ctx)
+}
+
+// Stop 实现 cx.Stopper，关闭 MongoDB 连接。
+func (m *Client) Stop(_ context.Context) error {
+	return m.Close()
+}
+
+// Check 实现 cx.Checker，检查 MongoDB 健康状态。
+func (m *Client) Check(ctx context.Context) error {
+	return m.Ping(ctx)
+}
+
 // GetClient 获取 MongoDB 客户端
 func (m *Client) GetClient() *mongo.Client {
 	return m.client

@@ -112,19 +112,17 @@ func TestServer_StdlibMiddleware(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 }
 
-func TestServer_Shutdown(t *testing.T) {
+func TestServer_Stop(t *testing.T) {
 	s := NewServer(http.NotFoundHandler(), WithAddr(":19080"))
 
-	errCh := make(chan error, 1)
-	go func() { errCh <- s.Run() }()
+	require.NoError(t, s.Start(context.Background()))
 
 	time.Sleep(50 * time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	require.NoError(t, s.Shutdown(ctx))
-	require.NoError(t, <-errCh)
+	require.NoError(t, s.Stop(ctx))
 }
 
 // ---------------------------------------------------------------------------

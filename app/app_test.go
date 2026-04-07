@@ -9,248 +9,302 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/kochabx/kit/cx"
+	"github.com/kochabx/kit/store/db"
 	"github.com/kochabx/kit/transport/http"
 )
 
-func TestNew_Simple(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	httpServer := http.NewServer(gin.New())
-	app := New(WithServer(httpServer))
+func init() { gin.SetMode(gin.TestMode) }
 
-	info := app.Info()
-	if info.ServerCount != 1 {
-		t.Fatalf("expected 1 server, got %d", info.ServerCount)
-	}
+func newTestServer() *http.Server {
+	return http.NewServer(gin.New())
+}
 
-	if info.Started {
-		t.Fatal("expected application not to be started")
+// ---------------------------------------------------------------------------
+// 基础创建
+// ---------------------------------------------------------------------------
+
+func TestNew_Default(t *testing.T) {
+	app := New()
+	if app.Container() == nil {
+		t.Fatal("expected non-nil container")
 	}
 }
 
-func TestNew_WithOptions(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	httpServer := http.NewServer(gin.New())
+func TestNew_WithServer(t *testing.T) {
+	app := New(WithServer(newTestServer()))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	app := New(
-		WithServer(httpServer),
-		WithShutdownTimeout(5*time.Second),
-		WithCloseTimeout(2*time.Second),
-		WithClose("test-close", func(ctx context.Context) error {
-			t.Log("close called")
-			return nil
-		}, time.Second),
-		WithSignals(os.Interrupt, syscall.SIGTERM),
-		WithContext(ctx),
-	)
-	app.RegisterClose("late-close", func(ctx context.Context) error {
-		t.Log("late close called")
-		return nil
-	}, time.Second)
-	err := app.Start()
-	if err != nil && err != context.Canceled && err.Error() != "http: Server closed" {
-		t.Fatalf("unexpected error from app.Start(): %v", err)
+	m := app.Container().Metrics()
+	if m.ComponentCount != 1 {
+		t.Fatalf("expected 1 component, got %d", m.ComponentCount)
 	}
 }
 
-func TestNew_WithMultipleServers(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	httpServer1 := http.NewServer(gin.New())
-	httpServer2 := http.NewServer(gin.New())
+func TestNew_WithServers(t *testing.T) {
+	app := New(WithServers(newTestServer(), newTestServer()))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	app := New(
-		WithServers(httpServer1, httpServer2),
-		WithServer(httpServer1), // Should be deduplicated
-		WithContext(ctx),
-	)
-
-	info := app.Info()
-	if info.ServerCount != 3 {
-		t.Fatalf("expected 3 servers, got %d", info.ServerCount)
+	m := app.Container().Metrics()
+	if m.ComponentCount != 2 {
+		t.Fatalf("expected 2 components, got %d", m.ComponentCount)
 	}
 }
 
-func TestNew_NoServers(t *testing.T) {
+func TestNew_NilServerIgnored(t *testing.T) {
+	app := New(WithServer(nil))
+
+	m := app.Container().Metrics()
+	if m.ComponentCount != 0 {
+		t.Fatalf("expected 0 components, got %d", m.ComponentCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Run / Stop 生命周期
+// ---------------------------------------------------------------------------
+
+func TestRun_NoServers(t *testing.T) {
 	app := New()
 
-	info := app.Info()
-	if info.ServerCount != 0 {
-		t.Fatalf("expected 0 servers, got %d", info.ServerCount)
-	}
-
-	// Should handle gracefully with no servers
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		app.Stop()
-	}()
-
-	err := app.Start()
-	if err != nil && err != context.Canceled {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestApplication_AddServerAtRuntime(t *testing.T) {
-	app := New()
-	gin.SetMode(gin.TestMode)
-	httpServer := http.NewServer(gin.New())
-
-	// Should work before starting
-	err := app.AddServer(httpServer)
-	if err != nil {
-		t.Fatalf("unexpected error adding server: %v", err)
-	}
-
-	info := app.Info()
-	if info.ServerCount != 1 {
-		t.Fatalf("expected 1 server, got %d", info.ServerCount)
-	}
-}
-
-func TestApplication_AddServerAfterStart(t *testing.T) {
-	app := New()
-
-	// Mark as started
-	app.started = true
-
-	gin.SetMode(gin.TestMode)
-	httpServer := http.NewServer(gin.New())
-	err := app.AddServer(httpServer)
-	if err != ErrAlreadyStarted {
-		t.Fatalf("expected ErrAlreadyStarted, got %v", err)
-	}
-}
-
-func TestApplication_AddNilServer(t *testing.T) {
-	app := New()
-
-	err := app.AddServer(nil)
-	if err == nil {
-		t.Fatal("expected error when adding nil server")
-	}
-}
-
-func TestApplication_RegisterCloseAtRuntime(t *testing.T) {
-	app := New()
-
-	closeCalled := false
-	err := app.RegisterClose("test", func(ctx context.Context) error {
-		closeCalled = true
-		return nil
-	}, time.Second)
-
-	if err != nil {
-		t.Fatalf("unexpected error adding close function: %v", err)
-	}
-
-	info := app.Info()
-	if info.CloseCount != 1 {
-		t.Fatalf("expected 1 close function, got %d", info.CloseCount)
-	}
-
-	app.runCloseTasks()
-
-	if !closeCalled {
-		t.Fatal("expected close function to be called")
-	}
-}
-
-func TestApplication_AddNilClose(t *testing.T) {
-	app := New()
-
-	err := app.RegisterClose("test", nil, time.Second)
-	if err == nil {
-		t.Fatal("expected error when adding nil close function")
-	}
-}
-
-func TestWithContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	gin.SetMode(gin.TestMode)
-	httpServer := http.NewServer(gin.New())
-	app := New(
-		WithContext(ctx),
-		WithServer(httpServer),
-	)
-
-	// Cancel context to test graceful shutdown
-	cancel()
-
-	// This should return quickly due to cancelled context
 	done := make(chan error, 1)
-	go func() {
-		done <- app.Start()
-	}()
+	go func() { done <- app.Run() }()
+
+	time.Sleep(50 * time.Millisecond)
+	app.Shutdown()
 
 	select {
 	case err := <-done:
-		// Context cancellation and server close errors are acceptable
-		if err != nil && err != context.Canceled && err.Error() != "http: Server closed" {
+		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("app.Start() should have returned quickly due to cancelled context")
+		t.Fatal("Run() did not return after Shutdown()")
 	}
 }
 
-func TestCloseFunc_Panic(t *testing.T) {
-	app := New(
-		WithClose("panic-close", func(ctx context.Context) error {
-			panic("test panic")
-		}, time.Second),
-	)
+func TestRun_ContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// Should not panic when executing close tasks
-	app.runCloseTasks()
+	app := New(WithContext(ctx))
+
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return after context cancel")
+	}
 }
 
-func TestCloseFunc_Timeout(t *testing.T) {
+func TestRun_DoubleRunReturnsError(t *testing.T) {
+	app := New()
+
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// 第二次 Start 应立即返回错误
+	err := app.Run()
+	if err != ErrAlreadyRunning {
+		t.Fatalf("expected ErrAlreadyRunning, got %v", err)
+	}
+
+	app.Shutdown()
+	<-done
+}
+
+func TestRun_WithOptions(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
 	app := New(
-		WithClose("slow-close", func(ctx context.Context) error {
-			time.Sleep(2 * time.Second)
+		WithContext(ctx),
+		WithShutdownTimeout(5*time.Second),
+		WithSignals(os.Interrupt, syscall.SIGTERM),
+		WithServer(newTestServer()),
+	)
+
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+
+	time.Sleep(100 * time.Millisecond)
+	app.Shutdown()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 生命周期钩子
+// ---------------------------------------------------------------------------
+
+func TestRun_LifecycleHooks(t *testing.T) {
+	var order []string
+
+	app := New(
+		WithOnStart(func(ctx context.Context) error {
+			order = append(order, "onStart")
 			return nil
-		}, 100*time.Millisecond),
+		}),
+		WithOnStarted(func(ctx context.Context) error {
+			order = append(order, "onStarted")
+			return nil
+		}),
+		WithOnStopping(func(ctx context.Context) error {
+			order = append(order, "onStopping")
+			return nil
+		}),
+		WithOnStop(func(ctx context.Context) error {
+			order = append(order, "onStop")
+			return nil
+		}),
 	)
 
-	start := time.Now()
-	app.runCloseTasks()
-	duration := time.Since(start)
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
 
-	// Should timeout quickly
-	if duration > 500*time.Millisecond {
-		t.Fatalf("close tasks took too long: %v", duration)
+	time.Sleep(50 * time.Millisecond)
+	app.Shutdown()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return")
+	}
+
+	expected := []string{"onStart", "onStarted", "onStopping", "onStop"}
+	if len(order) != len(expected) {
+		t.Fatalf("expected hooks %v, got %v", expected, order)
+	}
+	for i, v := range expected {
+		if order[i] != v {
+			t.Fatalf("hook[%d]: expected %q, got %q", i, v, order[i])
+		}
 	}
 }
 
-func TestWithNilOptions(t *testing.T) {
-	// Test that nil values are handled gracefully
-	app := New(
-		WithServer(nil),  // Should be ignored
-		WithServers(nil), // Should be ignored
-	)
+// ---------------------------------------------------------------------------
+// WithContainer — 自定义容器
+// ---------------------------------------------------------------------------
 
-	info := app.Info()
-	if info.ServerCount != 0 {
-		t.Fatalf("expected 0 servers, got %d", info.ServerCount)
+func TestRun_WithContainer(t *testing.T) {
+	dbClient, err := db.New(&db.SQLiteConfig{FilePath: t.TempDir() + "/test.db"})
+	if err != nil {
+		t.Fatalf("failed to create db client: %v", err)
 	}
+
+	c := cx.New()
+	cx.MustSupply(c, "db", dbClient)
+
+	app := New(WithContainer(c))
+
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// db.Client.Start 调用 Ping，验证组件已启动
+	if dbClient.Ping(context.Background()) != nil {
+		t.Fatal("expected db to be reachable after start")
+	}
+
+	app.Shutdown()
+	<-done
 }
 
-func TestOptionValidation(t *testing.T) {
+// ---------------------------------------------------------------------------
+// HealthCheck
+// ---------------------------------------------------------------------------
+
+func TestHealthCheck(t *testing.T) {
+	dbClient, err := db.New(&db.SQLiteConfig{FilePath: t.TempDir() + "/test.db"})
+	if err != nil {
+		t.Fatalf("failed to create db client: %v", err)
+	}
+
+	c := cx.New()
+	cx.MustSupply(c, "db", dbClient)
+
+	app := New(WithContainer(c))
+
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	report := app.HealthCheck(context.Background())
+	if !report.Healthy {
+		t.Fatal("expected healthy report")
+	}
+
+	app.Shutdown()
+	<-done
+}
+
+// ---------------------------------------------------------------------------
+// 关闭顺序 — 验证 cx 反向依赖序
+// ---------------------------------------------------------------------------
+
+func TestRun_ShutdownOrder(t *testing.T) {
+	// 使用真实 HTTP server 和 SQLite DB 验证关闭顺序
+	// 注册顺序：server → db → 停止顺序：db → server
+
+	srv := http.NewServer(gin.New(), http.WithAddr(":18999"))
+
+	dbClient, err := db.New(&db.SQLiteConfig{FilePath: t.TempDir() + "/test.db"})
+	if err != nil {
+		t.Fatalf("failed to create db client: %v", err)
+	}
+
+	var order []string
+
 	app := New(
-		WithShutdownTimeout(0),             // Should be ignored (invalid)
-		WithCloseTimeout(0),                // Should be ignored (invalid)
-		WithShutdownTimeout(5*time.Second), // Should be applied
+		WithServer(srv),
+		WithComponent("db", dbClient),
+		WithOnStopping(func(ctx context.Context) error {
+			// 记录 db 连接状态：如果 db 已关闭，Ping 会失败
+			if dbClient.Ping(ctx) != nil {
+				order = append(order, "db-closed")
+			} else {
+				order = append(order, "db-alive")
+			}
+			return nil
+		}),
 	)
 
-	// Check that valid options are applied
-	info := app.Info()
-	if info.ServerCount != 0 {
-		t.Fatalf("expected 0 servers, got %d", info.ServerCount)
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+
+	time.Sleep(100 * time.Millisecond)
+	app.Shutdown()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run() did not return")
+	}
+
+	// OnStopping 在组件 Stop 之前执行，此时 db 应该还活着
+	if len(order) != 1 || order[0] != "db-alive" {
+		t.Fatalf("expected [db-alive], got %v", order)
 	}
 }

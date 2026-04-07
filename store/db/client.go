@@ -207,6 +207,21 @@ func (c *Client) IsHealthy() bool {
 	return c.Ping(ctx) == nil
 }
 
+// Start 实现 cx.Starter，验证数据库连接可用。
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
+// Stop 实现 cx.Stopper，关闭数据库连接。
+func (c *Client) Stop(_ context.Context) error {
+	return c.Close()
+}
+
+// Check 实现 cx.Checker，检查数据库健康状态。
+func (c *Client) Check(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
 // gormLogWriter 适配 kit/log 到 GORM logger.Writer
 type gormLogWriter struct {
 	logger *log.Logger

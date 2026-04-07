@@ -122,3 +122,18 @@ func (e *Etcd) Close() error {
 	e.Client = nil
 	return nil
 }
+
+// Start 实现 cx.Starter，验证 etcd 连接可用。
+func (e *Etcd) Start(ctx context.Context) error {
+	return e.Ping(ctx)
+}
+
+// Stop 实现 cx.Stopper，关闭 etcd 连接。
+func (e *Etcd) Stop(_ context.Context) error {
+	return e.Close()
+}
+
+// Check 实现 cx.Checker，检查 etcd 健康状态。
+func (e *Etcd) Check(ctx context.Context) error {
+	return e.Ping(ctx)
+}

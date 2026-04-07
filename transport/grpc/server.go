@@ -24,6 +24,7 @@ type Server struct {
 	srv  *grpc.Server
 	addr string
 	name string
+	lis  net.Listener
 }
 
 // config holds the builder state for NewServer.
@@ -90,7 +91,7 @@ func NewServer(opts ...Option) *Server {
 		opt(&cfg)
 	}
 
-	if !transport.ValidateAddress(cfg.addr) {
+	if !transport.ValidAddress(cfg.addr) {
 		log.Warn().Msgf("invalid address %q, falling back to %s", cfg.addr, defaultAddr)
 		cfg.addr = defaultAddr
 	}
@@ -116,19 +117,20 @@ func NewServer(opts ...Option) *Server {
 // Srv returns the underlying *grpc.Server for service registration.
 func (s *Server) Srv() *grpc.Server { return s.srv }
 
-// Run starts the gRPC server. It blocks until the server is stopped.
-func (s *Server) Run() error {
+// Start implements cx.Starter, starting the gRPC server in the background and returning immediately.
+func (s *Server) Start(_ context.Context) error {
 	lis, err := net.Listen("tcp", s.addr)
 	if err != nil {
 		return err
 	}
+	s.lis = lis
+	go s.srv.Serve(lis)
 	log.Info().Msgf("%s server listening on %s", s.name, s.addr)
-	return s.srv.Serve(lis)
+	return nil
 }
 
-// Shutdown gracefully stops the server, waiting for in-flight RPCs to finish.
-// If ctx is cancelled before all RPCs complete, the server is forcefully stopped.
-func (s *Server) Shutdown(ctx context.Context) error {
+// Stop gracefully stops the gRPC server and waits for the background goroutine to exit.
+func (s *Server) Stop(ctx context.Context) error {
 	stopped := make(chan struct{})
 	go func() {
 		s.srv.GracefulStop()

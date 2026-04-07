@@ -255,3 +255,13 @@ func (c *Client) Close() error {
 
 	return eg.Wait()
 }
+
+// Start 实现 cx.Starter（Kafka 连接在使用时按需创建，无需预连接）。
+func (c *Client) Start(_ context.Context) error {
+	return nil
+}
+
+// Stop 实现 cx.Stopper，关闭所有生产者和消费者。
+func (c *Client) Stop(_ context.Context) error {
+	return c.Close()
+}

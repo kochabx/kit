@@ -152,6 +152,21 @@ func (c *Client) Stats() *redis.PoolStats {
 	return c.client.PoolStats()
 }
 
+// Start 实现 cx.Starter，验证 Redis 连接可用。
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
+// Stop 实现 cx.Stopper，关闭 Redis 连接。
+func (c *Client) Stop(_ context.Context) error {
+	return c.Close()
+}
+
+// Check 实现 cx.Checker，检查 Redis 健康状态。
+func (c *Client) Check(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
 // getMode 获取客户端模式
 func (c *Client) getMode() string {
 	switch {

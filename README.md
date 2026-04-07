@@ -93,7 +93,7 @@ func main() {
 		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
 	)
 
-	if err := application.Start(); err != nil {
+	if err := application.Run(); err != nil {
 		panic(err)
 	}
 }
@@ -121,7 +121,7 @@ func main() {
 		app.WithServer(kithttp.NewServer(r, kithttp.WithAddr(":8080"))),
 	)
 
-	if err := application.Start(); err != nil {
+	if err := application.Run(); err != nil {
 		panic(err)
 	}
 }
@@ -133,7 +133,6 @@ func main() {
 package main
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -194,41 +193,40 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// db.Client 和 redis.Client 均实现 cx.Starter/Stopper/Checker，
+	// 由 app 统一管理启动（Ping 验证连通性）和关闭。
 	application := app.New(
 		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
+		app.WithComponent("db", gormDB),
+		app.WithComponent("redis", rdb),
 		app.WithShutdownTimeout(30*time.Second),
-		app.WithClose("database", func(ctx context.Context) error {
-			return gormDB.Close()
-		}, 5*time.Second),
-		app.WithClose("redis", func(ctx context.Context) error {
-			return rdb.Close()
-		}, 3*time.Second),
 	)
 
-	log.Info().Msg("starting application")
-	if err := application.Start(); err != nil {
-		log.Fatal().Err(err).Msg("failed to start application")
+	if err := application.Run(); err != nil {
+		log.Fatal().Err(err).Msg("application exited with error")
 	}
 }
 ```
 
 ## 模块说明
 
-### [app](app/)
+### [app](app/README.md)
 
-管理多个 `transport.Server` 的统一启动与关闭：
+基于 `cx.Container` 的应用生命周期管理：
 
-- 并发启动多个服务，任一服务退出时触发全局关闭
-- 监听 `SIGINT`/`SIGTERM` 信号，支持自定义信号列表
-- 注册带超时的资源关闭函数（数据库、缓存等），按注册顺序执行
-- 支持通过 `WithContext` 传入根上下文
+- `Run()` 阻塞直到收到信号或上下文取消，然后优雅关闭
+- 组件按注册顺序启动，按逆序关闭
+- `transport.Server` 和 store 客户端均实现 `cx.Starter`/`cx.Stopper`，直接注册
+- 支持 `OnStart`/`OnStarted`/`OnStopping`/`OnStop` 四阶段生命周期钩子
+- 内置 `HealthCheck()` 聚合所有实现 `cx.Checker` 的组件
 
 ```go
 app.New(
     app.WithServer(httpServer),
     app.WithServer(grpcServer),
+    app.WithComponent("db", dbClient),
+    app.WithComponent("redis", redisClient),
     app.WithShutdownTimeout(30 * time.Second),
-    app.WithClose("redis", rdb.Close, 3*time.Second),
 )
 ```
 
@@ -336,7 +334,7 @@ Redis 支持的分布式限流：
 
 ### [store](store/)
 
-统一的存储层封装，各组件均支持 functional options 配置：
+统一的存储层封装，各组件均支持 functional options 配置，并实现 `cx.Starter`/`cx.Stopper`/`cx.Checker` 接口，可直接通过 `app.WithComponent` 注册到应用生命周期：
 
 - **db**：`db.New(config)` 支持 MySQL / PostgreSQL / SQLite
 - **redis**：`redis.New(config)` 支持单机 / Sentinel / Cluster 模式
