@@ -1,49 +1,38 @@
 package ecies
 
 import (
-	"bytes"
 	"crypto/ecdh"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/subtle"
 	"encoding/hex"
-	"math/big"
 )
 
 // PublicKey represents an ECIES public key that wraps an ECDH public key.
 // It provides methods for key decapsulation and point encoding.
 type PublicKey struct {
 	ecdhKey *ecdh.PublicKey
-	// Keep ECDSA-compatible fields for serialization
-	curve elliptic.Curve
-	x, y  *big.Int
 }
 
 // Bytes returns the public key in encoded format.
 // If compressed is true, returns 33 bytes (0x02/0x03 + X).
 // If compressed is false, returns 65 bytes (0x04 + X + Y).
 func (pub *PublicKey) Bytes(compressed bool) []byte {
-	if pub.ecdhKey != nil {
-		// Use the efficient ECDH encoding
-		pubBytes := pub.ecdhKey.Bytes()
-		if !compressed {
-			return pubBytes // Already uncompressed format
-		}
-		// For compressed, derive from coordinates
+	if pub == nil || pub.ecdhKey == nil {
+		return nil
 	}
-
-	// Fallback to coordinate-based encoding
-	xBytes := pub.x.FillBytes(make([]byte, CurvePointSize))
-
-	if compressed {
-		if pub.y.Bit(0) == 0 {
-			return append([]byte{CompressedEvenTag}, xBytes...)
-		}
-		return append([]byte{CompressedOddTag}, xBytes...)
+	// (*ecdh.PublicKey).Bytes returns 0x04 || X(32) || Y(32) for NIST curves.
+	raw := pub.ecdhKey.Bytes()
+	if !compressed {
+		return raw
 	}
-
-	yBytes := pub.y.FillBytes(make([]byte, CurvePointSize))
-	return bytes.Join([][]byte{{UncompressedPointTag}, xBytes, yBytes}, nil)
+	tag := byte(CompressedEvenTag)
+	if raw[len(raw)-1]&1 != 0 {
+		tag = CompressedOddTag
+	}
+	out := make([]byte, 1+CurvePointSize)
+	out[0] = tag
+	copy(out[1:], raw[1:1+CurvePointSize])
+	return out
 }
 
 // Hex returns the public key in hexadecimal encoding.
@@ -74,13 +63,10 @@ func (pub *PublicKey) Equals(other *PublicKey) bool {
 	if pub == nil || other == nil {
 		return pub == other
 	}
-	if pub.x == nil || pub.y == nil || other.x == nil || other.y == nil {
-		return false
+	if pub.ecdhKey == nil || other.ecdhKey == nil {
+		return pub.ecdhKey == other.ecdhKey
 	}
-
-	eqX := subtle.ConstantTimeCompare(pub.x.Bytes(), other.x.Bytes()) == 1
-	eqY := subtle.ConstantTimeCompare(pub.y.Bytes(), other.y.Bytes()) == 1
-	return eqX && eqY
+	return subtle.ConstantTimeCompare(pub.ecdhKey.Bytes(), other.ecdhKey.Bytes()) == 1
 }
 
 // ImportECDSAPublic converts an ECDSA public key to an ECIES public key.
@@ -89,27 +75,12 @@ func ImportECDSAPublic(ecdsaKey *ecdsa.PublicKey) (*PublicKey, error) {
 		return nil, ErrPublicKeyEmpty
 	}
 
-	// Validate that the point is on the curve
-	if !ecdsaKey.Curve.IsOnCurve(ecdsaKey.X, ecdsaKey.Y) {
-		return nil, ErrKeyNotOnCurve
-	}
-
-	// Encode to uncompressed format for ECDH
-	xBytes := ecdsaKey.X.FillBytes(make([]byte, CurvePointSize))
-	yBytes := ecdsaKey.Y.FillBytes(make([]byte, CurvePointSize))
-	pubBytes := append([]byte{UncompressedPointTag}, append(xBytes, yBytes...)...)
-
-	// Create ECDH public key
-	curve := ecdh.P256()
-	ecdhKey, err := curve.NewPublicKey(pubBytes)
+	// (*ecdsa.PublicKey).ECDH performs the on-curve check and avoids the
+	// deprecated low-level access to the X/Y/Curve fields (Go 1.20+).
+	ecdhKey, err := ecdsaKey.ECDH()
 	if err != nil {
 		return nil, ErrInvalidPublicKey
 	}
 
-	return &PublicKey{
-		ecdhKey: ecdhKey,
-		curve:   ecdsaKey.Curve,
-		x:       new(big.Int).Set(ecdsaKey.X),
-		y:       new(big.Int).Set(ecdsaKey.Y),
-	}, nil
+	return &PublicKey{ecdhKey: ecdhKey}, nil
 }

@@ -4,10 +4,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
-	"crypto/elliptic"
 	"crypto/rand"
 	"fmt"
-	"math/big"
 )
 
 // Encrypt encrypts plaintext using ECIES (Elliptic Curve Integrated Encryption Scheme).
@@ -206,14 +204,5 @@ func parsePublicKeyBytes(pubKeyBytes []byte) (*PublicKey, error) {
 		return nil, fmt.Errorf("%w: %v", ErrInvalidPublicKey, err)
 	}
 
-	// Extract coordinates for compatibility
-	x := new(big.Int).SetBytes(pubKeyBytes[1:33])
-	y := new(big.Int).SetBytes(pubKeyBytes[33:65])
-
-	return &PublicKey{
-		ecdhKey: ecdhKey,
-		curve:   elliptic.P256(),
-		x:       x,
-		y:       y,
-	}, nil
+	return &PublicKey{ecdhKey: ecdhKey}, nil
 }

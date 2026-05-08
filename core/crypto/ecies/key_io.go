@@ -1,8 +1,8 @@
 package ecies
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -10,6 +10,17 @@ import (
 	"path/filepath"
 
 	"github.com/kochabx/kit/core/defaults"
+)
+
+// PEM block types used by this package.
+//
+// Private keys are written as PKCS#8 (RFC 5958) and public keys as
+// SubjectPublicKeyInfo (RFC 5280). These are the modern, language-neutral
+// formats that the Go standard library can serialize directly from
+// *ecdh.PrivateKey / *ecdh.PublicKey without going through *ecdsa.* shims.
+const (
+	pemTypePrivateKey = "PRIVATE KEY"
+	pemTypePublicKey  = "PUBLIC KEY"
 )
 
 // KeyOption contains options for key generation and file I/O.
@@ -77,126 +88,125 @@ func GenerateKeyPair(opts ...func(*KeyOption)) error {
 	return nil
 }
 
-// SavePrivateKey saves a private key to a file in PEM format.
+// SavePrivateKey saves a private key to a file in PKCS#8 PEM format.
 func SavePrivateKey(privateKey *PrivateKey, path string) error {
-	if privateKey == nil {
+	if privateKey == nil || privateKey.ecdhKey == nil {
 		return ErrPrivateKeyEmpty
 	}
 
-	// Convert to ECDSA format for serialization
-	tempKey := &ecdsa.PrivateKey{
-		PublicKey: ecdsa.PublicKey{
-			Curve: elliptic.P256(),
-			X:     privateKey.publicKey.x,
-			Y:     privateKey.publicKey.y,
-		},
-		D: privateKey.d,
-	}
-
-	privateKeyBytes, err := x509.MarshalECPrivateKey(tempKey)
+	der, err := x509.MarshalPKCS8PrivateKey(privateKey.ecdhKey)
 	if err != nil {
 		return fmt.Errorf("failed to marshal private key: %w", err)
 	}
 
-	// Create PEM block
-	privateKeyBlock := &pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: privateKeyBytes,
-	}
-
-	// Write to file
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrKeyFileRead, err)
 	}
 	defer file.Close()
 
-	if err := pem.Encode(file, privateKeyBlock); err != nil {
+	if err := pem.Encode(file, &pem.Block{Type: pemTypePrivateKey, Bytes: der}); err != nil {
 		return fmt.Errorf("failed to encode PEM: %w", err)
 	}
-
 	return nil
 }
 
-// SavePublicKey saves a public key to a file in PEM format.
+// SavePublicKey saves a public key to a file in SubjectPublicKeyInfo PEM format.
 func SavePublicKey(publicKey *PublicKey, path string) error {
-	if publicKey == nil {
+	if publicKey == nil || publicKey.ecdhKey == nil {
 		return ErrPublicKeyEmpty
 	}
 
-	// Convert to ECDSA format for serialization
-	tempKey := &ecdsa.PublicKey{
-		Curve: elliptic.P256(),
-		X:     publicKey.x,
-		Y:     publicKey.y,
-	}
-
-	publicKeyBytes, err := x509.MarshalPKIXPublicKey(tempKey)
+	der, err := x509.MarshalPKIXPublicKey(publicKey.ecdhKey)
 	if err != nil {
 		return fmt.Errorf("failed to marshal public key: %w", err)
 	}
 
-	// Create PEM block
-	publicKeyBlock := &pem.Block{
-		Type:  "PUBLIC KEY",
-		Bytes: publicKeyBytes,
-	}
-
-	// Write to file
-	file, err := os.Create(path)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrKeyFileRead, err)
 	}
 	defer file.Close()
 
-	if err := pem.Encode(file, publicKeyBlock); err != nil {
+	if err := pem.Encode(file, &pem.Block{Type: pemTypePublicKey, Bytes: der}); err != nil {
 		return fmt.Errorf("failed to encode PEM: %w", err)
 	}
-
 	return nil
 }
 
-// LoadPrivateKey loads an ECDSA private key from a PEM file.
+// LoadPrivateKey loads a PKCS#8-encoded ECDH private key from a PEM file.
 func LoadPrivateKey(path string) (*PrivateKey, error) {
-	privateKeyBytes, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrKeyFileRead, err)
 	}
 
-	block, _ := pem.Decode(privateKeyBytes)
+	block, _ := pem.Decode(data)
 	if block == nil {
 		return nil, ErrInvalidPEMBlock
 	}
 
-	ecdsaKey, err := x509.ParseECPrivateKey(block.Bytes)
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse private key: %w", err)
 	}
 
-	return ImportECDSA(ecdsaKey)
+	// crypto/x509 returns *ecdsa.PrivateKey for NIST curves and
+	// *ecdh.PrivateKey only for X25519. Normalise to the ECDH form.
+	var ecdhKey *ecdh.PrivateKey
+	switch k := parsed.(type) {
+	case *ecdh.PrivateKey:
+		ecdhKey = k
+	case *ecdsa.PrivateKey:
+		ecdhKey, err = k.ECDH()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidPrivateKey, err)
+		}
+	default:
+		return nil, ErrInvalidPrivateKey
+	}
+	if ecdhKey.Curve() != ecdh.P256() {
+		return nil, ErrInvalidPrivateKey
+	}
+
+	return &PrivateKey{
+		publicKey: &PublicKey{ecdhKey: ecdhKey.PublicKey()},
+		ecdhKey:   ecdhKey,
+	}, nil
 }
 
-// LoadPublicKey loads an ECDSA public key from a PEM file.
+// LoadPublicKey loads a SubjectPublicKeyInfo-encoded ECDH public key from a PEM file.
 func LoadPublicKey(path string) (*PublicKey, error) {
-	publicKeyBytes, err := os.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrKeyFileRead, err)
 	}
 
-	block, _ := pem.Decode(publicKeyBytes)
+	block, _ := pem.Decode(data)
 	if block == nil {
 		return nil, ErrInvalidPEMBlock
 	}
 
-	publicKeyInterface, err := x509.ParsePKIXPublicKey(block.Bytes)
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse public key: %w", err)
 	}
 
-	ecdsaKey, ok := publicKeyInterface.(*ecdsa.PublicKey)
-	if !ok {
+	var ecdhKey *ecdh.PublicKey
+	switch k := parsed.(type) {
+	case *ecdh.PublicKey:
+		ecdhKey = k
+	case *ecdsa.PublicKey:
+		ecdhKey, err = k.ECDH()
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidPublicKey, err)
+		}
+	default:
+		return nil, ErrInvalidPublicKey
+	}
+	if ecdhKey.Curve() != ecdh.P256() {
 		return nil, ErrInvalidPublicKey
 	}
 
-	return ImportECDSAPublic(ecdsaKey)
+	return &PublicKey{ecdhKey: ecdhKey}, nil
 }

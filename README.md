@@ -8,6 +8,8 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 
 它的定位不是强绑定的大框架，而是一组可独立使用、自由组合的基础模块。每个模块边界清晰，可按需引入，帮助你在构建现代 Go 服务时减少重复的基础设施代码。
 
+顶层目录保持克制：`app`、`config`、`cx`、`errors`、`log`、`store`、`transport`、`observability` 和 `cmd` 表达运行时边界或外部系统集成；[core](core/) 作为通用能力层，收纳认证、安全、算法、校验、默认值处理、HTTP 客户端和小型工具。
+
 ## 模块总览
 
 ### 应用与基础设施
@@ -48,7 +50,6 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 | [store/mongo](store/mongo/) | MongoDB 客户端封装 |
 | [store/etcd](store/etcd/) | Etcd 客户端与辅助工具 |
 | [store/kafka](store/kafka/) | Kafka 生产与消费封装 |
-| [store/oss/minio](store/oss/minio/) | MinIO 对象存储客户端，支持分片上传与断点续传 |
 
 ### 分布式与通用能力
 
@@ -341,7 +342,6 @@ Redis 支持的分布式限流：
 - **mongo**：`mongo.NewClient(config)` MongoDB 客户端
 - **etcd**：`etcd.NewClient(config)` + 辅助函数（Watch、选举等）
 - **kafka**：`kafka.NewClient(config)` 生产者与消费者
-- **oss/minio**：`minio.NewClient(config)` 支持分片上传与断点续传
 
 ## 项目结构
 
@@ -363,7 +363,6 @@ kit/
 │   ├── etcd/                # Etcd
 │   ├── kafka/               # Kafka
 │   ├── mongo/               # MongoDB
-│   ├── oss/minio/           # MinIO 对象存储
 │   └── redis/               # Redis
 ├── transport/
 │   ├── transport.go         # Server 接口定义
@@ -371,6 +370,7 @@ kit/
 │   ├── http/                # HTTP 服务与中间件
 │   └── websocket/           # WebSocket 客户端
 └── core/
+    ├── README.md            # core 能力边界与放置原则
     ├── auth/jwt/            # JWT 认证
     ├── auth/mfa/            # TOTP 多因子认证
     ├── crypto/ecies/        # ECIES 非对称加密
@@ -380,6 +380,7 @@ kit/
     ├── rate/                # 分布式限流
     ├── scheduler/           # 分布式任务调度
     ├── util/                # 通用工具
+    │   ├── README.md        # util 收纳规则
     │   ├── convert/         # 字符串类型转换
     │   ├── qrcode/          # 二维码生成
     │   └── tree/            # 树结构工具

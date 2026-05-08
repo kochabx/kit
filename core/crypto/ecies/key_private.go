@@ -3,11 +3,9 @@ package ecies
 import (
 	"crypto/ecdh"
 	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
-	"math/big"
 )
 
 // PrivateKey represents an ECIES private key that wraps an ECDH private key.
@@ -15,7 +13,6 @@ import (
 type PrivateKey struct {
 	publicKey *PublicKey
 	ecdhKey   *ecdh.PrivateKey
-	d         *big.Int // Keep for compatibility and serialization
 }
 
 // Public returns the public key corresponding to this private key.
@@ -23,12 +20,13 @@ func (priv *PrivateKey) Public() *PublicKey {
 	return priv.publicKey
 }
 
-// Bytes returns the private key as a byte slice (big-endian representation of D).
+// Bytes returns the private key scalar as a fixed-length big-endian byte slice.
+// Returns nil if the key has been destroyed.
 func (priv *PrivateKey) Bytes() []byte {
-	if priv.d == nil {
+	if priv.ecdhKey == nil {
 		return nil
 	}
-	return priv.d.Bytes()
+	return priv.ecdhKey.Bytes()
 }
 
 // Hex returns the private key in hexadecimal encoding.
@@ -78,21 +76,17 @@ func (priv *PrivateKey) Equals(other *PrivateKey) bool {
 	if priv == nil || other == nil {
 		return priv == other
 	}
-	if priv.d == nil || other.d == nil {
-		return priv.d == other.d
+	if priv.ecdhKey == nil || other.ecdhKey == nil {
+		return priv.ecdhKey == other.ecdhKey
 	}
-	return subtle.ConstantTimeCompare(priv.d.Bytes(), other.d.Bytes()) == 1
+	return subtle.ConstantTimeCompare(priv.ecdhKey.Bytes(), other.ecdhKey.Bytes()) == 1
 }
 
-// Destroy securely clears the private key material from memory.
+// Destroy clears the private key reference, allowing the GC to reclaim the memory.
 // After calling this method, the private key should not be used.
 func (priv *PrivateKey) Destroy() {
-	if priv.d != nil {
-		priv.d.SetInt64(0)
-		priv.d = nil
-	}
-	// Note: crypto/ecdh doesn't provide a way to zero the key material
-	// but setting to nil allows GC to reclaim it
+	// crypto/ecdh does not expose a zeroing API; removing the reference
+	// ensures GC can collect the memory.
 	priv.ecdhKey = nil
 }
 
@@ -108,10 +102,9 @@ func ImportECDSA(ecdsaKey *ecdsa.PrivateKey) (*PrivateKey, error) {
 		return nil, err
 	}
 
-	// Convert to ECDH format
-	keyBytes := ecdsaKey.D.FillBytes(make([]byte, CurvePointSize))
-	curve := ecdh.P256()
-	ecdhKey, err := curve.NewPrivateKey(keyBytes)
+	// Use the standard-library helper to convert to ECDH format (Go 1.20+).
+	// This avoids direct access to the deprecated D field.
+	ecdhKey, err := ecdsaKey.ECDH()
 	if err != nil {
 		return nil, ErrInvalidPrivateKey
 	}
@@ -119,7 +112,6 @@ func ImportECDSA(ecdsaKey *ecdsa.PrivateKey) (*PrivateKey, error) {
 	return &PrivateKey{
 		publicKey: publicKey,
 		ecdhKey:   ecdhKey,
-		d:         new(big.Int).Set(ecdsaKey.D),
 	}, nil
 }
 
@@ -137,23 +129,13 @@ func GenerateKey() (*PrivateKey, error) {
 		ecdhKey: ecdhPubKey,
 	}
 
-	// Parse public key bytes to extract X, Y for compatibility
-	pubBytes := ecdhPubKey.Bytes()
-	if len(pubBytes) != PublicKeyBytes {
+	// Sanity-check the encoded length so callers can rely on Bytes() shape.
+	if len(ecdhPubKey.Bytes()) != PublicKeyBytes {
 		return nil, ErrInvalidPublicKey
 	}
-
-	publicKey.curve = elliptic.P256()
-	publicKey.x = new(big.Int).SetBytes(pubBytes[1:33])
-	publicKey.y = new(big.Int).SetBytes(pubBytes[33:65])
-
-	// Extract private key scalar
-	privBytes := ecdhKey.Bytes()
-	d := new(big.Int).SetBytes(privBytes)
 
 	return &PrivateKey{
 		publicKey: publicKey,
 		ecdhKey:   ecdhKey,
-		d:         d,
 	}, nil
 }

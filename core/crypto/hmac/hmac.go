@@ -1,140 +1,241 @@
+// Package hmac provides time-bounded HMAC signatures for API requests and
+// other integrity-protected payloads.
+//
+// The package signs a tuple (timestamp, payload) with HMAC, returning the
+// hex/base64 encoded MAC together with the timestamp used. Verification
+// recomputes the MAC, performs a constant-time comparison and enforces a
+// configurable expiration window.
+//
+// Canonical message layout (length-prefixed, collision-free):
+//
+//	uint64-be(timestamp) || uint64-be(len(payload)) || payload
+//
+// The secret is used only as the HMAC key; it is never mixed into the message.
+//
+// Example:
+//
+//	signer, _ := hmac.NewSigner("super-secret")
+//	sig, _ := signer.SignString("GET /v1/users")
+//	if err := signer.VerifyString(sig, "GET /v1/users"); err != nil {
+//	    // handle err: errors.Is(err, hmac.ErrSignatureExpired) ...
+//	}
 package hmac
 
 import (
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
-	"strconv"
-	"strings"
+	"hash"
 	"time"
-
-	"github.com/kochabx/kit/errors"
 )
 
-// SignResult 封装签名结果
-type SignResult struct {
-	Signature string
+// Encoding controls how the raw MAC bytes are textualised.
+type Encoding uint8
+
+const (
+	// EncodingHex encodes the MAC as lowercase hexadecimal (default).
+	EncodingHex Encoding = iota
+	// EncodingBase64Std encodes the MAC using standard base64 (RFC 4648 §4).
+	EncodingBase64Std
+	// EncodingBase64URL encodes the MAC using URL-safe base64 (RFC 4648 §5),
+	// without padding.
+	EncodingBase64URL
+)
+
+// DefaultExpiration is the default validity window for a signature.
+const DefaultExpiration = 5 * time.Minute
+
+// Signature is the result of a Sign call.
+type Signature struct {
+	// Value is the encoded MAC string (encoding is determined by the Signer).
+	Value string
+	// Timestamp is the Unix timestamp (seconds) used when computing the MAC.
 	Timestamp int64
 }
 
-// Option 用于配置签名和验证选项
-type Option struct {
-	payload    string
+// Signer signs and verifies payloads with a fixed secret and configuration.
+// A Signer is safe for concurrent use.
+type Signer struct {
+	secret     []byte
+	hashFn     func() hash.Hash
 	expiration time.Duration
-	now        func() time.Time // 用于测试的时间注入
+	skew       time.Duration
+	encoding   Encoding
+	clock      func() time.Time
 }
 
-// WithPayload 设置要签名的附加数据
-func WithPayload(payload string) func(*Option) {
-	return func(o *Option) {
-		o.payload = payload
+// Option configures a Signer.
+type Option func(*Signer)
+
+// WithHash sets the underlying hash constructor. Defaults to sha256.New.
+func WithHash(fn func() hash.Hash) Option {
+	return func(s *Signer) {
+		if fn != nil {
+			s.hashFn = fn
+		}
 	}
 }
 
-// WithExpiration 设置签名过期时间，默认为 5 分钟
-func WithExpiration(d time.Duration) func(*Option) {
-	return func(o *Option) {
-		o.expiration = d
+// WithExpiration sets the validity window enforced by Verify. Defaults to
+// DefaultExpiration. A non-positive value disables expiration checking.
+func WithExpiration(d time.Duration) Option {
+	return func(s *Signer) { s.expiration = d }
+}
+
+// WithClockSkew permits the verifier to accept timestamps up to d in the
+// future, compensating for clock drift. Defaults to 0.
+func WithClockSkew(d time.Duration) Option {
+	return func(s *Signer) {
+		if d >= 0 {
+			s.skew = d
+		}
 	}
 }
 
-// withTimeFunc 用于测试的时间注入（内部使用）
-func withTimeFunc(fn func() time.Time) func(*Option) {
-	return func(o *Option) {
-		o.now = fn
+// WithEncoding selects how the MAC is encoded as text. Defaults to EncodingHex.
+func WithEncoding(e Encoding) Option {
+	return func(s *Signer) { s.encoding = e }
+}
+
+// WithClock injects a clock function, primarily for testing.
+func WithClock(fn func() time.Time) Option {
+	return func(s *Signer) {
+		if fn != nil {
+			s.clock = fn
+		}
 	}
 }
 
-// Sign 生成 HMAC-SHA256 签名
-// secret: 密钥
-// opts: 可选配置，支持 WithPayload 和 WithExpiration
-// 返回签名结果，包含签名和时间戳
-func Sign(secret string, opts ...func(*Option)) (*SignResult, error) {
+// NewSigner creates a Signer with the given secret and options.
+// It returns ErrEmptySecret if secret is empty.
+func NewSigner(secret string, opts ...Option) (*Signer, error) {
 	if secret == "" {
-		return nil, errors.BadRequest("secret cannot be empty")
+		return nil, ErrEmptySecret
 	}
-
-	opt := &Option{
-		expiration: 5 * time.Minute,
-		now:        time.Now,
+	s := &Signer{
+		secret:     []byte(secret),
+		hashFn:     sha256.New,
+		expiration: DefaultExpiration,
+		encoding:   EncodingHex,
+		clock:      time.Now,
 	}
-	for _, o := range opts {
-		o(opt)
+	for _, opt := range opts {
+		opt(s)
 	}
-
-	timestamp := opt.now().Unix()
-	signature := generateSignature(secret, timestamp, opt.payload)
-
-	return &SignResult{
-		Signature: signature,
-		Timestamp: timestamp,
-	}, nil
+	return s, nil
 }
 
-// Verify 验证 HMAC-SHA256 签名
-// secret: 密钥
-// signature: 待验证的签名
-// timestamp: 签名时的时间戳
-// opts: 可选配置，需要与签名时保持一致
-func Verify(secret, signature string, timestamp int64, opts ...func(*Option)) error {
-	if secret == "" {
-		return errors.BadRequest("secret cannot be empty")
+// Sign computes a signature for payload using the current clock timestamp.
+func (s *Signer) Sign(payload []byte) (Signature, error) {
+	ts := s.clock().Unix()
+	mac := s.compute(ts, payload)
+	return Signature{Value: s.encode(mac), Timestamp: ts}, nil
+}
+
+// SignString is a convenience wrapper around Sign for string payloads.
+func (s *Signer) SignString(payload string) (Signature, error) {
+	return s.Sign([]byte(payload))
+}
+
+// Verify validates sig against payload, checking both authenticity and the
+// expiration window.
+func (s *Signer) Verify(sig Signature, payload []byte) error {
+	if sig.Value == "" {
+		return ErrEmptySignature
 	}
-	if signature == "" {
-		return errors.BadRequest("signature cannot be empty")
-	}
-	if timestamp <= 0 {
-		return errors.BadRequest("invalid timestamp")
+	if sig.Timestamp <= 0 {
+		return ErrInvalidTimestamp
 	}
 
-	opt := &Option{
-		expiration: 5 * time.Minute,
-		now:        time.Now,
+	now := s.clock().Unix()
+	skew := int64(s.skew.Seconds())
+	if sig.Timestamp-now > skew {
+		return ErrFutureTimestamp
 	}
-	for _, o := range opts {
-		o(opt)
-	}
-
-	// 检查时间戳是否过期
-	elapsed := opt.now().Unix() - timestamp
-	if elapsed > int64(opt.expiration.Seconds()) {
-		return errors.BadRequest("signature expired")
-	}
-	if elapsed < 0 {
-		return errors.BadRequest("timestamp is in the future")
+	if s.expiration > 0 {
+		if now-sig.Timestamp > int64(s.expiration.Seconds()) {
+			return ErrSignatureExpired
+		}
 	}
 
-	// 生成期望的签名
-	expectedSignature := generateSignature(secret, timestamp, opt.payload)
-
-	// 使用常量时间比较防止时序攻击
-	signatureBytes, err := hex.DecodeString(signature)
+	got, err := s.decode(sig.Value)
 	if err != nil {
-		return errors.BadRequest("invalid signature format")
+		return err
 	}
-	expectedBytes, _ := hex.DecodeString(expectedSignature)
-
-	if !hmac.Equal(signatureBytes, expectedBytes) {
-		return errors.BadRequest("signature mismatch")
+	want := s.compute(sig.Timestamp, payload)
+	if subtle.ConstantTimeCompare(got, want) != 1 {
+		return ErrSignatureMismatch
 	}
-
 	return nil
 }
 
-// generateSignature 生成 HMAC-SHA256 签名的内部函数
-func generateSignature(secret string, timestamp int64, payload string) string {
-	// 预分配容量以提高性能
-	var toSign strings.Builder
-	toSign.Grow(len(strconv.FormatInt(timestamp, 10)) + 1 + len(secret) + len(payload))
+// VerifyString is a convenience wrapper around Verify for string payloads.
+func (s *Signer) VerifyString(sig Signature, payload string) error {
+	return s.Verify(sig, []byte(payload))
+}
 
-	toSign.WriteString(strconv.FormatInt(timestamp, 10))
-	toSign.WriteString("\n")
-	toSign.WriteString(secret)
-	if payload != "" {
-		toSign.WriteString(payload)
+// compute returns the raw MAC bytes for (timestamp, payload).
+func (s *Signer) compute(timestamp int64, payload []byte) []byte {
+	h := hmac.New(s.hashFn, s.secret)
+	var hdr [16]byte
+	binary.BigEndian.PutUint64(hdr[0:8], uint64(timestamp))
+	binary.BigEndian.PutUint64(hdr[8:16], uint64(len(payload)))
+	h.Write(hdr[:])
+	if len(payload) > 0 {
+		h.Write(payload)
 	}
+	return h.Sum(nil)
+}
 
-	h := hmac.New(sha256.New, []byte(secret))
-	h.Write([]byte(toSign.String()))
-	return hex.EncodeToString(h.Sum(nil))
+func (s *Signer) encode(b []byte) string {
+	switch s.encoding {
+	case EncodingBase64Std:
+		return base64.StdEncoding.EncodeToString(b)
+	case EncodingBase64URL:
+		return base64.RawURLEncoding.EncodeToString(b)
+	default:
+		return hex.EncodeToString(b)
+	}
+}
+
+func (s *Signer) decode(v string) ([]byte, error) {
+	var (
+		out []byte
+		err error
+	)
+	switch s.encoding {
+	case EncodingHex:
+		out, err = hex.DecodeString(v)
+	case EncodingBase64Std:
+		out, err = base64.StdEncoding.DecodeString(v)
+	case EncodingBase64URL:
+		out, err = base64.RawURLEncoding.DecodeString(v)
+	default:
+		return nil, ErrUnsupportedEncoding
+	}
+	if err != nil {
+		return nil, ErrInvalidSignatureEncoding
+	}
+	return out, nil
+}
+
+// Sign is a package-level convenience that signs payload using a transient Signer.
+func Sign(secret string, payload []byte, opts ...Option) (Signature, error) {
+	s, err := NewSigner(secret, opts...)
+	if err != nil {
+		return Signature{}, err
+	}
+	return s.Sign(payload)
+}
+
+// Verify is a package-level convenience that verifies sig with a transient Signer.
+func Verify(secret string, sig Signature, payload []byte, opts ...Option) error {
+	s, err := NewSigner(secret, opts...)
+	if err != nil {
+		return err
+	}
+	return s.Verify(sig, payload)
 }
