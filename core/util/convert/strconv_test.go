@@ -141,53 +141,6 @@ func TestParseString(t *testing.T) {
 	}
 }
 
-func TestMustParseString(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("MustParseString() panicked unexpectedly: %v", r)
-			}
-		}()
-		got := MustParseString[int]("42")
-		if got != 42 {
-			t.Errorf("MustParseString() = %v, want 42", got)
-		}
-	})
-
-	t.Run("panic", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("MustParseString() should panic on invalid input")
-			}
-		}()
-		MustParseString[int]("invalid")
-	})
-}
-
-func TestMustParseStrings(t *testing.T) {
-	t.Run("success", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r != nil {
-				t.Errorf("MustParseStrings() panicked unexpectedly: %v", r)
-			}
-		}()
-		got := MustParseStrings[int]([]string{"1", "2", "3"})
-		want := []int{1, 2, 3}
-		if !sliceEqual(got, want) {
-			t.Errorf("MustParseStrings() = %v, want %v", got, want)
-		}
-	})
-
-	t.Run("panic", func(t *testing.T) {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("MustParseStrings() should panic on invalid input")
-			}
-		}()
-		MustParseStrings[int]([]string{"1", "invalid", "3"})
-	})
-}
-
 // Helper functions
 func sliceEqual[T comparable](a, b []T) bool {
 	if len(a) != len(b) {

@@ -45,10 +45,10 @@ func (b *URLBuilder) Port(port string) *URLBuilder {
 	return b
 }
 
-// Path 设置完整路径，会覆盖之前的路径
+// Path 设置完整路径，会覆盖之前的路径。传入空字符串将清空路径。
 func (b *URLBuilder) Path(path string) *URLBuilder {
+	b.path.Reset()
 	if path != "" {
-		b.path.Reset()
 		b.path.WriteString(path)
 	}
 	return b
@@ -142,15 +142,6 @@ func (b *URLBuilder) Build() (string, error) {
 	}
 
 	return u.String(), nil
-}
-
-// MustBuild 构建URL，如果出错则panic
-func (b *URLBuilder) MustBuild() string {
-	result, err := b.Build()
-	if err != nil {
-		panic(fmt.Sprintf("构建URL失败: %v", err))
-	}
-	return result
 }
 
 // String 实现fmt.Stringer接口

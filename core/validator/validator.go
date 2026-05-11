@@ -40,16 +40,8 @@ func New(opts ...Option) (Validator, error) {
 	return build(o)
 }
 
-// MustNew 同 New，但在出错时 panic。
-func MustNew(opts ...Option) Validator {
-	v, err := New(opts...)
-	if err != nil {
-		panic(fmt.Sprintf("validator: %v", err))
-	}
-	return v
-}
-
-var Validate = MustNew()
+// Validate 是默认 Validator 实例，使用零选项构建。如果构建失败将得到 nil。
+var Validate, _ = New()
 
 func build(o *options) (*validator, error) {
 	v := gv.New()

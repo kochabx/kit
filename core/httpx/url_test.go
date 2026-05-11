@@ -376,20 +376,6 @@ func TestURLBuilder_Build(t *testing.T) {
 	}
 }
 
-func TestURLBuilder_MustBuild(t *testing.T) {
-	builder := NewURLBuilder().
-		Scheme("https").
-		Host("example.com").
-		Path("/test")
-
-	result := builder.MustBuild()
-	expected := "https://example.com/test"
-
-	if result != expected {
-		t.Errorf("MustBuild() = %v, want %v", result, expected)
-	}
-}
-
 func TestURLBuilder_String(t *testing.T) {
 	builder := NewURLBuilder().
 		Scheme("https").
@@ -534,7 +520,7 @@ func TestBuildHost(t *testing.T) {
 
 func TestBuildHTTP(t *testing.T) {
 	builder := BuildHTTP("example.com", "api", "v1")
-	result := builder.MustBuild()
+	result, _ := builder.Build()
 	expected := "http://example.com/api/v1"
 
 	if result != expected {
@@ -544,7 +530,7 @@ func TestBuildHTTP(t *testing.T) {
 
 func TestBuildHTTPS(t *testing.T) {
 	builder := BuildHTTPS("example.com", "api", "v1")
-	result := builder.MustBuild()
+	result, _ := builder.Build()
 	expected := "https://example.com/api/v1"
 
 	if result != expected {
@@ -641,7 +627,7 @@ func BenchmarkFromURL(b *testing.B) {
 // 示例测试
 func ExampleURLBuilder() {
 	// 构建一个完整的API URL
-	url := NewURLBuilder().
+	url, _ := NewURLBuilder().
 		Scheme("https").
 		Host("api.example.com").
 		Port("443").
@@ -649,7 +635,7 @@ func ExampleURLBuilder() {
 		Query("page", "1").
 		Query("limit", "10").
 		Fragment("results").
-		MustBuild()
+		Build()
 
 	fmt.Println(url)
 	// Output: https://api.example.com:443/v1/users?limit=10&page=1#results
@@ -657,9 +643,9 @@ func ExampleURLBuilder() {
 
 func ExampleBuildHTTPS() {
 	// 快速构建HTTPS URL
-	url := BuildHTTPS("api.example.com", "v1", "users").
+	url, _ := BuildHTTPS("api.example.com", "v1", "users").
 		Query("active", "true").
-		MustBuild()
+		Build()
 
 	fmt.Println(url)
 	// Output: https://api.example.com/v1/users?active=true
@@ -671,10 +657,10 @@ func ExampleFromURL() {
 
 	// 清空查询参数并设置新的
 	builder.query = make(url.Values)
-	newURL := builder.
+	newURL, _ := builder.
 		Path("/new/path").
 		SetQuery("new", "param").
-		MustBuild()
+		Build()
 
 	fmt.Println(newURL)
 	// Output: https://example.com/new/path?new=param

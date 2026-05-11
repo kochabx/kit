@@ -16,6 +16,16 @@ import (
 // Test helpers
 // ---------------------------------------------------------------------------
 
+// mustGet 测试辅助：Get 失败时使测试失败。
+func mustGet[T any](t testing.TB, c *Container, key string) T {
+	t.Helper()
+	v, err := Get[T](c, key)
+	if err != nil {
+		t.Fatalf("Get %s: %v", key, err)
+	}
+	return v
+}
+
 type testConfig struct {
 	DSN string
 }
@@ -115,14 +125,6 @@ func TestProvide_NotIdle(t *testing.T) {
 	assert.ErrorIs(t, err, ErrContainerNotIdle)
 }
 
-func TestMustProvide_Panic(t *testing.T) {
-	c := New()
-	require.NoError(t, Supply(c, "x", 1))
-	assert.Panics(t, func() {
-		MustSupply(c, "x", 2) // duplicate
-	})
-}
-
 func TestGet_NotFound(t *testing.T) {
 	c := New()
 	require.NoError(t, c.Start(context.Background()))
@@ -143,14 +145,6 @@ func TestGet_BeforeStart(t *testing.T) {
 	require.NoError(t, Supply(c, "x", 42))
 	_, err := Get[int](c, "x")
 	assert.ErrorIs(t, err, ErrComponentNotFound)
-}
-
-func TestMustGet_Panic(t *testing.T) {
-	c := New()
-	require.NoError(t, c.Start(context.Background()))
-	assert.Panics(t, func() {
-		MustGet[int](c, "missing")
-	})
 }
 
 func TestGet_InterfaceType(t *testing.T) {
@@ -175,12 +169,12 @@ func TestStart_DependencyOrder(t *testing.T) {
 	var order []string
 
 	Provide(c, "service", func(c *Container) (*orderRecorder, error) {
-		_ = MustGet[*orderRecorder](c, "db") // depends on db
+		_ = mustGet[*orderRecorder](t, c, "db") // depends on db
 		r := &orderRecorder{key: "service", record: &order}
 		return r, nil
 	})
 	Provide(c, "db", func(c *Container) (*orderRecorder, error) {
-		_ = MustGet[*orderRecorder](c, "config") // depends on config
+		_ = mustGet[*orderRecorder](t, c, "config") // depends on config
 		r := &orderRecorder{key: "db", record: &order}
 		return r, nil
 	})
@@ -206,12 +200,12 @@ func TestStart_DeepDependencyChain(t *testing.T) {
 	var buildOrder []string
 
 	Provide(c, "a", func(c *Container) (string, error) {
-		MustGet[string](c, "b")
+		mustGet[string](t, c, "b")
 		buildOrder = append(buildOrder, "a")
 		return "a", nil
 	})
 	Provide(c, "b", func(c *Container) (string, error) {
-		MustGet[string](c, "c")
+		mustGet[string](t, c, "c")
 		buildOrder = append(buildOrder, "b")
 		return "b", nil
 	})
@@ -424,11 +418,11 @@ func TestRestart(t *testing.T) {
 	})
 
 	require.NoError(t, c.Start(context.Background()))
-	v1 := MustGet[int](c, "x")
+	v1 := mustGet[int](t, c, "x")
 	assert.Equal(t, 1, v1)
 
 	require.NoError(t, c.Restart(context.Background()))
-	v2 := MustGet[int](c, "x")
+	v2 := mustGet[int](t, c, "x")
 	assert.Equal(t, 2, v2) // constructor called again
 	assert.Equal(t, StateRunning, c.State())
 }

@@ -75,25 +75,7 @@ func parseString[T Number](s string) (T, error) {
 	}
 }
 
-// MustParseStrings 类似 ParseStrings，但在解析失败时会 panic
-func MustParseStrings[T Number](strings []string) []T {
-	result, err := ParseStrings[T](strings)
-	if err != nil {
-		panic(err)
-	}
-	return result
-}
-
 // ParseString 解析单个字符串为指定数值类型
 func ParseString[T Number](s string) (T, error) {
 	return parseString[T](s)
-}
-
-// MustParseString 类似 ParseString，但在解析失败时会 panic
-func MustParseString[T Number](s string) T {
-	result, err := parseString[T](s)
-	if err != nil {
-		panic(err)
-	}
-	return result
 }

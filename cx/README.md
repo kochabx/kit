@@ -12,8 +12,10 @@
 - **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序停止
 - **停止错误聚合** — Stop 收集所有错误而非静默丢弃
 - **可选接口** — 值实现 `Starter` / `Stopper` / `Checker` 即可参与生命周期，零强制接口
+- **并发健康检查** — `HealthCheck` 并发执行所有 `Checker`，每个组件独立超时
+- **依赖图导出** — `DependencyGraph()` 返回构造期记录的依赖边，便于调试与可视化
 - **全局实例** — `cx.C` 开箱即用，`init()` 自注册模式无缝衔接
-- **零反射** — 泛型仅用于类型断言，无 `reflect` 调用
+- **无 reflect 依赖** — 仅使用 Go 泛型与类型断言
 
 ## 快速上手
 
@@ -138,7 +140,8 @@ StateNew → StateStarting → StateRunning → StateStopping → StateStopped
 
 ```go
 c := cx.New(
-    cx.WithStopTimeout(10 * time.Second),  // 每组件停止超时（默认 30s）
+    cx.WithStopTimeout(10 * time.Second),    // 每组件停止超时（默认 30s）
+    cx.WithHealthTimeout(5 * time.Second),   // 每组件健康检查超时（默认 10s）
     cx.WithOnStart(func(ctx context.Context) error { ... }),
     cx.WithOnStarted(func(ctx context.Context) error { ... }),
     cx.WithOnStopping(func(ctx context.Context) error { ... }),
@@ -158,8 +161,9 @@ c := cx.New(
 | `c.Start(ctx)` | 构造 + 启动所有组件 |
 | `c.Stop(ctx)` | 逆序停止所有组件 |
 | `c.Restart(ctx)` | Stop + Start |
-| `c.HealthCheck(ctx)` | 聚合健康检查 |
+| `c.HealthCheck(ctx)` | 聚合健康检查（并发） |
 | `c.Metrics()` | 容器统计 |
+| `c.DependencyGraph()` | 依赖边映射 `key → deps`（Start 后填充） |
 | `c.Keys()` | 所有注册 key（注册序） |
 | `c.Has(key)` | key 是否已注册 |
 | `c.Count()` | 组件总数 |
@@ -169,7 +173,7 @@ c := cx.New(
 
 | 错误 | 场景 |
 |------|------|
-| `ErrComponentNotFound` | Get 时 key 不存在 |
+| `ErrComponentNotFound` | Get 时 key 未注册，或已注册但未构造（Start 之外调用） |
 | `ErrComponentExists` | Provide 时 key 重复 |
 | `ErrCircularDependency` | 构造阶段检测到循环依赖 |
 | `ErrTypeMismatch` | Get[T] 类型断言失败 |

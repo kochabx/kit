@@ -18,6 +18,14 @@ type testUser struct {
 	Username string `json:"username" validate:"required,min=3,max=20"`
 }
 
+// mustNew 测试辅助：构造 Validator，失败时使测试失败。
+func mustNew(t testing.TB, opts ...Option) Validator {
+	t.Helper()
+	v, err := New(opts...)
+	require.NoError(t, err)
+	return v
+}
+
 // ---- 构造 ----
 
 func TestNew(t *testing.T) {
@@ -55,14 +63,6 @@ func TestNew_NilCustomValidationFunc(t *testing.T) {
 	assert.Contains(t, err.Error(), "function cannot be empty")
 }
 
-func TestMustNew(t *testing.T) {
-	assert.NotPanics(t, func() { MustNew() })
-}
-
-func TestMustNew_Panics(t *testing.T) {
-	assert.Panics(t, func() { MustNew(func(o *options) { o.locales = map[Locale]LocaleEntry{} }) })
-}
-
 func TestDefault(t *testing.T) {
 	v := Validate
 	assert.NotNil(t, v)
@@ -81,7 +81,7 @@ func TestNewWithOptions(t *testing.T) {
 // ---- Struct ----
 
 func TestStruct_Valid(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{
 		Name:     "Alice",
 		Email:    "alice@example.com",
@@ -92,7 +92,7 @@ func TestStruct_Valid(t *testing.T) {
 }
 
 func TestStruct_Invalid_ReturnsValidationError(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{
 		Name:     "",    // required
 		Email:    "bad", // email
@@ -107,7 +107,7 @@ func TestStruct_Invalid_ReturnsValidationError(t *testing.T) {
 }
 
 func TestStruct_ErrorMessage_NotEmpty(t *testing.T) {
-	err := MustNew().Struct(context.Background(), &testUser{Name: ""})
+	err := mustNew(t).Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 	assert.NotEmpty(t, err.Error())
 }
@@ -115,7 +115,7 @@ func TestStruct_ErrorMessage_NotEmpty(t *testing.T) {
 // ---- 字段名映射 ----
 
 func TestFieldName_JSONTag(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 
@@ -132,7 +132,7 @@ func TestFieldName_JSONTag(t *testing.T) {
 }
 
 func TestFieldName_GoStructField(t *testing.T) {
-	v := MustNew(WithFieldNameTag(""))
+	v := mustNew(t, WithFieldNameTag(""))
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 
@@ -151,14 +151,14 @@ func TestFieldName_GoStructField(t *testing.T) {
 // ---- Locale / 翻译 ----
 
 func TestStruct_DefaultLocaleEN(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "required")
 }
 
 func TestStruct_LocaleExtractorZH(t *testing.T) {
-	v := MustNew(WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
+	v := mustNew(t, WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
 		return LocaleZH, true
 	}))
 	err := v.Struct(context.Background(), &testUser{Name: ""})
@@ -167,7 +167,7 @@ func TestStruct_LocaleExtractorZH(t *testing.T) {
 }
 
 func TestStruct_DefaultLocaleZH(t *testing.T) {
-	v := MustNew(WithDefaultLocale(LocaleZH))
+	v := mustNew(t, WithDefaultLocale(LocaleZH))
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "required")
@@ -178,7 +178,7 @@ func TestStruct_DefaultLocaleZH(t *testing.T) {
 type myLangKey struct{}
 
 func TestLocaleExtractor_UsesContext(t *testing.T) {
-	v := MustNew(WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
+	v := mustNew(t, WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
 		if lang, ok := ctx.Value(myLangKey{}).(Locale); ok {
 			return lang, true
 		}
@@ -193,7 +193,7 @@ func TestLocaleExtractor_UsesContext(t *testing.T) {
 
 func TestLocaleExtractor_FallbackToDefault(t *testing.T) {
 	// localeExtractor 返回 false → 回退到 defaultLocale (EN)
-	v := MustNew(WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
+	v := mustNew(t, WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
 		return "", false
 	}))
 
@@ -204,7 +204,7 @@ func TestLocaleExtractor_FallbackToDefault(t *testing.T) {
 
 func TestLocaleExtractor_UnsupportedLocaleFallback(t *testing.T) {
 	// localeExtractor 返回不在 locales 中的 locale → 退回 defaultLocale
-	v := MustNew(WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
+	v := mustNew(t, WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
 		return Locale("fr"), true
 	}))
 
@@ -217,7 +217,7 @@ func TestLocaleExtractor_UnsupportedLocaleFallback(t *testing.T) {
 // ---- Var ----
 
 func TestVar(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	ctx := context.Background()
 	assert.NoError(t, v.Var(ctx, "test@example.com", "email"))
 	assert.Error(t, v.Var(ctx, "bad-email", "email"))
@@ -226,7 +226,7 @@ func TestVar(t *testing.T) {
 }
 
 func TestVar_WithLocale(t *testing.T) {
-	v := MustNew(WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
+	v := mustNew(t, WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
 		return LocaleEN, true
 	}))
 	err := v.Var(context.Background(), "", "required")
@@ -237,7 +237,7 @@ func TestVar_WithLocale(t *testing.T) {
 // ---- Violation 属性 ----
 
 func TestViolation_Attributes(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{Name: "", Email: "bad"})
 	require.Error(t, err)
 
@@ -257,7 +257,7 @@ func TestViolation_Attributes(t *testing.T) {
 // ---- 自定义校验（通过选项注册） ----
 
 func TestWithValidation(t *testing.T) {
-	v := MustNew(WithValidation("nonempty_str", func(fl gv.FieldLevel) bool {
+	v := mustNew(t, WithValidation("nonempty_str", func(fl gv.FieldLevel) bool {
 		return fl.Field().String() != ""
 	}))
 
@@ -275,7 +275,7 @@ func TestWithStructValidation(t *testing.T) {
 		End   int `validate:"required"`
 	}
 
-	v := MustNew(WithStructValidation(func(sl gv.StructLevel) {
+	v := mustNew(t, WithStructValidation(func(sl gv.StructLevel) {
 		dr := sl.Current().Interface().(dateRange)
 		if dr.Start > dr.End {
 			sl.ReportError(dr.End, "end", "End", "gtstart", "")
@@ -290,7 +290,7 @@ func TestWithStructValidation(t *testing.T) {
 // ---- 错误工具 ----
 
 func TestAsValidationError(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	assert.True(t, AsValidationError(err))
 	assert.False(t, AsValidationError(nil))
@@ -300,7 +300,7 @@ func TestAsValidationError(t *testing.T) {
 // ---- 并发安全 ----
 
 func TestConcurrentValidation(t *testing.T) {
-	v := MustNew()
+	v := mustNew(t)
 	done := make(chan struct{}, 20)
 	for i := 0; i < 20; i++ {
 		go func(i int) {
@@ -322,7 +322,7 @@ func TestConcurrentValidation(t *testing.T) {
 // ---- 基准 ----
 
 func BenchmarkStruct_Valid(b *testing.B) {
-	v := MustNew()
+	v := mustNew(b)
 	ctx := context.Background()
 	u := &testUser{
 		Name:     "Alice",
@@ -337,7 +337,7 @@ func BenchmarkStruct_Valid(b *testing.B) {
 }
 
 func BenchmarkStruct_Invalid(b *testing.B) {
-	v := MustNew()
+	v := mustNew(b)
 	ctx := context.Background()
 	u := &testUser{Name: "", Email: "bad", Age: -1, Username: "ab"}
 	b.ResetTimer()

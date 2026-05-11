@@ -3,7 +3,9 @@ package cx
 import "errors"
 
 var (
-	// ErrComponentNotFound is returned when a key is not registered in the container.
+	// ErrComponentNotFound is returned when a key is not registered in the
+	// container, or when it is registered but its value has not been
+	// constructed yet (i.e. Get is called outside of Start).
 	ErrComponentNotFound = errors.New("component not found")
 
 	// ErrComponentExists is returned when a key is already registered.

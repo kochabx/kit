@@ -3,286 +3,364 @@ package httpx
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
 
-type TestResponse struct {
-	Message string `json:"message"`
-	Status  int    `json:"status"`
+type echo struct {
+	Method string `json:"method"`
+	Path   string `json:"path"`
+	Query  string `json:"query"`
+	Body   string `json:"body"`
+	CT     string `json:"ct"`
+	Auth   string `json:"auth"`
 }
 
-func TestClient_Request_GET(t *testing.T) {
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != MethodGet {
-			t.Errorf("Expected GET method, got %s", r.Method)
+func newEchoServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		resp := echo{
+			Method: r.Method,
+			Path:   r.URL.Path,
+			Query:  r.URL.RawQuery,
+			Body:   string(body),
+			CT:     r.Header.Get("Content-Type"),
+			Auth:   r.Header.Get("Authorization"),
 		}
-
-		response := TestResponse{
-			Message: "success",
-			Status:  200,
-		}
-
 		w.Header().Set("Content-Type", ContentTypeJSON)
-		json.NewEncoder(w).Encode(response)
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
-	defer server.Close()
+}
+func TestClient_GetWithInto(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
 
-	// Test GET request
-	client := New()
-	var result TestResponse
-
-	resp, err := client.Request(MethodGet, server.URL, nil, WithResponse(&result))
+	c := New()
+	var got echo
+	resp, err := c.Get(context.Background(), srv.URL+"/users",
+		Query("page", "1"),
+		Query("limit", "10"),
+		Into(&got),
+	)
 	if err != nil {
-		t.Fatalf("Request failed: %v", err)
+		t.Fatalf("Get failed: %v", err)
 	}
-
 	if resp.StatusCode != 200 {
-		t.Errorf("Expected status 200, got %d", resp.StatusCode)
+		t.Fatalf("status = %d", resp.StatusCode)
 	}
-
-	if result.Message != "success" {
-		t.Errorf("Expected message 'success', got '%s'", result.Message)
+	if got.Method != "GET" || got.Path != "/users" {
+		t.Errorf("echo = %+v", got)
+	}
+	if !strings.Contains(got.Query, "page=1") || !strings.Contains(got.Query, "limit=10") {
+		t.Errorf("query = %q", got.Query)
 	}
 }
 
-func TestClient_Request_POST_JSON(t *testing.T) {
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != MethodPost {
-			t.Errorf("Expected POST method, got %s", r.Method)
-		}
+func TestClient_PostJSON_AutoContentType(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
 
-		if r.Header.Get("Content-Type") != ContentTypeJSON {
-			t.Errorf("Expected Content-Type %s, got %s", ContentTypeJSON, r.Header.Get("Content-Type"))
-		}
-
-		var reqBody TestResponse
-		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
-			t.Errorf("Failed to decode request body: %v", err)
-		}
-
-		response := TestResponse{
-			Message: "received: " + reqBody.Message,
-			Status:  201,
-		}
-
-		w.WriteHeader(201)
-		w.Header().Set("Content-Type", ContentTypeJSON)
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer server.Close()
-
-	// Test POST request with JSON body
-	client := New()
-	requestBody := TestResponse{
-		Message: "test message",
-		Status:  100,
-	}
-
-	var result TestResponse
-	resp, err := client.Request(MethodPost, server.URL, requestBody, WithResponse(&result))
+	c := New()
+	var got echo
+	_, err := c.Post(context.Background(), srv.URL+"/x",
+		JSON(map[string]string{"a": "b"}),
+		Into(&got),
+	)
 	if err != nil {
-		t.Fatalf("Request failed: %v", err)
+		t.Fatalf("Post failed: %v", err)
 	}
-
-	if resp.StatusCode != 201 {
-		t.Errorf("Expected status 201, got %d", resp.StatusCode)
+	if got.CT != ContentTypeJSON {
+		t.Errorf("Content-Type = %q, want %q", got.CT, ContentTypeJSON)
 	}
-
-	expectedMessage := "received: test message"
-	if result.Message != expectedMessage {
-		t.Errorf("Expected message '%s', got '%s'", expectedMessage, result.Message)
+	if !strings.Contains(got.Body, `"a":"b"`) {
+		t.Errorf("body = %q", got.Body)
 	}
 }
 
-func TestClient_Request_WithContext(t *testing.T) {
-	// Create test server with delay
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(100 * time.Millisecond)
-		json.NewEncoder(w).Encode(TestResponse{Message: "delayed", Status: 200})
-	}))
-	defer server.Close()
+func TestClient_PostForm_AutoContentType(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
 
-	// Test with context timeout
-	client := New()
+	c := New()
+	var got echo
+	_, err := c.Post(context.Background(), srv.URL+"/f",
+		FormMap(map[string]string{"name": "alice"}),
+		Into(&got),
+	)
+	if err != nil {
+		t.Fatalf("Post failed: %v", err)
+	}
+	if got.CT != ContentTypeForm {
+		t.Errorf("Content-Type = %q, want %q", got.CT, ContentTypeForm)
+	}
+	if got.Body != "name=alice" {
+		t.Errorf("body = %q", got.Body)
+	}
+}
+
+func TestClient_GetNoContentType(t *testing.T) {
+	// GET 无 body 时不应自动带 Content-Type
+	srv := newEchoServer(t)
+	defer srv.Close()
+
+	c := New()
+	var got echo
+	_, err := c.Get(context.Background(), srv.URL+"/g", Into(&got))
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got.CT != "" {
+		t.Errorf("expected empty Content-Type, got %q", got.CT)
+	}
+}
+
+func TestClient_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(404)
+		_, _ = w.Write([]byte("not found"))
+	}))
+	defer srv.Close()
+
+	c := New()
+	resp, err := c.Get(context.Background(), srv.URL+"/missing")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	var herr *HTTPError
+	if !errors.As(err, &herr) {
+		t.Fatalf("expected *HTTPError, got %T", err)
+	}
+	if herr.StatusCode != 404 {
+		t.Errorf("StatusCode = %d", herr.StatusCode)
+	}
+	if string(herr.Body) != "not found" {
+		t.Errorf("body = %q", herr.Body)
+	}
+	if resp == nil || resp.StatusCode != 404 {
+		t.Errorf("resp should be preserved with status 404")
+	}
+}
+
+func TestClient_HTTPError_Disabled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+	}))
+	defer srv.Close()
+
+	c := New(WithErrorOnStatus(nil))
+	resp, err := c.Get(context.Background(), srv.URL+"/")
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 500 {
+		t.Errorf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestClient_BaseURL(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
+
+	c := New(WithBaseURL(srv.URL))
+	var got echo
+	_, err := c.Get(context.Background(), "/api/v1/users", Into(&got))
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got.Path != "/api/v1/users" {
+		t.Errorf("path = %q", got.Path)
+	}
+}
+
+func TestClient_DefaultHeader_Override(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-UA", r.Header.Get("User-Agent"))
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+
+	c := New(WithDefaultHeader("User-Agent", "default-ua"))
+	resp, err := c.Get(context.Background(), srv.URL+"/", SetHeader("User-Agent", "override"))
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if got := resp.Header.Get("X-UA"); got != "override" {
+		t.Errorf("UA = %q", got)
+	}
+}
+
+func TestClient_BasicAuthAndBearer(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
+
+	c := New()
+	var got echo
+	_, err := c.Get(context.Background(), srv.URL+"/", Bearer("tok"), Into(&got))
+	if err != nil || got.Auth != "Bearer tok" {
+		t.Errorf("bearer err=%v auth=%q", err, got.Auth)
+	}
+
+	got = echo{}
+	_, err = c.Get(context.Background(), srv.URL+"/", BasicAuth("u", "p"), Into(&got))
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	// base64("u:p") = dTpw
+	if got.Auth != "Basic dTpw" {
+		t.Errorf("basic auth = %q", got.Auth)
+	}
+}
+
+func TestClient_ContextCancel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+	defer srv.Close()
+
+	c := New()
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-
-	var result TestResponse
-	_, err := client.Request(MethodGet, server.URL, nil,
-		WithContext(ctx),
-		WithResponse(&result),
-	)
-
+	_, err := c.Get(ctx, srv.URL+"/")
 	if err == nil {
-		t.Error("Expected timeout error, got nil")
+		t.Fatal("expected timeout error")
 	}
 }
 
-func TestClient_Request_WithHeaders(t *testing.T) {
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("X-Custom-Header") != "custom-value" {
-			t.Errorf("Expected custom header 'custom-value', got '%s'", r.Header.Get("X-Custom-Header"))
+func TestClient_Retry_Until_OK(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&calls, 1)
+		if n < 3 {
+			w.WriteHeader(503)
+			return
 		}
-
-		json.NewEncoder(w).Encode(TestResponse{Message: "headers received", Status: 200})
+		w.Header().Set("Content-Type", ContentTypeJSON)
+		_, _ = w.Write([]byte(`{"ok":true}`))
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	// Test with custom headers
-	client := New()
-	headers := map[string]string{
-		"X-Custom-Header": "custom-value",
-	}
-
-	var result TestResponse
-	_, err := client.Request(MethodGet, server.URL, nil,
-		WithHeader(headers),
-		WithResponse(&result),
-	)
-
+	c := New(WithRetry(3, nil, nil))
+	var out map[string]bool
+	resp, err := c.Get(context.Background(), srv.URL+"/", Into(&out))
 	if err != nil {
-		t.Fatalf("Request failed: %v", err)
+		t.Fatalf("Get failed: %v", err)
 	}
-
-	if result.Message != "headers received" {
-		t.Errorf("Expected message 'headers received', got '%s'", result.Message)
+	if resp.StatusCode != 200 {
+		t.Errorf("status = %d", resp.StatusCode)
 	}
-}
-
-func TestClient_Request_ErrorResponse(t *testing.T) {
-	// Create test server that returns error
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(400)
-		w.Write([]byte("Bad Request"))
-	}))
-	defer server.Close()
-
-	// Test error handling
-	client := New()
-	_, err := client.Request(MethodGet, server.URL, nil)
-
-	if err == nil {
-		t.Error("Expected error for 400 status, got nil")
+	if !out["ok"] {
+		t.Errorf("out = %v", out)
+	}
+	if c := atomic.LoadInt32(&calls); c != 3 {
+		t.Errorf("calls = %d, want 3", c)
 	}
 }
 
-func BenchmarkClient_Request(b *testing.B) {
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(TestResponse{Message: "benchmark", Status: 200})
+func TestClient_Retry_Exhausted(t *testing.T) {
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(503)
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	client := New()
+	c := New(WithRetry(3, nil, nil))
+	_, err := c.Get(context.Background(), srv.URL+"/")
+	var herr *HTTPError
+	if !errors.As(err, &herr) || herr.StatusCode != 503 {
+		t.Fatalf("expected 503 HTTPError, got %v", err)
+	}
+	if c := atomic.LoadInt32(&calls); c != 3 {
+		t.Errorf("calls = %d, want 3", c)
+	}
+}
 
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			var result TestResponse
-			_, err := client.Request(MethodGet, server.URL, nil, WithResponse(&result))
-			if err != nil {
-				b.Fatalf("Request failed: %v", err)
+func TestClient_Middleware_Order(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
+
+	var order []string
+	mw := func(name string) Middleware {
+		return func(next RoundTripFunc) RoundTripFunc {
+			return func(req *http.Request) (*http.Response, error) {
+				order = append(order, "->"+name)
+				resp, err := next(req)
+				order = append(order, name+"->")
+				return resp, err
 			}
 		}
-	})
+	}
+
+	c := New(WithMiddleware(mw("A"), mw("B")))
+	_, err := c.Get(context.Background(), srv.URL+"/")
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	want := []string{"->A", "->B", "B->", "A->"}
+	if strings.Join(order, ",") != strings.Join(want, ",") {
+		t.Errorf("order = %v, want %v", order, want)
+	}
 }
 
-func TestClient_ConvenienceMethods(t *testing.T) {
-	// Create test server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := map[string]string{
-			"method": r.Method,
-			"path":   r.URL.Path,
-		}
-
-		w.Header().Set("Content-Type", ContentTypeJSON)
-		json.NewEncoder(w).Encode(response)
+func TestClient_IntoBytesAndString(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("hello"))
 	}))
-	defer server.Close()
+	defer srv.Close()
 
-	request := New()
+	c := New()
+	var b []byte
+	if _, err := c.Get(context.Background(), srv.URL+"/", IntoBytes(&b)); err != nil {
+		t.Fatalf("IntoBytes: %v", err)
+	}
+	if string(b) != "hello" {
+		t.Errorf("bytes = %q", b)
+	}
 
-	// Test GET convenience method
-	t.Run("GET", func(t *testing.T) {
-		var result map[string]string
-		resp, err := request.Get(server.URL+"/test", WithResponse(&result))
-		if err != nil {
-			t.Fatalf("GET request failed: %v", err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-		if result["method"] != "GET" {
-			t.Errorf("Expected method GET, got %s", result["method"])
-		}
-	})
+	var s string
+	if _, err := c.Get(context.Background(), srv.URL+"/", IntoString(&s)); err != nil {
+		t.Fatalf("IntoString: %v", err)
+	}
+	if s != "hello" {
+		t.Errorf("string = %q", s)
+	}
+}
 
-	// Test POST convenience method
-	t.Run("POST", func(t *testing.T) {
-		var result map[string]string
-		body := map[string]string{"test": "data"}
-		resp, err := request.Post(server.URL+"/test", body, WithResponse(&result))
-		if err != nil {
-			t.Fatalf("POST request failed: %v", err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-		if result["method"] != "POST" {
-			t.Errorf("Expected method POST, got %s", result["method"])
-		}
-	})
+func TestClient_RawBody(t *testing.T) {
+	srv := newEchoServer(t)
+	defer srv.Close()
 
-	// Test PUT convenience method
-	t.Run("PUT", func(t *testing.T) {
-		var result map[string]string
-		body := map[string]string{"test": "data"}
-		resp, err := request.Put(server.URL+"/test", body, WithResponse(&result))
-		if err != nil {
-			t.Fatalf("PUT request failed: %v", err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-		if result["method"] != "PUT" {
-			t.Errorf("Expected method PUT, got %s", result["method"])
-		}
-	})
+	c := New()
+	var got echo
+	_, err := c.Post(context.Background(), srv.URL+"/r",
+		Raw("application/octet-stream", []byte{1, 2, 3}),
+		Into(&got),
+	)
+	if err != nil {
+		t.Fatalf("Post failed: %v", err)
+	}
+	if got.CT != "application/octet-stream" {
+		t.Errorf("CT = %q", got.CT)
+	}
+	if got.Body != string([]byte{1, 2, 3}) {
+		t.Errorf("body = %v", []byte(got.Body))
+	}
+}
 
-	// Test DELETE convenience method
-	t.Run("DELETE", func(t *testing.T) {
-		var result map[string]string
-		resp, err := request.Delete(server.URL+"/test", WithResponse(&result))
-		if err != nil {
-			t.Fatalf("DELETE request failed: %v", err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-		if result["method"] != "DELETE" {
-			t.Errorf("Expected method DELETE, got %s", result["method"])
-		}
-	})
-
-	// Test PATCH convenience method
-	t.Run("PATCH", func(t *testing.T) {
-		var result map[string]string
-		body := map[string]string{"test": "data"}
-		resp, err := request.Patch(server.URL+"/test", body, WithResponse(&result))
-		if err != nil {
-			t.Fatalf("PATCH request failed: %v", err)
-		}
-		if resp.StatusCode != 200 {
-			t.Errorf("Expected status 200, got %d", resp.StatusCode)
-		}
-		if result["method"] != "PATCH" {
-			t.Errorf("Expected method PATCH, got %s", result["method"])
-		}
-	})
+func TestClient_NilContext(t *testing.T) {
+	c := New()
+	var ctx context.Context // intentionally nil
+	_, err := c.Do(ctx, "GET", "http://example.com", nil)
+	if err == nil {
+		t.Fatal("expected error for nil context")
+	}
 }

@@ -47,15 +47,6 @@ func ECIESDecryptor(privateKeyPath string) (Decryptor, error) {
 	}), nil
 }
 
-// MustECIESDecryptor 创建基于 ECIES 的解密器，失败时 panic
-func MustECIESDecryptor(privateKeyPath string) Decryptor {
-	d, err := ECIESDecryptor(privateKeyPath)
-	if err != nil {
-		panic(err)
-	}
-	return d
-}
-
 // Crypto 创建请求体解密中间件
 func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 	cfg := CryptoConfig{}

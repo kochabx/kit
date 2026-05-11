@@ -14,7 +14,7 @@ import (
 // ---------------------------------------------------------------------------
 
 // State represents the lifecycle phase of a Container.
-type State int
+type State int32
 
 const (
 	StateNew      State = iota // Container created, not yet started
@@ -79,6 +79,11 @@ func WithStopTimeout(d time.Duration) Option {
 	return func(c *Container) { c.stopTimeout = d }
 }
 
+// WithHealthTimeout sets the per-component timeout used during HealthCheck.
+func WithHealthTimeout(d time.Duration) Option {
+	return func(c *Container) { c.healthTimeout = d }
+}
+
 // WithOnStart registers a hook that runs before the first component is started.
 func WithOnStart(fn func(ctx context.Context) error) Option {
 	return func(c *Container) { c.onStart = append(c.onStart, fn) }
@@ -108,6 +113,7 @@ type provider struct {
 	constructor func(*Container) (any, error)
 	value       any
 	built       bool
+	deps        []string // keys this provider depends on (recorded during build)
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +133,13 @@ func init() { C = New() }
 // (lazily – dependencies are built on first access). Values that implement
 // [Starter] are started in dependency order; values that implement [Stopper]
 // are stopped in reverse dependency order during [Container.Stop].
+//
+// Goroutine safety:
+//   - Registration (Provide/Supply) and retrieval (Get) are safe for
+//     concurrent use after Start has returned.
+//   - During Start, only the goroutine that called Start may interact with
+//     the container (constructors call Get on the same goroutine). Spawning
+//     goroutines that call Get inside a constructor is not supported.
 type Container struct {
 	mu        sync.RWMutex
 	providers map[string]*provider
@@ -135,12 +148,14 @@ type Container struct {
 	// buildOrder records the order in which providers were actually
 	// constructed. Filled during Start, used for Start/Stop ordering.
 	buildOrder []string
-	// buildStack is a transient cycle-detection stack, only used during
-	// the build phase of Start.
+	// buildStack is the cycle-detection stack used during the build phase.
+	// Only the Start goroutine writes to it. The top of the stack also acts
+	// as the "current caller" used to record dependency edges.
 	buildStack []string
 
-	state       State
-	stopTimeout time.Duration
+	state         State
+	stopTimeout   time.Duration
+	healthTimeout time.Duration
 
 	onStart    []func(ctx context.Context) error
 	onStarted  []func(ctx context.Context) error
@@ -151,8 +166,9 @@ type Container struct {
 // New creates an empty Container.
 func New(opts ...Option) *Container {
 	c := &Container{
-		providers:   make(map[string]*provider),
-		stopTimeout: 30 * time.Second,
+		providers:     make(map[string]*provider),
+		stopTimeout:   30 * time.Second,
+		healthTimeout: 10 * time.Second,
 	}
 	for _, o := range opts {
 		o(c)
@@ -170,6 +186,9 @@ func New(opts ...Option) *Container {
 func Provide[T any](c *Container, key string, ctor func(*Container) (T, error)) error {
 	if key == "" {
 		return fmt.Errorf("%w: empty key", ErrInvalidKey)
+	}
+	if ctor == nil {
+		return fmt.Errorf("cx: nil constructor for %q", key)
 	}
 
 	c.mu.Lock()
@@ -192,13 +211,6 @@ func Provide[T any](c *Container, key string, ctor func(*Container) (T, error)) 
 	return nil
 }
 
-// MustProvide is like [Provide] but panics on error.
-func MustProvide[T any](c *Container, key string, ctor func(*Container) (T, error)) {
-	if err := Provide(c, key, ctor); err != nil {
-		panic(fmt.Sprintf("cx: MustProvide: %v", err))
-	}
-}
-
 // Supply registers a pre-constructed value under key.
 // Internally it wraps the value in a constructor so it participates in the
 // same build lifecycle as [Provide]-registered components.
@@ -208,10 +220,19 @@ func Supply[T any](c *Container, key string, value T) error {
 	})
 }
 
+// MustProvide is like [Provide] but panics on error.
+// Intended for use in package init() blocks.
+func MustProvide[T any](c *Container, key string, ctor func(*Container) (T, error)) {
+	if err := Provide(c, key, ctor); err != nil {
+		panic(err)
+	}
+}
+
 // MustSupply is like [Supply] but panics on error.
+// Intended for use in package init() blocks.
 func MustSupply[T any](c *Container, key string, value T) {
 	if err := Supply(c, key, value); err != nil {
-		panic(fmt.Sprintf("cx: MustSupply: %v", err))
+		panic(err)
 	}
 }
 
@@ -224,82 +245,149 @@ func MustSupply[T any](c *Container, key string, value T) {
 // During [Container.Start] (StateStarting) an unbuilt dependency is
 // constructed on the fly (lazy build). After Start (StateRunning) the
 // cached value is returned directly.
+//
+// Errors:
+//   - ErrComponentNotFound: key is not registered, or is registered but not
+//     yet built (Get called outside Start).
+//   - ErrTypeMismatch: stored value cannot be cast to T.
+//   - ErrCircularDependency / constructor error: bubbled from lazy build.
 func Get[T any](c *Container, key string) (T, error) {
 	var zero T
 
 	c.mu.RLock()
 	p, exists := c.providers[key]
 	state := c.state
-	built := exists && p.built
-	var val any
-	if built {
-		val = p.value
-	}
 	c.mu.RUnlock()
 
 	if !exists {
 		return zero, fmt.Errorf("%w: %s", ErrComponentNotFound, key)
 	}
 
+	// Fast path: already built. Read under RLock to be safe vs. concurrent Stop.
+	c.mu.RLock()
+	built := p.built
+	val := p.value
+	c.mu.RUnlock()
+
 	if !built {
-		if state == StateStarting {
-			if err := c.build(key); err != nil {
-				return zero, err
-			}
-			val = p.value
-		} else {
+		if state != StateStarting {
 			return zero, fmt.Errorf("%w: %s is not built (state: %s)", ErrComponentNotFound, key, state)
 		}
+		// Lazy build – called from inside a constructor (Start goroutine).
+		// Record dependency edge: top-of-stack -> key.
+		if err := c.build(key); err != nil {
+			return zero, err
+		}
+		c.mu.RLock()
+		val = p.value
+		c.mu.RUnlock()
 	}
 
 	t, ok := val.(T)
 	if !ok {
-		return zero, fmt.Errorf("%w: key %q stores %T", ErrTypeMismatch, key, val)
+		return zero, fmt.Errorf("%w: key %q stores %T, requested %T", ErrTypeMismatch, key, val, zero)
 	}
 	return t, nil
 }
 
 // MustGet is like [Get] but panics on error.
 func MustGet[T any](c *Container, key string) T {
-	val, err := Get[T](c, key)
+	v, err := Get[T](c, key)
 	if err != nil {
-		panic(fmt.Sprintf("cx: MustGet: %v", err))
+		panic(err)
 	}
-	return val
+	return v
 }
 
 // ---------------------------------------------------------------------------
-// Build (internal, single-goroutine during Start)
+// Build (internal, runs in the Start goroutine)
 // ---------------------------------------------------------------------------
 
-func (c *Container) build(key string) error {
-	p := c.providers[key]
+// build constructs the provider for key. It is safe to call recursively
+// from constructors via Get. The Start goroutine drives the build phase;
+// concurrent calls from other goroutines are not supported (see Container
+// docs).
+//
+// Locking strategy: mu is held only for short critical sections (state
+// reads/writes, slice mutations). The user constructor runs without the
+// lock so it can recursively Get other components.
+func (c *Container) build(key string) (retErr error) {
+	c.mu.Lock()
+	p, ok := c.providers[key]
+	if !ok {
+		c.mu.Unlock()
+		return fmt.Errorf("%w: %s", ErrComponentNotFound, key)
+	}
 	if p.built {
+		// Already built – just record the dep edge from caller (if any).
+		c.recordDepEdgeLocked(key)
+		c.mu.Unlock()
 		return nil
 	}
 
-	// Cycle detection: if key is already on the build stack we have a cycle.
+	// Cycle detection on the build stack.
 	for i, k := range c.buildStack {
 		if k == key {
 			cycle := make([]string, len(c.buildStack[i:])+1)
 			copy(cycle, c.buildStack[i:])
 			cycle[len(cycle)-1] = key
+			c.mu.Unlock()
 			return fmt.Errorf("%w: %s", ErrCircularDependency, strings.Join(cycle, " → "))
 		}
 	}
 
-	c.buildStack = append(c.buildStack, key)
-	val, err := p.constructor(c)
-	c.buildStack = c.buildStack[:len(c.buildStack)-1]
+	// Record dep edge: caller (top of stack) depends on this key.
+	c.recordDepEdgeLocked(key)
 
+	c.buildStack = append(c.buildStack, key)
+	ctor := p.constructor
+	c.mu.Unlock()
+
+	// Run the constructor without holding the lock so it can recursively Get.
+	var val any
+	var err error
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				err = fmt.Errorf("cx: panic constructing %s: %v", key, r)
+			}
+		}()
+		val, err = ctor(c)
+	}()
+
+	c.mu.Lock()
+	// Pop our entry off the build stack (regardless of error).
+	if n := len(c.buildStack); n > 0 && c.buildStack[n-1] == key {
+		c.buildStack = c.buildStack[:n-1]
+	}
 	if err != nil {
+		c.mu.Unlock()
 		return fmt.Errorf("construct %s: %w", key, err)
 	}
-
 	p.value = val
 	p.built = true
 	c.buildOrder = append(c.buildOrder, key)
+	c.mu.Unlock()
 	return nil
+}
+
+// recordDepEdgeLocked appends key to the top-of-stack provider's deps list
+// if there is a current caller. mu must be held by the caller.
+func (c *Container) recordDepEdgeLocked(key string) {
+	n := len(c.buildStack)
+	if n == 0 {
+		return
+	}
+	caller := c.providers[c.buildStack[n-1]]
+	if caller == nil {
+		return
+	}
+	for _, d := range caller.deps {
+		if d == key {
+			return
+		}
+	}
+	caller.deps = append(caller.deps, key)
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +399,9 @@ func (c *Container) build(key string) error {
 //
 // If any component fails to start, already-started components are stopped
 // in reverse order (best-effort) before returning the error.
+//
+// Start respects ctx cancellation: if ctx is cancelled during the build
+// phase, the next build step returns ctx.Err.
 func (c *Container) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.state != StateNew && c.state != StateStopped {
@@ -321,16 +412,28 @@ func (c *Container) Start(ctx context.Context) error {
 	c.state = StateStarting
 	c.buildOrder = c.buildOrder[:0]
 	c.buildStack = c.buildStack[:0]
+	// Reset deps from any previous run.
+	for _, p := range c.providers {
+		p.deps = nil
+	}
 	keys := make([]string, len(c.keys))
 	copy(keys, c.keys)
 	c.mu.Unlock()
 
-	// ---- Build phase (single goroutine, no locks needed) ----
+	setFailed := func() {
+		c.mu.Lock()
+		c.state = StateFailed
+		c.mu.Unlock()
+	}
+
+	// ---- Build phase ----
 	for _, key := range keys {
+		if err := ctx.Err(); err != nil {
+			setFailed()
+			return fmt.Errorf("cx: build cancelled: %w", err)
+		}
 		if err := c.build(key); err != nil {
-			c.mu.Lock()
-			c.state = StateFailed
-			c.mu.Unlock()
+			setFailed()
 			return fmt.Errorf("cx: %w", err)
 		}
 	}
@@ -338,9 +441,7 @@ func (c *Container) Start(ctx context.Context) error {
 	// ---- onStart hooks ----
 	for _, fn := range c.onStart {
 		if err := fn(ctx); err != nil {
-			c.mu.Lock()
-			c.state = StateFailed
-			c.mu.Unlock()
+			setFailed()
 			return fmt.Errorf("cx: onStart hook: %w", err)
 		}
 	}
@@ -361,18 +462,25 @@ func (c *Container) Start(ctx context.Context) error {
 		}
 	}
 
-	for _, key := range c.buildOrder {
+	c.mu.RLock()
+	order := make([]string, len(c.buildOrder))
+	copy(order, c.buildOrder)
+	c.mu.RUnlock()
+
+	for _, key := range order {
+		c.mu.RLock()
 		p := c.providers[key]
-		if s, ok := p.value.(Starter); ok {
+		val := p.value
+		c.mu.RUnlock()
+
+		if s, ok := val.(Starter); ok {
 			if err := s.Start(ctx); err != nil {
 				rollback()
-				c.mu.Lock()
-				c.state = StateFailed
-				c.mu.Unlock()
+				setFailed()
 				return fmt.Errorf("cx: start %s: %w", key, err)
 			}
 		}
-		if s, ok := p.value.(Stopper); ok {
+		if s, ok := val.(Stopper); ok {
 			startedComps = append(startedComps, started{key: key, stop: s.Stop})
 		}
 	}
@@ -381,9 +489,7 @@ func (c *Container) Start(ctx context.Context) error {
 	for _, fn := range c.onStarted {
 		if err := fn(ctx); err != nil {
 			rollback()
-			c.mu.Lock()
-			c.state = StateFailed
-			c.mu.Unlock()
+			setFailed()
 			return fmt.Errorf("cx: onStarted hook: %w", err)
 		}
 	}
@@ -405,6 +511,8 @@ func (c *Container) Stop(ctx context.Context) error {
 		return fmt.Errorf("cx: cannot stop in state %s", state)
 	}
 	c.state = StateStopping
+	order := make([]string, len(c.buildOrder))
+	copy(order, c.buildOrder)
 	c.mu.Unlock()
 
 	var errs []error
@@ -416,11 +524,14 @@ func (c *Container) Stop(ctx context.Context) error {
 		}
 	}
 
-	// Stop in reverse build order
-	for i := len(c.buildOrder) - 1; i >= 0; i-- {
-		key := c.buildOrder[i]
+	// Stop in reverse build order.
+	for i := len(order) - 1; i >= 0; i-- {
+		key := order[i]
+		c.mu.RLock()
 		p := c.providers[key]
-		if s, ok := p.value.(Stopper); ok {
+		val := p.value
+		c.mu.RUnlock()
+		if s, ok := val.(Stopper); ok {
 			stopCtx, cancel := context.WithTimeout(ctx, c.stopTimeout)
 			if err := s.Stop(stopCtx); err != nil {
 				errs = append(errs, fmt.Errorf("cx: stop %s: %w", key, err))
@@ -442,6 +553,7 @@ func (c *Container) Stop(ctx context.Context) error {
 	for _, p := range c.providers {
 		p.built = false
 		p.value = nil
+		p.deps = nil
 	}
 	c.buildOrder = c.buildOrder[:0]
 	c.mu.Unlock()
@@ -449,7 +561,7 @@ func (c *Container) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Restart stops then starts the container.
+// Restart stops then starts the container. Constructors are re-invoked.
 func (c *Container) Restart(ctx context.Context) error {
 	if err := c.Stop(ctx); err != nil {
 		return err
@@ -462,41 +574,80 @@ func (c *Container) Restart(ctx context.Context) error {
 // ---------------------------------------------------------------------------
 
 // HealthCheck runs Check on every value that implements [Checker] and returns
-// an aggregated report.
-func (c *Container) HealthCheck(ctx context.Context) *HealthReport {
+// an aggregated report. Checks run concurrently; each check is bounded by the
+// configured health timeout (see [WithHealthTimeout], default 10s).
+func (c *Container) HealthCheck(ctx context.Context) HealthReport {
 	c.mu.RLock()
 	order := make([]string, len(c.buildOrder))
 	copy(order, c.buildOrder)
+	values := make([]any, len(order))
+	for i, k := range order {
+		values[i] = c.providers[k].value
+	}
+	timeout := c.healthTimeout
 	c.mu.RUnlock()
 
-	report := &HealthReport{Healthy: true}
-	for _, key := range order {
-		c.mu.RLock()
-		p := c.providers[key]
-		val := p.value
-		c.mu.RUnlock()
-
-		ch := ComponentHealth{Key: key, Healthy: true}
-		if checker, ok := val.(Checker); ok {
-			if err := checker.Check(ctx); err != nil {
-				ch.Healthy = false
-				ch.Error = err
-				report.Healthy = false
-			}
+	results := make([]ComponentHealth, len(order))
+	var wg sync.WaitGroup
+	for i := range order {
+		ch := ComponentHealth{Key: order[i], Healthy: true}
+		checker, ok := values[i].(Checker)
+		if !ok {
+			results[i] = ch
+			continue
 		}
-		report.Components = append(report.Components, ch)
+		wg.Add(1)
+		go func(idx int, key string, ck Checker) {
+			defer wg.Done()
+			cctx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			h := ComponentHealth{Key: key, Healthy: true}
+			if err := ck.Check(cctx); err != nil {
+				h.Healthy = false
+				h.Error = err
+			}
+			results[idx] = h
+		}(i, order[i], checker)
+	}
+	wg.Wait()
+
+	report := HealthReport{Components: results, Healthy: true}
+	for _, r := range results {
+		if !r.Healthy {
+			report.Healthy = false
+			break
+		}
 	}
 	return report
 }
 
 // Metrics returns basic container metrics.
-func (c *Container) Metrics() *ContainerMetrics {
+func (c *Container) Metrics() ContainerMetrics {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return &ContainerMetrics{
+	return ContainerMetrics{
 		ComponentCount: len(c.providers),
 		State:          c.state,
 	}
+}
+
+// DependencyGraph returns the dependency edges recorded during the most
+// recent Start, as a map from component key to the keys it directly depends
+// on. The map is empty before Start. Returned slices are copies.
+func (c *Container) DependencyGraph() map[string][]string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	g := make(map[string][]string, len(c.providers))
+	for k, p := range c.providers {
+		if len(p.deps) == 0 {
+			g[k] = nil
+			continue
+		}
+		deps := make([]string, len(p.deps))
+		copy(deps, p.deps)
+		g[k] = deps
+	}
+	return g
 }
 
 // ---------------------------------------------------------------------------

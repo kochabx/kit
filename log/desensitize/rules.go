@@ -39,15 +39,6 @@ func NewContentRule(name, pattern, replacement string) (*ContentRule, error) {
 	}, nil
 }
 
-// MustNewContentRule 创建规则，如果失败则 panic（用于内置规则）
-func MustNewContentRule(name, pattern, replacement string) *ContentRule {
-	rule, err := NewContentRule(name, pattern, replacement)
-	if err != nil {
-		panic(err)
-	}
-	return rule
-}
-
 func (r *ContentRule) Name() string {
 	return r.name
 }
@@ -83,15 +74,6 @@ func NewFieldRule(name, fieldName, pattern, replacement string) (*FieldRule, err
 		fieldPattern: fieldPattern,
 		replacement:  replacement,
 	}, nil
-}
-
-// MustNewFieldRule 创建规则，如果失败则 panic
-func MustNewFieldRule(name, fieldName, pattern, replacement string) *FieldRule {
-	rule, err := NewFieldRule(name, fieldName, pattern, replacement)
-	if err != nil {
-		panic(err)
-	}
-	return rule
 }
 
 func (r *FieldRule) Name() string {

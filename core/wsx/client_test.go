@@ -1,4 +1,4 @@
-package websocket
+package wsx
 
 import (
 	"context"
@@ -28,14 +28,11 @@ func TestPostmanEcho_SimpleConnection(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "WebSocket-Test-Client/1.0")
 
-	client := NewClient(WithHeaders(headers))
+	client := New(
+		WithHeaders(headers),
+		WithTLSConfig(&tls.Config{InsecureSkipVerify: false}),
+	)
 	defer client.Close()
-
-	// 修改dialer以支持TLS
-	wsClient := client.(*wsClient)
-	wsClient.dialer.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: false, // 验证证书
-	}
 
 	// 设置事件处理器
 	var connected bool
@@ -113,14 +110,11 @@ func TestPostmanEcho_EchoMessage(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "WebSocket-Test-Client/1.0")
 
-	client := NewClient(WithHeaders(headers))
+	client := New(
+		WithHeaders(headers),
+		WithTLSConfig(&tls.Config{InsecureSkipVerify: false}),
+	)
 	defer client.Close()
-
-	// 设置TLS配置
-	wsClient := client.(*wsClient)
-	wsClient.dialer.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: false,
-	}
 
 	var wg sync.WaitGroup
 	var receivedMessage string
@@ -209,14 +203,11 @@ func TestPostmanEcho_ContinuousMessageReceiving(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "WebSocket-Test-Client/1.0")
 
-	client := NewClient(WithHeaders(headers))
+	client := New(
+		WithHeaders(headers),
+		WithTLSConfig(&tls.Config{InsecureSkipVerify: false}),
+	)
 	defer client.Close()
-
-	// 设置TLS配置
-	wsClient := client.(*wsClient)
-	wsClient.dialer.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: false,
-	}
 
 	var wg sync.WaitGroup
 	var messageCount int
@@ -345,14 +336,11 @@ func TestPostmanEcho_LongRunningMessageReceiving(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "WebSocket-Test-Client/1.0")
 
-	client := NewClient(WithHeaders(headers))
+	client := New(
+		WithHeaders(headers),
+		WithTLSConfig(&tls.Config{InsecureSkipVerify: false}),
+	)
 	defer client.Close()
-
-	// 设置TLS配置
-	wsClient := client.(*wsClient)
-	wsClient.dialer.TLSClientConfig = &tls.Config{
-		InsecureSkipVerify: false,
-	}
 
 	var wg sync.WaitGroup
 	var messageCount int

@@ -174,12 +174,12 @@ func New(options ...Option) *Application {
 	// 将 servers 注册为 cx 组件（transport.Server 已实现 cx.Starter/cx.Stopper）
 	for i, s := range b.servers {
 		key := fmt.Sprintf("app:server:%d", i)
-		cx.MustSupply(container, key, s)
+		_ = cx.Supply(container, key, s)
 	}
 
 	// 注册自定义组件
 	for _, comp := range b.components {
-		cx.MustSupply(container, comp.key, comp.value)
+		_ = cx.Supply(container, comp.key, comp.value)
 	}
 
 	ctx := b.ctx
@@ -203,7 +203,7 @@ func (app *Application) Container() *cx.Container {
 }
 
 // HealthCheck 返回所有组件的聚合健康报告。
-func (app *Application) HealthCheck(ctx context.Context) *cx.HealthReport {
+func (app *Application) HealthCheck(ctx context.Context) cx.HealthReport {
 	return app.container.HealthCheck(ctx)
 }
 
