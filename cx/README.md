@@ -49,13 +49,20 @@ func (d *DB) Stop(ctx context.Context) error {
 
 func init() {
     // 注册配置（预构造值）
-    cx.MustSupply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"})
+    if err := cx.Supply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"}); err != nil {
+        panic(err)
+    }
 
     // 注册数据库（惰性构造函数）
-    cx.MustProvide(cx.C, "db", func(c *cx.Container) (*DB, error) {
-        cfg := cx.MustGet[*Config](c, "config")
+    if err := cx.Provide(cx.C, "db", func(c *cx.Container) (*DB, error) {
+        cfg, err := cx.Get[*Config](c, "config")
+        if err != nil {
+            return nil, err
+        }
         return &DB{cfg: cfg}, nil
-    })
+    }); err != nil {
+        panic(err)
+    }
 }
 
 func main() {
@@ -67,7 +74,10 @@ func main() {
     }
 
     // 类型安全检索
-    db := cx.MustGet[*DB](cx.C, "db")
+    db, err := cx.Get[*DB](cx.C, "db")
+    if err != nil {
+        panic(err)
+    }
     fmt.Printf("DB: %+v\n", db)
 
     // 停止：逆序调用 db.Stop()
@@ -87,17 +97,12 @@ cx.Provide[T](c, "key", func(c *cx.Container) (T, error) { ... })
 
 // 预构造值注册
 cx.Supply[T](c, "key", value)
-
-// panic 版本，适合 init()
-cx.MustProvide[T](c, "key", ctor)
-cx.MustSupply[T](c, "key", value)
 ```
 
 ### 检索
 
 ```go
 val, err := cx.Get[T](c, "key")  // 类型安全，返回 error
-val := cx.MustGet[T](c, "key")   // 类型安全，panic on error
 ```
 
 ### 依赖声明
@@ -106,8 +111,14 @@ val := cx.MustGet[T](c, "key")   // 类型安全，panic on error
 
 ```go
 cx.Provide(c, "service", func(c *cx.Container) (*Service, error) {
-    db := cx.MustGet[*DB](c, "db")           // 声明依赖 db
-    cache := cx.MustGet[*Cache](c, "cache")  // 声明依赖 cache
+    db, err := cx.Get[*DB](c, "db")
+    if err != nil {
+        return nil, err
+    }
+    cache, err := cx.Get[*Cache](c, "cache")
+    if err != nil {
+        return nil, err
+    }
     return &Service{db: db, cache: cache}, nil
 })
 ```
@@ -156,8 +167,6 @@ c := cx.New(
 | `Provide[T](c, key, ctor)` | 注册惰性构造函数 |
 | `Supply[T](c, key, val)` | 注册预构造值 |
 | `Get[T](c, key)` | 类型安全检索 |
-| `MustGet[T](c, key)` | 检索（panic 版） |
-| `MustProvide[T]` / `MustSupply[T]` | 注册（panic 版） |
 | `c.Start(ctx)` | 构造 + 启动所有组件 |
 | `c.Stop(ctx)` | 逆序停止所有组件 |
 | `c.Restart(ctx)` | Stop + Start |

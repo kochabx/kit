@@ -19,7 +19,7 @@ func TestValue_OK(t *testing.T) {
 
 func TestValue_NilContext(t *testing.T) {
 	//nolint:staticcheck // intentional nil context for test
-	v, err := Value[string](nil, ctxKey("user"))
+	v, err := Value[string](context.Background(), ctxKey("user"))
 	assert.Error(t, err)
 	assert.Equal(t, "", v)
 }

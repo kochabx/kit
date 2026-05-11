@@ -248,20 +248,27 @@ app.New(
 - **可选生命周期接口** — 实现 `Starter` / `Stopper` / `Checker` 即可参与生命周期
 - **完整生命周期钩子** — `OnStart / OnStarted / OnStopping / OnStop` 四个时机
 - **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序停止
-- **全局实例** — `cx.C` 开箱即用，`MustProvide*` 系列适合在 `init()` 中调用
+- **全局实例** — `cx.C` 开箱即用，`init()` 中调用 `Provide`/`Supply` 自注册
 
 ```go
 // 注册配置（预构造值）
-cx.MustSupply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"})
+if err := cx.Supply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"}); err != nil {
+    panic(err)
+}
 
 // 注册数据库（惰性构造，依赖自动解析）
-cx.MustProvide(cx.C, "db", func(c *cx.Container) (*DB, error) {
-    cfg := cx.MustGet[*Config](c, "config")
+if err := cx.Provide(cx.C, "db", func(c *cx.Container) (*DB, error) {
+    cfg, err := cx.Get[*Config](c, "config")
+    if err != nil {
+        return nil, err
+    }
     return &DB{cfg: cfg}, nil
-})
+}); err != nil {
+    panic(err)
+}
 
 cx.C.Start(ctx)
-db := cx.MustGet[*DB](cx.C, "db")
+db, _ := cx.Get[*DB](cx.C, "db")
 cx.C.Stop(ctx)
 ```
 
@@ -340,50 +347,6 @@ Redis 支持的分布式限流：
 - **mongo**：`mongo.NewClient(config)` MongoDB 客户端
 - **etcd**：`etcd.NewClient(config)` + 辅助函数（Watch、选举等）
 - **kafka**：`kafka.NewClient(config)` 生产者与消费者
-
-## 项目结构
-
-```text
-kit/
-├── app/                     # 应用生命周期管理
-├── cmd/
-│   └── cxgen/               # cx 依赖注入空导入文件生成工具
-├── config/                  # 配置管理
-├── errors/                  # 错误定义与包装
-├── cx/                      # 依赖注入容器
-├── log/                     # 日志系统
-│   ├── desensitize/         # 脱敏子包
-│   └── writer/              # 输出目标（控制台、文件、轮转）
-├── observability/
-│   └── metrics/http/        # HTTP Prometheus 指标
-├── store/
-│   ├── db/                  # GORM 数据库
-│   ├── etcd/                # Etcd
-│   ├── kafka/               # Kafka
-│   ├── mongo/               # MongoDB
-│   └── redis/               # Redis
-├── transport/
-│   ├── transport.go         # Server 接口定义
-│   ├── grpc/                # gRPC 服务
-│   ├── http/                # HTTP 服务与中间件
-│   └── websocket/           # WebSocket 客户端
-└── core/
-    ├── README.md            # core 能力边界与放置原则
-    ├── auth/jwt/            # JWT 认证
-    ├── auth/mfa/            # TOTP 多因子认证
-    ├── crypto/ecies/        # ECIES 非对称加密
-    ├── crypto/hmac/         # HMAC 签名
-    ├── defaults/            # 结构体默认值注入
-    ├── httpx/               # HTTP 客户端
-    ├── rate/                # 分布式限流
-    ├── scheduler/           # 分布式任务调度
-    ├── util/                # 通用工具
-    │   ├── README.md        # util 收纳规则
-    │   ├── convert/         # 字符串类型转换
-    │   ├── qrcode/          # 二维码生成
-    │   └── tree/            # 树结构工具
-    └── validator/           # 数据校验
-```
 
 ## 开发命令
 

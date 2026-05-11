@@ -220,22 +220,6 @@ func Supply[T any](c *Container, key string, value T) error {
 	})
 }
 
-// MustProvide is like [Provide] but panics on error.
-// Intended for use in package init() blocks.
-func MustProvide[T any](c *Container, key string, ctor func(*Container) (T, error)) {
-	if err := Provide(c, key, ctor); err != nil {
-		panic(err)
-	}
-}
-
-// MustSupply is like [Supply] but panics on error.
-// Intended for use in package init() blocks.
-func MustSupply[T any](c *Container, key string, value T) {
-	if err := Supply(c, key, value); err != nil {
-		panic(err)
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Retrieval
 // ---------------------------------------------------------------------------
@@ -288,15 +272,6 @@ func Get[T any](c *Container, key string) (T, error) {
 		return zero, fmt.Errorf("%w: key %q stores %T, requested %T", ErrTypeMismatch, key, val, zero)
 	}
 	return t, nil
-}
-
-// MustGet is like [Get] but panics on error.
-func MustGet[T any](c *Container, key string) T {
-	v, err := Get[T](c, key)
-	if err != nil {
-		panic(err)
-	}
-	return v
 }
 
 // ---------------------------------------------------------------------------
