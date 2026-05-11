@@ -211,6 +211,15 @@ func Provide[T any](c *Container, key string, ctor func(*Container) (T, error)) 
 	return nil
 }
 
+// MustProvide is like [Provide] but panics if registration fails.
+// Intended for init/main-time wiring where a registration error is a
+// programmer error and recovery is not meaningful.
+func MustProvide[T any](c *Container, key string, ctor func(*Container) (T, error)) {
+	if err := Provide(c, key, ctor); err != nil {
+		panic(err)
+	}
+}
+
 // Supply registers a pre-constructed value under key.
 // Internally it wraps the value in a constructor so it participates in the
 // same build lifecycle as [Provide]-registered components.
@@ -218,6 +227,13 @@ func Supply[T any](c *Container, key string, value T) error {
 	return Provide(c, key, func(_ *Container) (T, error) {
 		return value, nil
 	})
+}
+
+// MustSupply is like [Supply] but panics if registration fails.
+func MustSupply[T any](c *Container, key string, value T) {
+	if err := Supply(c, key, value); err != nil {
+		panic(err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +288,17 @@ func Get[T any](c *Container, key string) (T, error) {
 		return zero, fmt.Errorf("%w: key %q stores %T, requested %T", ErrTypeMismatch, key, val, zero)
 	}
 	return t, nil
+}
+
+// MustGet is like [Get] but panics if the component cannot be retrieved.
+// Intended for initialization code where a missing component is a programmer
+// error and recovery is not meaningful.
+func MustGet[T any](c *Container, key string) T {
+	v, err := Get[T](c, key)
+	if err != nil {
+		panic(err)
+	}
+	return v
 }
 
 // ---------------------------------------------------------------------------

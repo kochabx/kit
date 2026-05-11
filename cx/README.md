@@ -4,7 +4,7 @@
 
 ## 特性
 
-- **泛型 API** — `Provide[T]` / `Supply[T]` / `Get[T]` 编译期类型安全
+- **泛型 API** — `Provide[T]` / `Supply[T]` / `Get[T]`（含 `Must*` 变体）编译期类型安全
 - **惰性构造** — 构造函数在 `Start()` 时按依赖顺序自动调用，无需手动排序
 - **自动依赖排序** — 构造函数中调用 `Get` 获取依赖，容器自动追踪依赖关系并决定 Start/Stop 顺序
 - **循环依赖检测** — 构造阶段自动检测，报错包含完整路径（如 `A → B → C → A`）
@@ -48,21 +48,17 @@ func (d *DB) Stop(ctx context.Context) error {
 }
 
 func init() {
-    // 注册配置（预构造值）
-    if err := cx.Supply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"}); err != nil {
-        panic(err)
-    }
+    // 注册配置（预构造值）—— 启动期注册错误是程序员错误，用 Must* 直接 panic
+    cx.MustSupply(cx.C, "config", &Config{DSN: "postgres://localhost/mydb"})
 
     // 注册数据库（惰性构造函数）
-    if err := cx.Provide(cx.C, "db", func(c *cx.Container) (*DB, error) {
+    cx.MustProvide(cx.C, "db", func(c *cx.Container) (*DB, error) {
         cfg, err := cx.Get[*Config](c, "config")
         if err != nil {
             return nil, err
         }
         return &DB{cfg: cfg}, nil
-    }); err != nil {
-        panic(err)
-    }
+    })
 }
 
 func main() {
@@ -97,12 +93,17 @@ cx.Provide[T](c, "key", func(c *cx.Container) (T, error) { ... })
 
 // 预构造值注册
 cx.Supply[T](c, "key", value)
+
+// Must 变体：注册失败直接 panic，适用于 init/main 启动期
+cx.MustProvide[T](c, "key", ctor)
+cx.MustSupply[T](c, "key", value)
 ```
 
 ### 检索
 
 ```go
 val, err := cx.Get[T](c, "key")  // 类型安全，返回 error
+val := cx.MustGet[T](c, "key")   // 检索失败直接 panic
 ```
 
 ### 依赖声明
@@ -166,7 +167,10 @@ c := cx.New(
 |------|------|
 | `Provide[T](c, key, ctor)` | 注册惰性构造函数 |
 | `Supply[T](c, key, val)` | 注册预构造值 |
+| `MustProvide[T](c, key, ctor)` | 同 `Provide`，失败 panic |
+| `MustSupply[T](c, key, val)` | 同 `Supply`，失败 panic |
 | `Get[T](c, key)` | 类型安全检索 |
+| `MustGet[T](c, key)` | 同 `Get`，失败 panic |
 | `c.Start(ctx)` | 构造 + 启动所有组件 |
 | `c.Stop(ctx)` | 逆序停止所有组件 |
 | `c.Restart(ctx)` | Stop + Start |
