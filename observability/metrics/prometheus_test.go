@@ -41,3 +41,41 @@ func TestWithRegistry(t *testing.T) {
 
 	assert.Same(t, registry, p.Registry())
 }
+
+func TestWithRegistryAndCollectorsIsOrderIndependent(t *testing.T) {
+	tests := []struct {
+		name string
+		opts func(*prometheus.Registry) []Option
+	}{
+		{
+			name: "registry first",
+			opts: func(registry *prometheus.Registry) []Option {
+				return []Option{WithRegistry(registry), WithBuildInfoCollector()}
+			},
+		},
+		{
+			name: "collector first",
+			opts: func(registry *prometheus.Registry) []Option {
+				return []Option{WithBuildInfoCollector(), WithRegistry(registry)}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			registry := prometheus.NewRegistry()
+			p := New(tt.opts(registry)...)
+			require.Same(t, registry, p.Registry())
+
+			metricFamilies, err := registry.Gather()
+			require.NoError(t, err)
+
+			names := make(map[string]struct{}, len(metricFamilies))
+			for _, mf := range metricFamilies {
+				names[mf.GetName()] = struct{}{}
+			}
+
+			assert.Contains(t, names, "go_build_info")
+		})
+	}
+}

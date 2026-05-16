@@ -1,6 +1,6 @@
 package errors
 
-// Common HTTP error constructors providing better semantic meaning and consistency
+// Common HTTP error constructors providing semantic names for status codes.
 
 // 4xx Client Errors
 func BadRequest(format string, args ...any) *Error {

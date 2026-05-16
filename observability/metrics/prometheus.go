@@ -3,7 +3,8 @@ package metrics
 import "github.com/prometheus/client_golang/prometheus"
 
 type Prometheus struct {
-	registry *prometheus.Registry
+	registry   *prometheus.Registry
+	collectors []prometheus.Collector
 }
 
 var Prom = New()
@@ -14,6 +15,9 @@ func New(opts ...Option) *Prometheus {
 	}
 	for _, opt := range opts {
 		opt(p)
+	}
+	for _, collector := range p.collectors {
+		p.registry.MustRegister(collector)
 	}
 	return p
 }

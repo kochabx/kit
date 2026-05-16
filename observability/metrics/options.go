@@ -19,7 +19,7 @@ func WithRegistry(registry *prometheus.Registry) Option {
 
 func WithGoCollectorRuntimeMetrics() Option {
 	return func(p *Prometheus) {
-		p.registry.MustRegister(collectors.NewGoCollector(
+		p.collectors = append(p.collectors, collectors.NewGoCollector(
 			collectors.WithGoCollectorRuntimeMetrics(collectors.GoRuntimeMetricsRule{Matcher: regexp.MustCompile("/.*")}),
 		))
 	}
@@ -27,6 +27,6 @@ func WithGoCollectorRuntimeMetrics() Option {
 
 func WithBuildInfoCollector() Option {
 	return func(p *Prometheus) {
-		p.registry.MustRegister(collectors.NewBuildInfoCollector())
+		p.collectors = append(p.collectors, collectors.NewBuildInfoCollector())
 	}
 }
