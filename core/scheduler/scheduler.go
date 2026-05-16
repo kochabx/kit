@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/kochabx/kit/core/rate"
 	"github.com/kochabx/kit/log"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"golang.org/x/sync/errgroup"
@@ -110,6 +111,9 @@ func New(opts ...Option) (*Scheduler, error) {
 			return nil, fmt.Errorf("failed to connect to redis: %w", err)
 		}
 	}
+	if options.Metrics.Enabled && options.Metrics.Registry == nil {
+		options.Metrics.Registry = prometheus.NewRegistry()
+	}
 
 	// 创建日志器
 	logger := options.CustomLogger
@@ -131,7 +135,7 @@ func New(opts ...Option) (*Scheduler, error) {
 		retryStrategy:  NewExponentialBackoff(options.Retry.BaseDelay, options.Retry.MaxDelay, options.Retry.Multiplier, options.Retry.Jitter),
 		rateLimiter:    rate.NewTokenBucketLimiter(client, options.RateLimit.Burst, options.RateLimit.Rate),
 		circuitBreaker: NewCircuitBreaker(options.CircuitBreaker.Enabled, options.CircuitBreaker.MaxFailures, options.CircuitBreaker.Timeout),
-		metrics:        NewMetrics(options.Namespace, options.Metrics.Enabled),
+		metrics:        NewMetrics(options.Namespace, options.Metrics.Enabled, options.Metrics.Registry),
 		logger:         logger,
 		mapPool: &sync.Pool{
 			New: func() any {
@@ -881,7 +885,9 @@ func (s *Scheduler) GetQueueStats(ctx context.Context) (*QueueStats, error) {
 // startMetricsServer 启动Prometheus指标服务器
 func (s *Scheduler) startMetricsServer() error {
 	mux := http.NewServeMux()
-	mux.Handle(s.opts.Metrics.Path, promhttp.Handler())
+	mux.Handle(s.opts.Metrics.Path, promhttp.HandlerFor(s.opts.Metrics.Registry, promhttp.HandlerOpts{
+		EnableOpenMetrics: true,
+	}))
 
 	s.metricsServer = &http.Server{
 		Addr:    fmt.Sprintf(":%d", s.opts.Metrics.Port),

@@ -13,7 +13,6 @@ import (
 	"github.com/swaggo/swag"
 
 	"github.com/kochabx/kit/log"
-	httpmetrics "github.com/kochabx/kit/observability/metrics/http"
 	"github.com/kochabx/kit/transport"
 )
 
@@ -215,13 +214,7 @@ func buildHandler(userHandler http.Handler, cfg *config) http.Handler {
 	}
 
 	if opts.Metrics != nil {
-		if opts.Metrics.EnableGoCollector {
-			httpmetrics.Prom.WithGoCollectorRuntimeMetrics()
-		}
-		if opts.Metrics.EnableBuildInfo {
-			httpmetrics.Prom.WithBuildInfoCollector()
-		}
-		mux.Handle(opts.Metrics.Path, promhttp.HandlerFor(httpmetrics.Prom.Registry(), promhttp.HandlerOpts{
+		mux.Handle(opts.Metrics.Path, promhttp.HandlerFor(opts.Metrics.Registry, promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
 		}))
 	}

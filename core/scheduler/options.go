@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/kochabx/kit/log"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -56,9 +57,10 @@ type CircuitBreakerOptions struct {
 
 // MetricsOptions 监控配置
 type MetricsOptions struct {
-	Enabled bool   // 是否启用Prometheus指标
-	Port    int    // 指标HTTP端口
-	Path    string // 指标路径
+	Enabled  bool                 // 是否启用Prometheus指标
+	Port     int                  // 指标HTTP端口
+	Path     string               // 指标路径
+	Registry *prometheus.Registry // 指标注册表；为空时创建独立注册表
 }
 
 // HealthOptions 健康检查配置
@@ -307,6 +309,13 @@ func WithMetrics(enabled bool) Option {
 func WithMetricsPort(port int) Option {
 	return func(o *Options) {
 		o.Metrics.Port = port
+	}
+}
+
+// WithMetricsRegistry 设置指标注册表
+func WithMetricsRegistry(registry *prometheus.Registry) Option {
+	return func(o *Options) {
+		o.Metrics.Registry = registry
 	}
 }
 

@@ -71,24 +71,3 @@ func ServiceUnavailable(format string, args ...any) *Error {
 func GatewayTimeout(format string, args ...any) *Error {
 	return New(504, format, args...)
 }
-
-// Convenience functions with metadata
-func BadRequestWithMetadata(metadata map[string]string, format string, args ...any) *Error {
-	return NewWithMetadata(400, metadata, format, args...)
-}
-
-func UnauthorizedWithMetadata(metadata map[string]string, format string, args ...any) *Error {
-	return NewWithMetadata(401, metadata, format, args...)
-}
-
-func ForbiddenWithMetadata(metadata map[string]string, format string, args ...any) *Error {
-	return NewWithMetadata(403, metadata, format, args...)
-}
-
-func NotFoundWithMetadata(metadata map[string]string, format string, args ...any) *Error {
-	return NewWithMetadata(404, metadata, format, args...)
-}
-
-func InternalWithMetadata(metadata map[string]string, format string, args ...any) *Error {
-	return NewWithMetadata(500, metadata, format, args...)
-}

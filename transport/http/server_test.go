@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +78,30 @@ func TestServer_MetricsEndpoint(t *testing.T) {
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestServer_MetricsEndpointUsesConfiguredRegistry(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	counter := prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "kit_test_requests_total",
+		Help: "Total test requests.",
+	})
+	require.NoError(t, registry.Register(counter))
+	counter.Inc()
+
+	s := NewServer(
+		http.NotFoundHandler(),
+		WithMetrics(MetricsOption{
+			Path:     "/metrics",
+			Registry: registry,
+		}),
+	)
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "kit_test_requests_total 1")
 }
 
 func TestServer_UserHandlerForwarded(t *testing.T) {

@@ -2,6 +2,7 @@ package http
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -76,10 +77,10 @@ func TestFail(t *testing.T) {
 			want: `{"code":500,"msg":"failed"}`,
 		},
 		{
-			name: "with data object",
+			name: "with unsupported message type",
 			code: 201,
 			msg:  map[string]any{"id": 123},
-			want: `{"code":201,"data":{"id":123}}`,
+			want: `{"code":201,"msg":"failed"}`,
 		},
 	}
 
@@ -99,7 +100,7 @@ func TestOKAndFail_NilWriter(t *testing.T) {
 	Fail(nil, 500, "error")
 }
 
-func TestExtractErrorMessage(t *testing.T) {
+func TestErrorMessage(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
@@ -116,6 +117,11 @@ func TestExtractErrorMessage(t *testing.T) {
 			want: "custom message",
 		},
 		{
+			name: "wrapped kit error",
+			err:  fmt.Errorf("wrap: %w", kiterrors.New(10001, "wrapped custom message")),
+			want: "wrapped custom message",
+		},
+		{
 			name: "standard error",
 			err:  errors.New("standard message"),
 			want: "standard message",
@@ -124,7 +130,7 @@ func TestExtractErrorMessage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, extractErrorMessage(tt.err))
+			assert.Equal(t, tt.want, errorMessage(tt.err))
 		})
 	}
 }

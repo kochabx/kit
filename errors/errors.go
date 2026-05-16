@@ -1,15 +1,15 @@
 package errors
 
 import (
-	"errors"
+	stderrors "errors"
 	"fmt"
 	"maps"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 const (
-	UnknownCode       = 500
 	MetadataSeparator = ", "
 	MetadataPrefix    = "metadata={"
 	MetadataSuffix    = "}"
@@ -25,40 +25,41 @@ type Status struct {
 
 // Error represents a structured error containing HTTP status code, message, metadata and error chain
 type Error struct {
-	Status
-	cause error
+	code     int
+	message  string
+	metadata map[string]string
+	cause    error
 }
 
 // Error returns a human-readable error message with optional error chain
-// Performance optimized through pre-computed buffer size and efficient string building
 func (e *Error) Error() string {
 	var msg strings.Builder
 
-	// Efficiently build error message
 	msg.WriteString("code=")
-	msg.WriteString(strconv.Itoa(e.Code))
+	msg.WriteString(strconv.Itoa(e.code))
 	msg.WriteString(MetadataSeparator)
 	msg.WriteString("message=")
-	msg.WriteString(e.Message)
+	msg.WriteString(e.message)
 
-	// Append metadata if present
-	if len(e.Metadata) > 0 {
+	if len(e.metadata) > 0 {
 		msg.WriteString(MetadataSeparator)
 		msg.WriteString(MetadataPrefix)
-		first := true
-		for k, v := range e.Metadata {
-			if !first {
+		keys := make([]string, 0, len(e.metadata))
+		for k := range e.metadata {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for i, k := range keys {
+			if i > 0 {
 				msg.WriteString(", ")
 			}
 			msg.WriteString(k)
 			msg.WriteByte('=')
-			msg.WriteString(v)
-			first = false
+			msg.WriteString(e.metadata[k])
 		}
 		msg.WriteString(MetadataSuffix)
 	}
 
-	// Append error cause if present
 	if e.cause != nil {
 		msg.WriteString(MetadataSeparator)
 		msg.WriteString(CausePrefix)
@@ -73,23 +74,22 @@ func (e *Error) Unwrap() error {
 	return e.cause
 }
 
-// WithMetadata adds metadata to the error. Returns a new error instance to maintain immutability.
+// WithMetadata returns a copy of the error with metadata merged in.
 func (e *Error) WithMetadata(m map[string]string) *Error {
 	if len(m) == 0 {
 		return e
 	}
 
-	// Clone only when metadata actually needs to be added
 	err := e.clone()
-	if err.Metadata == nil {
-		err.Metadata = make(map[string]string, len(m))
+	if err.metadata == nil {
+		err.metadata = make(map[string]string, len(m))
 	}
 
-	maps.Copy(err.Metadata, m)
+	maps.Copy(err.metadata, m)
 	return err
 }
 
-// WithCause adds a cause to the error. Returns a new error instance to maintain immutability.
+// WithCause returns a copy of the error with cause attached.
 func (e *Error) WithCause(cause error) *Error {
 	if cause == nil {
 		return e
@@ -100,21 +100,19 @@ func (e *Error) WithCause(cause error) *Error {
 	return err
 }
 
-// clone creates a shallow copy of the error while deep copying the metadata map
+// clone creates a shallow copy of the error while deep copying metadata.
 func (e *Error) clone() *Error {
 	var metadata map[string]string
-	if len(e.Metadata) > 0 {
-		metadata = make(map[string]string, len(e.Metadata))
-		maps.Copy(metadata, e.Metadata)
+	if len(e.metadata) > 0 {
+		metadata = make(map[string]string, len(e.metadata))
+		maps.Copy(metadata, e.metadata)
 	}
 
 	return &Error{
-		Status: Status{
-			Code:     e.Code,
-			Message:  e.Message,
-			Metadata: metadata,
-		},
-		cause: e.cause,
+		code:     e.code,
+		message:  e.message,
+		metadata: metadata,
+		cause:    e.cause,
 	}
 }
 
@@ -122,36 +120,45 @@ func (e *Error) clone() *Error {
 // This implements the standard errors.Is interface for better error comparison
 func (e *Error) Is(err error) bool {
 	var ge *Error
-	if errors.As(err, &ge) {
-		return e.Code == ge.Code && e.Message == ge.Message
+	if stderrors.As(err, &ge) {
+		return e.code == ge.code && e.message == ge.message
 	}
 	return false
 }
 
-// GetCode returns the error code
-func (e *Error) GetCode() int {
-	return e.Code
+// Code returns the error code.
+func (e *Error) Code() int {
+	return e.code
 }
 
-// GetMessage returns the error message
-func (e *Error) GetMessage() string {
-	return e.Message
+// Message returns the error message.
+func (e *Error) Message() string {
+	return e.message
 }
 
-// GetMetadata returns a copy of the metadata to prevent external modification
-func (e *Error) GetMetadata() map[string]string {
-	if len(e.Metadata) == 0 {
+// Metadata returns a copy of the metadata.
+func (e *Error) Metadata() map[string]string {
+	if len(e.metadata) == 0 {
 		return nil
 	}
 
-	result := make(map[string]string, len(e.Metadata))
-	maps.Copy(result, e.Metadata)
+	result := make(map[string]string, len(e.metadata))
+	maps.Copy(result, e.metadata)
 	return result
 }
 
-// GetCause returns the underlying cause of the error
-func (e *Error) GetCause() error {
+// Cause returns the underlying cause.
+func (e *Error) Cause() error {
 	return e.cause
+}
+
+// Status returns a copy of the structured error status.
+func (e *Error) Status() Status {
+	return Status{
+		Code:     e.code,
+		Message:  e.message,
+		Metadata: e.Metadata(),
+	}
 }
 
 // New creates a new error with the given error code and formatted message
@@ -164,55 +171,21 @@ func New(code int, format string, args ...any) *Error {
 	}
 
 	return &Error{
-		Status: Status{
-			Code:    code,
-			Message: message,
-		},
+		code:    code,
+		message: message,
 	}
 }
 
-// NewWithMetadata creates a new error with metadata
-func NewWithMetadata(code int, metadata map[string]string, format string, args ...any) *Error {
-	err := New(code, format, args...)
-	if len(metadata) > 0 {
-		err.Metadata = make(map[string]string, len(metadata))
-		maps.Copy(err.Metadata, metadata)
-	}
-	return err
-}
-
-// FromError converts a generic error to *Error.
-func FromError(err error) *Error {
+// As reports whether err contains a structured *Error.
+func As(err error) (*Error, bool) {
 	if err == nil {
-		return nil
+		return nil, false
 	}
 
-	// Direct type assertion is more efficient than errors.As for this use case
-	if ge, ok := err.(*Error); ok {
-		return ge
+	var ge *Error
+	if stderrors.As(err, &ge) {
+		return ge, true
 	}
 
-	return New(UnknownCode, "%v", err)
-}
-
-// Wrap wraps an error with additional context while preserving the original error chain
-// Returns nil if the input error is nil
-func Wrap(err error, code int, format string, args ...any) *Error {
-	if err == nil {
-		return nil
-	}
-
-	newErr := New(code, format, args...)
-	return newErr.WithCause(err)
-}
-
-// WrapWithMetadata wraps an error with metadata and additional context
-// Returns nil if the input error is nil
-func WrapWithMetadata(err error, code int, metadata map[string]string, format string, args ...any) *Error {
-	if err == nil {
-		return nil
-	}
-
-	newErr := NewWithMetadata(code, metadata, format, args...)
-	return newErr.WithCause(err)
+	return nil, false
 }

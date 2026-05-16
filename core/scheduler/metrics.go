@@ -47,15 +47,19 @@ type Metrics struct {
 }
 
 // NewMetrics 创建指标收集器
-func NewMetrics(namespace string, enabled bool) *Metrics {
+func NewMetrics(namespace string, enabled bool, registerer prometheus.Registerer) *Metrics {
 	if !enabled {
 		return &Metrics{enabled: false}
 	}
+	if registerer == nil {
+		registerer = prometheus.NewRegistry()
+	}
+	factory := promauto.With(registerer)
 
 	m := &Metrics{
 		enabled: true,
 
-		TaskSubmitted: promauto.NewCounterVec(
+		TaskSubmitted: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "task_submitted_total",
@@ -64,7 +68,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"type", "priority"},
 		),
 
-		TaskExecuted: promauto.NewCounterVec(
+		TaskExecuted: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "task_executed_total",
@@ -73,7 +77,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"type", "status"},
 		),
 
-		TaskDuration: promauto.NewHistogramVec(
+		TaskDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: namespace,
 				Name:      "task_duration_seconds",
@@ -83,7 +87,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"type"},
 		),
 
-		QueueSize: promauto.NewGaugeVec(
+		QueueSize: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "queue_size",
@@ -92,7 +96,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"queue"},
 		),
 
-		WorkerCount: promauto.NewGauge(
+		WorkerCount: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "worker_count",
@@ -100,7 +104,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			},
 		),
 
-		WorkerTaskCount: promauto.NewCounterVec(
+		WorkerTaskCount: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "worker_task_total",
@@ -109,7 +113,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"worker_id"},
 		),
 
-		WorkerActiveTime: promauto.NewGaugeVec(
+		WorkerActiveTime: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "worker_active_seconds",
@@ -118,7 +122,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"worker_id"},
 		),
 
-		LockWaitDuration: promauto.NewHistogramVec(
+		LockWaitDuration: factory.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: namespace,
 				Name:      "lock_wait_duration_seconds",
@@ -128,7 +132,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"type"},
 		),
 
-		LockAcquired: promauto.NewCounterVec(
+		LockAcquired: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "lock_acquired_total",
@@ -137,7 +141,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"type", "result"},
 		),
 
-		TaskRetry: promauto.NewCounterVec(
+		TaskRetry: factory.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "task_retry_total",
@@ -146,7 +150,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			[]string{"type", "retry_count"},
 		),
 
-		DeadLetterCount: promauto.NewGauge(
+		DeadLetterCount: factory.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "dead_letter_queue_size",
@@ -154,7 +158,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			},
 		),
 
-		RateLimitRejected: promauto.NewCounter(
+		RateLimitRejected: factory.NewCounter(
 			prometheus.CounterOpts{
 				Namespace: namespace,
 				Name:      "rate_limit_rejected_total",
@@ -162,7 +166,7 @@ func NewMetrics(namespace string, enabled bool) *Metrics {
 			},
 		),
 
-		CircuitBreakerState: promauto.NewGaugeVec(
+		CircuitBreakerState: factory.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: namespace,
 				Name:      "circuit_breaker_state",

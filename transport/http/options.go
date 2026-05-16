@@ -1,6 +1,11 @@
 package http
 
-import "github.com/kochabx/kit/core/defaults"
+import (
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/kochabx/kit/core/defaults"
+	"github.com/kochabx/kit/observability/metrics"
+)
 
 type Options struct {
 	Metrics *MetricsOption
@@ -11,13 +16,23 @@ type Options struct {
 
 // MetricsOption configures the Prometheus metrics endpoint.
 type MetricsOption struct {
-	Path              string `default:"/metrics"` // Endpoint path, defaults to "/metrics"
-	EnableGoCollector bool
-	EnableBuildInfo   bool
+	Path     string `default:"/metrics"` // Endpoint path, defaults to "/metrics"
+	Registry *prometheus.Registry
 }
 
 func (c *MetricsOption) init() error {
-	return defaults.Apply(c)
+	if err := defaults.Apply(c); err != nil {
+		return err
+	}
+
+	if c.Registry != nil {
+		return nil
+	}
+	c.Registry = metrics.New(
+		metrics.WithGoCollectorRuntimeMetrics(),
+		metrics.WithBuildInfoCollector(),
+	).Registry()
+	return nil
 }
 
 // SwaggerOption configures the Swagger UI endpoint.
