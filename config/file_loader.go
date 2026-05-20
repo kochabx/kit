@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"io"
@@ -57,6 +58,10 @@ func (l *FileLoader) Load(target any) error {
 		return errors.New(404, "config file not found: %v", err)
 	}
 
+	if err := l.readExpandedConfigFile(); err != nil {
+		return err
+	}
+
 	if err := l.viper.Unmarshal(target); err != nil {
 		return errors.New(500, "config parse error: %v", err)
 	}
@@ -72,6 +77,25 @@ func (l *FileLoader) Load(target any) error {
 		if err := l.validate.Struct(context.Background(), target); err != nil {
 			return errors.New(400, "config validation failed: %v", err)
 		}
+	}
+
+	return nil
+}
+
+func (l *FileLoader) readExpandedConfigFile() error {
+	configFile := l.viper.ConfigFileUsed()
+	if configFile == "" {
+		return nil
+	}
+
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		return errors.New(500, "config file read error: %v", err)
+	}
+
+	expanded := os.ExpandEnv(string(content))
+	if err := l.viper.ReadConfig(bytes.NewBufferString(expanded)); err != nil {
+		return errors.New(500, "config parse error: %v", err)
 	}
 
 	return nil

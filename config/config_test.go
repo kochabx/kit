@@ -1,8 +1,12 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/spf13/viper"
 )
 
 type api struct {
@@ -99,6 +103,38 @@ func TestEnvOverride(t *testing.T) {
 	}
 
 	t.Logf("Viper AutomaticEnv test completed: %+v", cfg)
+}
+
+func TestEnvExpansionInConfigFile(t *testing.T) {
+	t.Setenv("SECRET", "test-secret")
+
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "example.yaml")
+	content := []byte(`
+targets:
+  test:
+    secret: "${SECRET}"
+`)
+	if err := os.WriteFile(configFile, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var cfg struct {
+		Targets map[string]struct {
+			Secret string `json:"secret"`
+		} `json:"targets"`
+	}
+
+	v := viper.New()
+	loader := NewFileLoader("example.yaml", []string{dir}, v, nil)
+	if err := loader.Load(&cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	target := cfg.Targets["test"]
+	if target.Secret != "test-secret" {
+		t.Fatalf("expected expanded secret, got %q", target.Secret)
+	}
 }
 
 func TestSet(t *testing.T) {
