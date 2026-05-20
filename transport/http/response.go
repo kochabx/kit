@@ -48,20 +48,20 @@ func Fail(w http.ResponseWriter, code int, cause any) {
 		return
 	}
 
-	var message string
+	var msg string
 
 	switch v := cause.(type) {
 	case error:
-		message = errorMessage(v)
+		msg = message(v)
 	case string:
-		message = v
+		msg = v
 	default:
-		message = defaultErrorMsg
+		msg = defaultErrorMsg
 	}
 
-	writeJSON(w, &Response[struct{}]{
+	writeJSON(w, &Response[any]{
 		Code: code,
-		Msg:  message,
+		Msg:  msg,
 	})
 }
 
@@ -71,8 +71,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-// errorMessage returns a human-readable message from err.
-func errorMessage(err error) string {
+// message returns a human-readable message from err.
+func message(err error) string {
 	if err == nil {
 		return defaultErrorMsg
 	}
