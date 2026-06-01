@@ -24,11 +24,11 @@ Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命
 
 | 模块 | 说明 |
 |------|------|
-| [transport/http](transport/http/) |  HTTP 服务封装，任意 `http.Handler` 均可接入，内置 `/metrics`、`/swagger/` 端点 |
+| [transport/http](transport/http/) | HTTP 服务封装，任意 `http.Handler` 均可接入，内置 `/metrics`、`/swagger/` 端点 |
 | [transport/http/middleware](transport/http/middleware/) | 认证、CORS、加解密、日志、权限、恢复、请求签名 |
 | [transport/grpc](transport/grpc/) | gRPC 服务封装，与应用生命周期统一集成 |
-| [transport/websocket](transport/websocket/) | WebSocket 客户端，支持自动重连、心跳保活、事件驱动与消息队列 |
 | [core/httpx](core/httpx/) | HTTP 客户端工具，统一处理请求构建与响应读取 |
+| [core/wsx](core/wsx/) | WebSocket 客户端，支持自动重连、心跳保活、事件驱动与消息队列 |
 
 ### 安全与认证
 
@@ -70,7 +70,7 @@ go get github.com/kochabx/kit
 
 ### 最小示例：启动一个 HTTP 服务（标准库）
 
-HTTP 服务封装是，只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi` 等均可）：
+HTTP 服务封装只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi` 等均可）：
 
 ```go
 package main
@@ -300,6 +300,22 @@ go run ./cmd/cxgen gen ./... -o wire_gen.go
 | `Permission` | 权限校验 |
 | `Recovery` | Panic 恢复 |
 | `Signature` | 请求签名验证 |
+
+### [core/httpx](core/httpx/)
+
+出站 HTTP 客户端工具：
+
+- 统一构造请求 URL、Header、Query、Body
+- 支持 JSON、XML、表单、二进制等常见请求体
+- 支持请求/响应中间件，便于统一加签、认证、日志和重试
+
+### [core/wsx](core/wsx/README.md)
+
+WebSocket 客户端工具：
+
+- 自动重连与指数退避
+- 事件驱动的连接、断开、消息、错误通知
+- 心跳保活、写队列、TLS 与自定义 Header
 
 ### [log](log/README.md)
 
