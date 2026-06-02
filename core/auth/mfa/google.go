@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kochabx/kit/core/util/qrcode"
+	"github.com/kochabx/kit/core/x/qrcode"
 )
 
 const (
