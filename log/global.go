@@ -33,17 +33,17 @@ func Warn() *zerolog.Event {
 	return G.Warn()
 }
 
-// Error 返回 error 级别的日志事件（带堆栈）
+// Error 返回 error 级别的日志事件
 func Error() *zerolog.Event {
 	return G.Error().Stack()
 }
 
-// Fatal 返回 fatal 级别的日志事件（带堆栈）
+// Fatal 返回 fatal 级别的日志事件
 func Fatal() *zerolog.Event {
 	return G.Fatal().Stack()
 }
 
-// Panic 返回 panic 级别的日志事件（带堆栈）
+// Panic 返回 panic 级别的日志事件
 func Panic() *zerolog.Event {
 	return G.Panic().Stack()
 }
@@ -63,17 +63,17 @@ func Warnf(format string, args ...any) {
 	G.Warn().Msgf(format, args...)
 }
 
-// Errorf 格式化输出 error 日志（带堆栈）
+// Errorf 格式化输出 error 日志
 func Errorf(format string, args ...any) {
 	G.Error().Stack().Msgf(format, args...)
 }
 
-// Fatalf 格式化输出 fatal 日志（带堆栈）
+// Fatalf 格式化输出 fatal 日志
 func Fatalf(format string, args ...any) {
 	G.Fatal().Stack().Msgf(format, args...)
 }
 
-// Panicf 格式化输出 panic 日志（带堆栈）
+// Panicf 格式化输出 panic 日志
 func Panicf(format string, args ...any) {
 	G.Panic().Stack().Msgf(format, args...)
 }
