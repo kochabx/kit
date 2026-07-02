@@ -2,14 +2,23 @@ package redis
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/kochabx/kit/log"
 )
 
+func requireRedisIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("KIT_REDIS_INTEGRATION") == "" {
+		t.Skip("set KIT_REDIS_INTEGRATION=1 to run Redis integration tests")
+	}
+}
+
 // TestSingleMode 测试单机模式
 func TestSingleMode(t *testing.T) {
+	requireRedisIntegration(t)
 	ctx := context.Background()
 
 	client, err := New(Single("localhost:6379"),
@@ -24,7 +33,7 @@ func TestSingleMode(t *testing.T) {
 
 	// 测试 Ping
 	if err := client.Ping(ctx); err != nil {
-		t.Errorf("Ping failed: %v", err)
+		t.Skipf("Skipping test (Redis not available): %v", err)
 	}
 
 	// 测试基本操作
@@ -50,6 +59,7 @@ func TestSingleMode(t *testing.T) {
 
 // TestClusterMode 测试集群模式
 func TestClusterMode(t *testing.T) {
+	requireRedisIntegration(t)
 	ctx := context.Background()
 
 	client, err := New(Cluster("localhost:7000", "localhost:7001", "localhost:7002"),
@@ -63,7 +73,7 @@ func TestClusterMode(t *testing.T) {
 
 	// 测试 Ping
 	if err := client.Ping(ctx); err != nil {
-		t.Errorf("Ping failed: %v", err)
+		t.Skipf("Skipping test (Redis cluster not available): %v", err)
 	}
 
 	// 测试连接池统计
@@ -75,6 +85,7 @@ func TestClusterMode(t *testing.T) {
 
 // TestSentinelMode 测试哨兵模式
 func TestSentinelMode(t *testing.T) {
+	requireRedisIntegration(t)
 	ctx := context.Background()
 
 	client, err := New(Sentinel("mymaster", "localhost:26379", "localhost:26380"),
@@ -89,12 +100,13 @@ func TestSentinelMode(t *testing.T) {
 
 	// 测试 Ping
 	if err := client.Ping(ctx); err != nil {
-		t.Errorf("Ping failed: %v", err)
+		t.Skipf("Skipping test (Redis sentinel not available): %v", err)
 	}
 }
 
 // TestWithMetrics 测试 Metrics
 func TestWithMetrics(t *testing.T) {
+	requireRedisIntegration(t)
 	ctx := context.Background()
 
 	client, err := New(Single("localhost:6379"),
@@ -107,6 +119,10 @@ func TestWithMetrics(t *testing.T) {
 	}
 	defer client.Close()
 
+	if err := client.Ping(ctx); err != nil {
+		t.Skipf("Skipping test (Redis not available): %v", err)
+	}
+
 	// 执行一些命令
 	for i := 0; i < 10; i++ {
 		client.UniversalClient().Ping(ctx)
@@ -118,6 +134,7 @@ func TestWithMetrics(t *testing.T) {
 
 // TestWithSlowQuery 测试慢查询检测
 func TestWithSlowQuery(t *testing.T) {
+	requireRedisIntegration(t)
 	ctx := context.Background()
 
 	logger := log.New()
@@ -132,6 +149,10 @@ func TestWithSlowQuery(t *testing.T) {
 		return
 	}
 	defer client.Close()
+
+	if err := client.Ping(ctx); err != nil {
+		t.Skipf("Skipping test (Redis not available): %v", err)
+	}
 
 	// 执行命令（应该触发慢查询日志）
 	client.UniversalClient().Ping(ctx)
@@ -160,6 +181,7 @@ func TestClose(t *testing.T) {
 
 // TestConcurrentAccess 测试并发访问
 func TestConcurrentAccess(t *testing.T) {
+	requireRedisIntegration(t)
 	ctx := context.Background()
 
 	client, err := New(Single("localhost:6379"),
@@ -171,6 +193,10 @@ func TestConcurrentAccess(t *testing.T) {
 		return
 	}
 	defer client.Close()
+
+	if err := client.Ping(ctx); err != nil {
+		t.Skipf("Skipping test (Redis not available): %v", err)
+	}
 
 	// 并发执行命令
 	const goroutines = 50

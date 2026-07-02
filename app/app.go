@@ -93,7 +93,7 @@ func WithServers(servers ...transport.Server) Option {
 	}
 }
 
-// WithComponent 注册一个自定义 cx 组件（可实现 cx.Starter / cx.Stopper / cx.Checker）。
+// WithComponent 注册一个自定义 cx 组件（可实现 cx.Starter / cx.Stopper / cx.HealthChecker）。
 // 组件按注册顺序启动，按反向顺序关闭。
 func WithComponent(key string, value any) Option {
 	return func(b *builder) {
@@ -121,7 +121,7 @@ func WithOnStarted(fn func(ctx context.Context) error) Option {
 	}
 }
 
-// WithOnStopping 注册一个在组件停止前执行的钩子。
+// WithOnStopping 注册一个在组件开始关闭前执行的钩子。
 func WithOnStopping(fn func(ctx context.Context) error) Option {
 	return func(b *builder) {
 		if fn != nil {

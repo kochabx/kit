@@ -41,22 +41,11 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 		client: redis.NewUniversalClient(buildUniversalOptions(cfg)),
 	}
 
-	// 错误时自动清理
-	var success bool
-	defer func() {
-		if !success {
-			client.client.Close()
-		}
-	}()
-
 	if err := client.setupHooks(clientOpts); err != nil {
-		return nil, err
-	}
-	if err := client.Ping(context.Background()); err != nil {
+		_ = client.Close()
 		return nil, err
 	}
 
-	success = true
 	client.logger.Debug().Str("mode", client.getMode()).Interface("addrs", cfg.Addrs).Msg("redis client created")
 	return client, nil
 }
@@ -136,19 +125,29 @@ func (c *Client) UniversalClient() redis.UniversalClient {
 
 // Ping 测试连接
 func (c *Client) Ping(ctx context.Context) error {
+	if c.client == nil {
+		return ErrNotInitialized
+	}
 	return c.client.Ping(ctx).Err()
 }
 
 // Close 关闭客户端
 func (c *Client) Close() error {
+	if c.client == nil {
+		return nil
+	}
 	if err := c.client.Close(); err != nil {
 		return err
 	}
+	c.client = nil
 	return nil
 }
 
 // Stats 获取连接池统计信息
 func (c *Client) Stats() *redis.PoolStats {
+	if c.client == nil {
+		return nil
+	}
 	return c.client.PoolStats()
 }
 
@@ -162,8 +161,8 @@ func (c *Client) Stop(_ context.Context) error {
 	return c.Close()
 }
 
-// Check 实现 cx.Checker，检查 Redis 健康状态。
-func (c *Client) Check(ctx context.Context) error {
+// HealthCheck 实现 cx.HealthChecker，检查 Redis 健康状态。
+func (c *Client) HealthCheck(ctx context.Context) error {
 	return c.Ping(ctx)
 }
 

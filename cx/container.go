@@ -563,7 +563,7 @@ func (c *Container) Stop(ctx context.Context) error {
 	return errors.Join(errs...)
 }
 
-// Restart stops then starts the container. Constructors are re-invoked.
+// Restart shuts down then starts the container. Constructors are re-invoked.
 func (c *Container) Restart(ctx context.Context) error {
 	if err := c.Stop(ctx); err != nil {
 		return err
@@ -575,7 +575,7 @@ func (c *Container) Restart(ctx context.Context) error {
 // Health check / Metrics
 // ---------------------------------------------------------------------------
 
-// HealthCheck runs Check on every value that implements [Checker] and returns
+// HealthCheck runs HealthCheck on every value that implements [HealthChecker] and returns
 // an aggregated report. Checks run concurrently; each check is bounded by the
 // configured health timeout (see [WithHealthTimeout], default 10s).
 func (c *Container) HealthCheck(ctx context.Context) HealthReport {
@@ -593,18 +593,18 @@ func (c *Container) HealthCheck(ctx context.Context) HealthReport {
 	var wg sync.WaitGroup
 	for i := range order {
 		ch := ComponentHealth{Key: order[i], Healthy: true}
-		checker, ok := values[i].(Checker)
+		checker, ok := values[i].(HealthChecker)
 		if !ok {
 			results[i] = ch
 			continue
 		}
 		wg.Add(1)
-		go func(idx int, key string, ck Checker) {
+		go func(idx int, key string, ck HealthChecker) {
 			defer wg.Done()
 			cctx, cancel := context.WithTimeout(ctx, timeout)
 			defer cancel()
 			h := ComponentHealth{Key: key, Healthy: true}
-			if err := ck.Check(cctx); err != nil {
+			if err := ck.HealthCheck(cctx); err != nil {
 				h.Healthy = false
 				h.Error = err
 			}

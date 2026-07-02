@@ -14,6 +14,9 @@ var (
 	// ErrInvalidConfig 配置无效
 	ErrInvalidConfig = errors.New("redis: invalid configuration")
 
+	// ErrNotInitialized Redis 客户端未初始化
+	ErrNotInitialized = errors.New("redis: not initialized")
+
 	// ErrEmptyAddrs 地址列表为空
 	ErrEmptyAddrs = errors.New("redis: addrs cannot be empty")
 

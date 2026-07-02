@@ -3,7 +3,6 @@ package etcd
 import (
 	"context"
 	"errors"
-	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 )
@@ -40,18 +39,6 @@ func New(config *Config, opts ...Option) (*Etcd, error) {
 		}
 	}
 
-	// 创建etcd连接
-	if err := e.connect(); err != nil {
-		return nil, err
-	}
-
-	// 测试连接
-	if err := e.Ping(context.TODO()); err != nil {
-		// 如果连接失败，确保清理资源
-		_ = e.Close()
-		return nil, err
-	}
-
 	return e, nil
 }
 
@@ -83,7 +70,7 @@ func (e *Etcd) Ping(ctx context.Context) error {
 		return ErrEtcdNotInitialized
 	}
 
-	ctxWithTimeout, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, e.config.DialTimeout)
 	defer cancel()
 
 	// 使用Status方法测试连接
@@ -125,7 +112,16 @@ func (e *Etcd) Close() error {
 
 // Start 实现 cx.Starter，验证 etcd 连接可用。
 func (e *Etcd) Start(ctx context.Context) error {
-	return e.Ping(ctx)
+	if e.Client == nil {
+		if err := e.connect(); err != nil {
+			return err
+		}
+	}
+	if err := e.Ping(ctx); err != nil {
+		_ = e.Close()
+		return err
+	}
+	return nil
 }
 
 // Stop 实现 cx.Stopper，关闭 etcd 连接。
@@ -133,7 +129,7 @@ func (e *Etcd) Stop(_ context.Context) error {
 	return e.Close()
 }
 
-// Check 实现 cx.Checker，检查 etcd 健康状态。
-func (e *Etcd) Check(ctx context.Context) error {
+// HealthCheck 实现 cx.HealthChecker，检查 etcd 健康状态。
+func (e *Etcd) HealthCheck(ctx context.Context) error {
 	return e.Ping(ctx)
 }

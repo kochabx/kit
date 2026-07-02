@@ -2,7 +2,6 @@ package mongo
 
 import (
 	"context"
-	"errors"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -20,10 +19,6 @@ type Client struct {
 
 // New 创建新的 Mongo 客户端
 func New(config *Config, opts ...Option) (*Client, error) {
-	if config == nil {
-		return nil, errors.New("config is required")
-	}
-
 	// 初始化配置
 	if err := config.Init(); err != nil {
 		return nil, err
@@ -44,15 +39,6 @@ func New(config *Config, opts ...Option) (*Client, error) {
 
 	// 创建客户端连接
 	if err := m.connect(); err != nil {
-		return nil, err
-	}
-
-	// 测试连接
-	ctx, cancel := context.WithTimeout(context.Background(), config.Timeout)
-	defer cancel()
-
-	if err := m.Ping(ctx); err != nil {
-		_ = m.Close()
 		return nil, err
 	}
 
@@ -86,6 +72,9 @@ func (m *Client) connect() error {
 
 // Ping 测试 MongoDB 连接是否正常
 func (m *Client) Ping(ctx context.Context) error {
+	if m.client == nil {
+		return ErrNotInitialized
+	}
 	return m.client.Ping(ctx, readpref.Primary())
 }
 
@@ -95,10 +84,11 @@ func (m *Client) Close() error {
 		return nil
 	}
 
-	if err := m.client.Disconnect(context.TODO()); err != nil {
+	if err := m.client.Disconnect(context.Background()); err != nil {
 		return err
 	}
 
+	m.client = nil
 	return nil
 }
 
@@ -112,8 +102,8 @@ func (m *Client) Stop(_ context.Context) error {
 	return m.Close()
 }
 
-// Check 实现 cx.Checker，检查 MongoDB 健康状态。
-func (m *Client) Check(ctx context.Context) error {
+// HealthCheck 实现 cx.HealthChecker，检查 MongoDB 健康状态。
+func (m *Client) HealthCheck(ctx context.Context) error {
 	return m.Ping(ctx)
 }
 

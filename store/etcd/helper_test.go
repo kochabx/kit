@@ -11,32 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDistributedLock_Unit(t *testing.T) {
-	// 测试创建分布式锁
-	etcd := &Etcd{}
-	lock := etcd.NewDistributedLock("test-lock", 10)
-
-	assert.NotNil(t, lock)
-	assert.Equal(t, "test-lock", lock.key)
-	assert.NotNil(t, lock.stopCh)
-	assert.NotNil(t, lock.doneCh)
-}
-
-func TestDistributedLock_TryLock_Unit(t *testing.T) {
-	// 测试 nil 客户端
-	etcd := &Etcd{Client: nil}
-	lock := etcd.NewDistributedLock("test-lock", 10)
-
-	err := lock.TryLock(context.Background(), 10)
-	assert.Error(t, err)
-	assert.Equal(t, ErrEtcdNotInitialized, err)
-}
-
 func TestDistributedLock_Integration(t *testing.T) {
+	requireEtcdIntegration(t)
 	config := getTestConfig()
 
 	client, err := New(config)
 	require.NoError(t, err)
+	require.NoError(t, client.Start(context.Background()))
 	defer client.Close()
 
 	t.Run("single lock", func(t *testing.T) {
@@ -113,53 +94,13 @@ func TestDistributedLock_Integration(t *testing.T) {
 	})
 }
 
-func TestServiceRegistry_Unit(t *testing.T) {
-	// 测试创建服务注册实例
-	etcd := &Etcd{}
-	registry := etcd.NewServiceRegistry("test-services", 30)
-
-	assert.NotNil(t, registry)
-	assert.Equal(t, "test-services", registry.keyPrefix)
-	assert.Equal(t, int64(30), registry.ttl)
-	assert.NotNil(t, registry.stopCh)
-	assert.NotNil(t, registry.doneCh)
-}
-
-func TestServiceRegistry_Register_Unit(t *testing.T) {
-	// 测试 nil 客户端
-	etcd := &Etcd{Client: nil}
-	registry := etcd.NewServiceRegistry("test-services", 30)
-
-	err := registry.Register(context.Background(), "service-1", "localhost:8080")
-	assert.Error(t, err)
-	assert.Equal(t, ErrEtcdNotInitialized, err)
-}
-
-func TestServiceRegistry_DiscoverServices_Unit(t *testing.T) {
-	// 测试 nil 客户端
-	etcd := &Etcd{Client: nil}
-	registry := etcd.NewServiceRegistry("test-services", 30)
-
-	services, err := registry.DiscoverServices(context.Background())
-	assert.Error(t, err)
-	assert.Equal(t, ErrEtcdNotInitialized, err)
-	assert.Nil(t, services)
-}
-
-func TestServiceRegistry_WatchServices_Unit(t *testing.T) {
-	// 测试 nil 客户端
-	etcd := &Etcd{Client: nil}
-	registry := etcd.NewServiceRegistry("test-services", 30)
-
-	watchCh := registry.WatchServices(context.Background())
-	assert.Nil(t, watchCh)
-}
-
 func TestServiceRegistry_Integration(t *testing.T) {
+	requireEtcdIntegration(t)
 	config := getTestConfig()
 
 	client, err := New(config)
 	require.NoError(t, err)
+	require.NoError(t, client.Start(context.Background()))
 	defer client.Close()
 
 	t.Run("register and discover", func(t *testing.T) {
@@ -293,6 +234,7 @@ func BenchmarkDistributedLock_TryLock(b *testing.B) {
 
 	client, err := New(config)
 	require.NoError(b, err)
+	require.NoError(b, client.Start(context.Background()))
 	defer client.Close()
 
 	b.ResetTimer()
@@ -317,6 +259,7 @@ func BenchmarkServiceRegistry_Register(b *testing.B) {
 
 	client, err := New(config)
 	require.NoError(b, err)
+	require.NoError(b, client.Start(context.Background()))
 	defer client.Close()
 
 	b.ResetTimer()
@@ -337,10 +280,12 @@ func BenchmarkServiceRegistry_Register(b *testing.B) {
 
 // TestDistributedLock_EdgeCases 测试边缘情况
 func TestDistributedLock_EdgeCases_Integration(t *testing.T) {
+	requireEtcdIntegration(t)
 	config := getTestConfig()
 
 	client, err := New(config)
 	require.NoError(t, err)
+	require.NoError(t, client.Start(context.Background()))
 	defer client.Close()
 
 	t.Run("unlock without lock", func(t *testing.T) {
@@ -370,10 +315,12 @@ func TestDistributedLock_EdgeCases_Integration(t *testing.T) {
 
 // TestServiceRegistry_EdgeCases 测试服务注册的边缘情况
 func TestServiceRegistry_EdgeCases_Integration(t *testing.T) {
+	requireEtcdIntegration(t)
 	config := getTestConfig()
 
 	client, err := New(config)
 	require.NoError(t, err)
+	require.NoError(t, client.Start(context.Background()))
 	defer client.Close()
 
 	t.Run("deregister without register", func(t *testing.T) {

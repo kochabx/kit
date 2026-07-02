@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -55,15 +56,6 @@ func New(cfg DriverConfig, opts ...Option) (*Client, error) {
 
 	// 创建数据库连接
 	if err := c.connect(); err != nil {
-		return nil, err
-	}
-
-	// 测试连接
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), options.connectTimeout)
-	defer pingCancel()
-
-	if err := c.Ping(pingCtx); err != nil {
-		_ = c.Close()
 		return nil, err
 	}
 
@@ -186,6 +178,9 @@ func (c *Client) Ping(ctx context.Context) error {
 func (c *Client) Close() error {
 	if c.sqlDB != nil {
 		if err := c.sqlDB.Close(); err != nil {
+			if errors.Is(err, sql.ErrConnDone) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -217,8 +212,8 @@ func (c *Client) Stop(_ context.Context) error {
 	return c.Close()
 }
 
-// Check 实现 cx.Checker，检查数据库健康状态。
-func (c *Client) Check(ctx context.Context) error {
+// HealthCheck 实现 cx.HealthChecker，检查数据库健康状态。
+func (c *Client) HealthCheck(ctx context.Context) error {
 	return c.Ping(ctx)
 }
 

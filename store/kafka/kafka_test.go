@@ -3,13 +3,22 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/segmentio/kafka-go"
 )
 
+func requireKafkaIntegration(t *testing.T) {
+	t.Helper()
+	if os.Getenv("KIT_KAFKA_INTEGRATION") == "" {
+		t.Skip("set KIT_KAFKA_INTEGRATION=1 to run Kafka integration tests")
+	}
+}
+
 func TestProducer(t *testing.T) {
+	requireKafkaIntegration(t)
 	ctx := context.Background()
 	k, err := New(&Config{
 		Brokers:                []string{"127.0.0.1:9092"},
@@ -40,6 +49,7 @@ func TestProducer(t *testing.T) {
 }
 
 func TestConsumer(t *testing.T) {
+	requireKafkaIntegration(t)
 	ctx := context.Background()
 	k, err := New(&Config{
 		Brokers: []string{"127.0.0.1:9092"},
@@ -67,6 +77,7 @@ func TestConsumer(t *testing.T) {
 }
 
 func TestConsumerGroup(t *testing.T) {
+	requireKafkaIntegration(t)
 	ctx := context.Background()
 	k, err := New(&Config{
 		Brokers: []string{"127.0.0.1:9092"},

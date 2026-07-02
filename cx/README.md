@@ -8,11 +8,11 @@
 - **惰性构造** — 构造函数在 `Start()` 时按依赖顺序自动调用，无需手动排序
 - **自动依赖排序** — 构造函数中调用 `Get` 获取依赖，容器自动追踪依赖关系并决定 Start/Stop 顺序
 - **循环依赖检测** — 构造阶段自动检测，报错包含完整路径（如 `A → B → C → A`）
-- **生命周期钩子** — `OnStart / OnStarted / OnStopping / OnStop` 四个时机
-- **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序停止
-- **停止错误聚合** — Stop 收集所有错误而非静默丢弃
-- **可选接口** — 值实现 `Starter` / `Stopper` / `Checker` 即可参与生命周期，零强制接口
-- **并发健康检查** — `HealthCheck` 并发执行所有 `Checker`，每个组件独立超时
+- **生命周期钩子** — `OnStart / OnStarted / OnStopping / OnShutdown` 四个时机
+- **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序关闭
+- **关闭错误聚合** — Stop 收集所有错误而非静默丢弃
+- **可选接口** — 值实现 `Starter` / `Stopper` / `HealthChecker` 即可参与生命周期，零强制接口
+- **并发健康检查** — `HealthCheck` 并发执行所有 `HealthChecker`，每个组件独立超时
 - **依赖图导出** — `DependencyGraph()` 返回构造期记录的依赖边，便于调试与可视化
 - **全局实例** — `cx.C` 开箱即用，`init()` 自注册模式无缝衔接
 - **无 reflect 依赖** — 仅使用 Go 泛型与类型断言
@@ -76,7 +76,7 @@ func main() {
     }
     fmt.Printf("DB: %+v\n", db)
 
-    // 停止：逆序调用 db.Stop()
+    // 关闭：逆序调用 db.Stop()
     if err := cx.C.Stop(ctx); err != nil {
         panic(err)
     }
@@ -131,9 +131,9 @@ cx.Provide(c, "service", func(c *cx.Container) (*Service, error) {
 全部可选，按需实现：
 
 ```go
-type Starter interface { Start(ctx context.Context) error }  // 初始化
-type Stopper interface { Stop(ctx context.Context) error }   // 清理
-type Checker interface { Check(ctx context.Context) error }  // 健康检查
+type Starter interface { Start(ctx context.Context) error }             // 初始化
+type Stopper interface { Stop(ctx context.Context) error }       // 优雅关闭
+type HealthChecker interface { HealthCheck(ctx context.Context) error } // 健康检查
 ```
 
 ### 容器生命周期

@@ -48,7 +48,7 @@ type testService struct {
 
 func (s *testService) Start(context.Context) error { s.started = true; return nil }
 func (s *testService) Stop(context.Context) error  { s.stopped = true; return nil }
-func (s *testService) Check(context.Context) error {
+func (s *testService) HealthCheck(context.Context) error {
 	if !s.healthy {
 		return errors.New("unhealthy")
 	}
@@ -154,10 +154,10 @@ func TestGet_InterfaceType(t *testing.T) {
 	}))
 	require.NoError(t, c.Start(context.Background()))
 
-	// Get as Checker interface
-	checker, err := Get[Checker](c, "svc")
+	// Get as HealthChecker interface
+	checker, err := Get[HealthChecker](c, "svc")
 	require.NoError(t, err)
-	assert.NoError(t, checker.Check(context.Background()))
+	assert.NoError(t, checker.HealthCheck(context.Background()))
 }
 
 // ---------------------------------------------------------------------------
@@ -474,7 +474,7 @@ func TestHealthCheck(t *testing.T) {
 			assert.False(t, ch.Healthy)
 			assert.Error(t, ch.Error)
 		case "no-checker":
-			assert.True(t, ch.Healthy) // no Checker interface → healthy
+			assert.True(t, ch.Healthy) // no HealthChecker interface → healthy
 		}
 	}
 }

@@ -192,7 +192,7 @@ func main() {
 		w.Write([]byte(`{"status":"ok"}`))
 	})
 
-	// db.Client 和 redis.Client 均实现 cx.Starter/Stopper/Checker，
+	// db.Client 和 redis.Client 均实现 cx.Starter/Stopper/HealthChecker，
 	// 由 app 统一管理启动（Ping 验证连通性）和关闭。
 	application := app.New(
 		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
@@ -217,7 +217,7 @@ func main() {
 - 组件按注册顺序启动，按逆序关闭
 - `transport.Server` 和 store 客户端均实现 `cx.Starter`/`cx.Stopper`，直接注册
 - 支持 `OnStart`/`OnStarted`/`OnStopping`/`OnStop` 四阶段生命周期钩子
-- 内置 `HealthCheck()` 聚合所有实现 `cx.Checker` 的组件
+- 内置 `HealthCheck()` 聚合所有实现 `cx.HealthChecker` 的组件
 
 ```go
 app.New(
@@ -245,7 +245,7 @@ app.New(
 - **泛型 API** — `Provide[T]` / `Supply[T]` / `Get[T]` 编译期类型安全，零反射
 - **自动依赖排序** — 构造函数中调用 `Get` 即声明依赖，容器自动追踪并决定 Start/Stop 顺序
 - **循环依赖检测** — 构造阶段自动检测，报错包含完整路径（如 `A → B → C → A`）
-- **可选生命周期接口** — 实现 `Starter` / `Stopper` / `Checker` 即可参与生命周期
+- **可选生命周期接口** — 实现 `Starter` / `Stopper` / `HealthChecker` 即可参与生命周期
 - **完整生命周期钩子** — `OnStart / OnStarted / OnStopping / OnStop` 四个时机
 - **启动回滚** — 组件 N 启动失败，已启动的 1..N-1 自动逆序停止
 - **全局实例** — `cx.C` 开箱即用，`init()` 中调用 `Provide`/`Supply` 自注册
@@ -356,7 +356,7 @@ Redis 支持的分布式限流：
 
 ### [store](store/)
 
-统一的存储层封装，各组件均支持 functional options 配置，并实现 `cx.Starter`/`cx.Stopper`/`cx.Checker` 接口，可直接通过 `app.WithComponent` 注册到应用生命周期：
+统一的存储层封装，各组件均支持 functional options 配置，并实现 `cx.Starter`/`cx.Stopper`/`cx.HealthChecker` 接口，可直接通过 `app.WithComponent` 注册到应用生命周期：
 
 - **db**：`db.New(config)` 支持 MySQL / PostgreSQL / SQLite
 - **redis**：`redis.New(config)` 支持单机 / Sentinel / Cluster 模式

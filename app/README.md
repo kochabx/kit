@@ -39,10 +39,10 @@ func main() {
 New() → Run()
               ├─ container.Start()     // 按注册顺序启动组件
               ├─ 阻塞等待信号 / ctx 取消
-              └─ container.Stop()      // 按注册逆序关闭组件
+              └─ container.Stop()  // 按注册逆序关闭组件
 ```
 
-组件只需实现 `cx.Starter` / `cx.Stopper` / `cx.Checker` 中的任意接口即可参与生命周期管理。`transport.Server` 已内置实现。
+组件只需实现 `cx.Starter` / `cx.Stopper` / `cx.HealthChecker` 中的任意接口即可参与生命周期管理。`transport.Server` 已内置实现。
 
 ## Option
 
@@ -57,8 +57,8 @@ New() → Run()
 | `WithContainer(c)` | 使用外部 cx.Container | 内部创建 |
 | `WithOnStart(fn)` | 组件启动前钩子 | - |
 | `WithOnStarted(fn)` | 组件启动后钩子 | - |
-| `WithOnStopping(fn)` | 组件停止前钩子 | - |
-| `WithOnStop(fn)` | 组件停止后钩子 | - |
+| `WithOnStopping(fn)` | 组件开始关闭前钩子 | - |
+| `WithOnStop(fn)` | 组件关闭后钩子 | - |
 
 ## 健康检查
 
@@ -67,10 +67,10 @@ report := a.HealthCheck(ctx)
 fmt.Println(report.Healthy) // true / false
 ```
 
-返回所有实现 `cx.Checker` 接口的组件的聚合健康状态。
+返回所有实现 `cx.HealthChecker` 接口的组件的聚合健康状态。
 
 ## 手动关闭
 
 ```go
-a.Shutdown() // 取消根上下文，触发 Run() 退出
+a.Stop() // 取消根上下文，触发 Run() 退出
 ```
