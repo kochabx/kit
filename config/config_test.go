@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/spf13/viper"
+
+	"github.com/kochabx/kit/core/validator"
 )
 
 type api struct {
@@ -48,37 +50,44 @@ func TestConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("Config loaded: %+v", cfg)
-
-	if err := c.Watch(); err != nil {
-		t.Fatal(err)
-	}
-
-	// Keep test running briefly to allow watch to initialize
-	time.Sleep(100 * time.Millisecond)
 }
 
 func TestWatch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping long-running watch test in short mode")
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte("server:\n  host: before\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
+	changed := make(chan struct{}, 1)
 	cfg := new(mock)
-	c := New(cfg)
+	v := viper.New()
+	loader := NewFileLoader("config.yaml", []string{dir}, v, validator.Validate)
+	c := New(cfg, WithViper(v), WithLoader(loader), WithOnChange(func() {
+		changed <- struct{}{}
+	}))
 
 	if err := c.Load(); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("Initial config: %+v", cfg)
-
 	if err := c.Watch(); err != nil {
 		t.Fatal(err)
 	}
 
-	// Simulate waiting for config changes
-	t.Log("Watching for config changes for 10 seconds...")
-	time.Sleep(10 * time.Second)
-	t.Logf("Readload config: %+v", cfg)
-	t.Log("Finished watching for config changes.")
+	// WatchConfig starts its fsnotify watcher asynchronously.
+	time.Sleep(100 * time.Millisecond)
+	if err := os.WriteFile(configFile, []byte("server:\n  host: after\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case <-changed:
+		if cfg.Server.Host != "after" {
+			t.Fatalf("expected reloaded host %q, got %q", "after", cfg.Server.Host)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for config reload")
+	}
 }
 
 // TestEnvOverride tests that viper's AutomaticEnv works
@@ -138,8 +147,16 @@ targets:
 }
 
 func TestSet(t *testing.T) {
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte("number: 1.23\nserver:\n  port: 80\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
 	cfg := new(mock)
-	c := New(cfg)
+	v := viper.New()
+	loader := NewFileLoader("config.yaml", []string{dir}, v, validator.Validate)
+	c := New(cfg, WithViper(v), WithLoader(loader))
 
 	if err := c.Load(); err != nil {
 		t.Fatal(err)
@@ -168,4 +185,35 @@ func TestSet(t *testing.T) {
 	}
 
 	t.Logf("After set: %+v", cfg)
+}
+
+func TestSetValidatesBeforeWriting(t *testing.T) {
+	type validatedConfig struct {
+		Port int `json:"port" validate:"min=1,max=65535"`
+	}
+
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte("port: 8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := new(validatedConfig)
+	v := viper.New()
+	loader := NewFileLoader("config.yaml", []string{dir}, v, validator.Validate)
+	c := New(cfg, WithViper(v), WithLoader(loader))
+	if err := c.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Set("port", 70000); err == nil {
+		t.Fatal("expected validation error")
+	}
+	content, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "port: 8080\n" {
+		t.Fatalf("expected config file to remain unchanged, got %q", content)
+	}
 }

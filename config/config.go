@@ -1,10 +1,12 @@
 package config
 
 import (
+	"context"
 	"sync"
 
 	"github.com/spf13/viper"
 
+	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/core/validator"
 	"github.com/kochabx/kit/log"
 )
@@ -95,6 +97,14 @@ func (c *Config) Set(key string, value any) error {
 
 	if err := c.viper.Unmarshal(c.target); err != nil {
 		return err
+	}
+	if err := defaults.Apply(c.target); err != nil {
+		return err
+	}
+	if c.validate != nil {
+		if err := c.validate.Struct(context.Background(), c.target); err != nil {
+			return err
+		}
 	}
 
 	if err := c.viper.WriteConfig(); err != nil {

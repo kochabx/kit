@@ -15,7 +15,6 @@ import (
 
 	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/core/validator"
-	"github.com/kochabx/kit/errors"
 )
 
 // FileLoader loads configuration from file
@@ -55,7 +54,7 @@ func NewFileLoader(name string, paths []string, v *viper.Viper, validate validat
 // Load implements Loader interface
 func (l *FileLoader) Load(target any) error {
 	if err := l.viper.ReadInConfig(); err != nil {
-		return errors.Wrap(err, 404, "config file not found")
+		return err
 	}
 
 	if err := l.readExpandedConfigFile(); err != nil {
@@ -63,19 +62,19 @@ func (l *FileLoader) Load(target any) error {
 	}
 
 	if err := l.viper.Unmarshal(target); err != nil {
-		return errors.Wrap(err, 500, "config parse error")
+		return err
 	}
 
 	// Apply default values from struct tags AFTER unmarshalling
 	// This fills in defaults only for zero-value fields not present in config file
 	if err := defaults.Apply(target); err != nil {
-		return errors.Wrap(err, 500, "failed to apply defaults")
+		return err
 	}
 
 	// Validate configuration
 	if l.validate != nil {
 		if err := l.validate.Struct(context.Background(), target); err != nil {
-			return errors.Wrap(err, 400, "config validation failed")
+			return err
 		}
 	}
 
@@ -90,12 +89,12 @@ func (l *FileLoader) readExpandedConfigFile() error {
 
 	content, err := os.ReadFile(configFile)
 	if err != nil {
-		return errors.Wrap(err, 500, "config file read error")
+		return err
 	}
 
 	expanded := os.ExpandEnv(string(content))
 	if err := l.viper.ReadConfig(bytes.NewBufferString(expanded)); err != nil {
-		return errors.Wrap(err, 500, "config parse error")
+		return err
 	}
 
 	return nil
