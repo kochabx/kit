@@ -1,11 +1,8 @@
 # Go Kit Makefile - modernized build and verification workflow
 
-SHELL := /bin/bash
-.SHELLFLAGS := --noprofile --norc -eu -o pipefail -c
+SHELL := /usr/bin/env
+.SHELLFLAGS := -u BASH_ENV -u ENV /bin/bash --noprofile --norc -eu -o pipefail -c
 MAKEFLAGS += --warn-undefined-variables --no-builtin-rules
-
-unexport BASH_ENV
-unexport ENV
 
 GO ?= go
 MODULE := github.com/kochabx/kit
