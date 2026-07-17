@@ -10,7 +10,7 @@ import (
 )
 
 // Console 创建控制台输出 writer
-func Console() zerolog.ConsoleWriter {
+func NewConsole() zerolog.ConsoleWriter {
 	output := zerolog.ConsoleWriter{
 		Out:         os.Stdout,
 		TimeFormat:  time.DateTime,

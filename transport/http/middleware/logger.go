@@ -80,7 +80,7 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 	}
 
 	if cfg.Logger == nil {
-		cfg.Logger = log.G
+		cfg.Logger = log.Global()
 	}
 
 	matcher := NewPathMatcher(cfg.Skip.Paths)

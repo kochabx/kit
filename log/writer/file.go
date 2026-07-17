@@ -1,65 +1,63 @@
 package writer
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
-	"strings"
+	"time"
+
+	"github.com/kochabx/kit/core/defaults"
+	"github.com/kochabx/kit/core/validator"
 )
 
-// RotateConfig 日志轮转配置
-type RotateConfig struct {
-	Mode             RotateMode
-	Filepath         string
-	Filename         string
-	FileExt          string
-	TimeRotateConfig TimeRotateConfig
-	SizeRotateConfig SizeRotateConfig
+// FileConfig 文件日志配置。
+type FileConfig struct {
+	Path       string           `json:"path" default:"log/app.log" validate:"required"`
+	RotateMode RotateMode       `json:"rotate_mode" validate:"oneof=1 2"`
+	TimeRotate TimeRotateConfig `json:"time_rotate"`
+	SizeRotate SizeRotateConfig `json:"size_rotate"`
 }
 
-// TimeRotateConfig 按时间轮转配置
+// TimeRotateConfig 按时间轮转配置。
 type TimeRotateConfig struct {
-	MaxAge       int // 日志保留时间(小时)
-	RotationTime int // 轮转时间间隔(小时)
+	MaxAge   time.Duration `json:"max_age" default:"24h" validate:"gt=0"`
+	Interval time.Duration `json:"interval" default:"1h" validate:"gt=0"`
 }
 
-// SizeRotateConfig 按大小轮转配置
+// SizeRotateConfig 按大小轮转配置。
 type SizeRotateConfig struct {
-	MaxSize    int  // 单个日志文件最大大小(MB)
-	MaxBackups int  // 保留的旧日志文件数量
-	MaxAge     int  // 日志文件保留天数
-	Compress   bool // 是否压缩旧日志文件
+	MaxSize    int  `json:"max_size" default:"100" validate:"gt=0"`   // 单个日志文件最大大小（MB）
+	MaxBackups int  `json:"max_backups" default:"5" validate:"gte=0"` // 保留的旧日志文件数量
+	MaxAge     int  `json:"max_age" default:"30" validate:"gte=0"`    // 日志文件保留天数
+	Compress   bool `json:"compress" default:"false"`                 // 是否压缩旧日志文件
 }
 
 // File 创建文件输出 writer
-func File(config RotateConfig) (io.Writer, error) {
-	switch config.Mode {
+func NewFile(config FileConfig) (io.Writer, error) {
+	if err := defaults.Apply(&config); err != nil {
+		return nil, err
+	}
+	if err := validator.Validate.Struct(context.Background(), &config); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(config.Path), 0o755); err != nil {
+		return nil, err
+	}
+
+	switch config.RotateMode {
 	case RotateModeTime:
 		return timeRotateWriter(config)
 	case RotateModeSize:
 		return sizeRotateWriter(config)
 	default:
-		return nil, fmt.Errorf("unsupported rotate mode: %v", config.Mode)
+		return nil, fmt.Errorf("unsupported rotate mode: %v", config.RotateMode)
 	}
 }
 
-// fileFullPath 返回日志文件的完整路径
-func (c *RotateConfig) fileFullPath() string {
-	return c.fileFullPathWithFormat("")
-}
-
-// fileFullPathWithFormat 返回带格式的日志文件完整路径
-func (c *RotateConfig) fileFullPathWithFormat(format string) string {
-	var builder strings.Builder
-	builder.Grow(len(c.Filename) + len(format) + len(c.FileExt) + 3)
-
-	builder.WriteString(c.Filename)
-	if format != "" {
-		builder.WriteByte('.')
-		builder.WriteString(format)
-	}
-	builder.WriteByte('.')
-	builder.WriteString(c.FileExt)
-
-	return filepath.Join(c.Filepath, builder.String())
+func (c FileConfig) rotatePattern() string {
+	ext := filepath.Ext(c.Path)
+	base := c.Path[:len(c.Path)-len(ext)]
+	return base + ".%Y%m%d%H%M" + ext
 }

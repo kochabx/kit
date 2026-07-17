@@ -47,7 +47,7 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 
 	// 使用默认全局日志
 	if c.logger == nil {
-		c.logger = log.G
+		c.logger = log.Global()
 	}
 
 	if clientOpts.dialer != nil {

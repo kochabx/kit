@@ -31,7 +31,7 @@ logger.Error().Err(err).Msg("something went wrong")
 
 ```go
 log.Info().Msg("global info")
-log.Infof("user %s logged in", username)
+log.Info().Msgf("user %s logged in", username)
 log.Error().Err(err).Msg("global error")
 ```
 
@@ -43,12 +43,10 @@ import (
     "github.com/kochabx/kit/log/writer"
 )
 
-config := log.FileConfig{
+config := writer.FileConfig{
+    Path:         "logs/app.log",
     RotateMode: writer.RotateModeSize,
-    Filepath:   "logs",
-    Filename:   "app",
-    FileExt:    "log",
-    LumberjackConfig: log.LumberjackConfig{
+    SizeRotate: writer.SizeRotateConfig{
         MaxSize:    100,  // MB
         MaxBackups: 5,
         MaxAge:     30,   // 天
@@ -83,35 +81,33 @@ logger.Info().Msg("multi output")
 
 ```go
 type FileConfig struct {
-    Filepath         string            // 日志目录，默认: "log"
-    Filename         string            // 文件名，默认: "app"
-    FileExt          string            // 扩展名，默认: "log"
-    RotateMode       writer.RotateMode // 轮转模式
-    RotatelogsConfig RotatelogsConfig  // 按时间轮转配置
-    LumberjackConfig LumberjackConfig  // 按大小轮转配置
+    Path         string             // 完整日志路径，默认: "log/app.log"
+    RotateMode writer.RotateMode
+    TimeRotate TimeRotateConfig
+    SizeRotate SizeRotateConfig
 }
 ```
 
 ### 轮转模式
 
 ```go
-writer.RotateModeTime  // 按时间轮转（默认）
+writer.RotateModeTime  // 按时间轮转
 writer.RotateModeSize  // 按大小轮转
 ```
 
-### RotatelogsConfig（按时间轮转）
+### TimeRotateConfig（按时间轮转）
 
 ```go
-type RotatelogsConfig struct {
-    MaxAge       int // 日志保留时间（小时），默认: 24
-    RotationTime int // 轮转间隔（小时），默认: 1
+type TimeRotateConfig struct {
+    MaxAge   time.Duration // 日志保留时间，默认: 24h
+    Interval time.Duration // 轮转间隔，默认: 1h
 }
 ```
 
-### LumberjackConfig（按大小轮转）
+### SizeRotateConfig（按大小轮转）
 
 ```go
-type LumberjackConfig struct {
+type SizeRotateConfig struct {
     MaxSize    int  // 单文件上限（MB），默认: 100
     MaxBackups int  // 保留旧文件数，默认: 5
     MaxAge     int  // 文件保留天数，默认: 30
@@ -125,7 +121,7 @@ type LumberjackConfig struct {
 log.WithLevel(zerolog.InfoLevel)  // 设置日志级别
 log.WithCaller()                  // 记录调用位置
 log.WithCallerSkip(skip int)      // 记录调用位置，跳过 skip 层封装
-log.WithDesensitize(hook)         // 绑定脱敏 Hook
+log.WithRedactor(redactor)         // 绑定脱敏 Redactor
 ```
 
 ## 数据脱敏
@@ -133,60 +129,38 @@ log.WithDesensitize(hook)         // 绑定脱敏 Hook
 ### 内置规则
 
 ```go
-import "github.com/kochabx/kit/log/desensitize"
+import "github.com/kochabx/kit/log/redact"
 
-hook := desensitize.NewHook()
+redactor, err := redact.New(redact.BuiltinRules()...)
+if err != nil {
+    panic(err)
+}
 
-// 一次性添加常用内置规则（身份证、银行卡、password/token/secret 字段）
-hook.AddBuiltin(desensitize.BuiltinRules()...)
-
-// 手机号和邮箱单独添加
-hook.AddBuiltin(desensitize.PhoneRule)  // 手机号: 138****5678
-hook.AddBuiltin(desensitize.EmailRule)  // 邮箱: u***r@e***.com
-
-logger := log.New(log.WithDesensitize(hook))
+logger := log.New(log.WithRedactor(redactor))
 logger.Info().Str("phone", "13812345678").Msg("user info")
 // 输出: "phone":"138****5678"
 ```
 
-内置规则一览：
-
-| 规则变量 | 类型 | 效果示例 |
-|---------|------|---------|
-| `PhoneRule` | ContentRule | `13812345678` → `138****5678` |
-| `EmailRule` | ContentRule | `user@example.com` → `u***r@e***.com` |
-| `IDCardRule` | ContentRule | `110101199001011234` → `110101********1234` |
-| `BankCardRule` | ContentRule | `6222021234565678` → `6222 **** **** 5678` |
-| `PasswordRule` | FieldRule | JSON `"password":"xxx"` → `"password":"******"` |
-| `TokenRule` | FieldRule | JSON `"token":"xxx"` → `"token":"******"` |
-| `SecretRule` | FieldRule | JSON `"secret":"xxx"` → `"secret":"******"` |
-
-> `BuiltinRules()` 返回：IDCardRule、BankCardRule、PasswordRule、TokenRule、SecretRule。
-> PhoneRule 和 EmailRule 可用，但不在 `BuiltinRules()` 中，需单独添加。
+`BuiltinRules()` 默认完整隐藏 password、token 和 secret，手机号等标识类数据仅保留必要的首尾字符。
 
 ### 自定义规则
 
 ```go
-hook := desensitize.NewHook()
-
-// 内容规则：正则匹配文本中任意位置并替换
-err := hook.AddContentRule("phone", `(1[3-9]\d)\d{4}(\d{4})`, "$1****$2")
-
-// 字段规则：匹配 JSON 字段名后的值
-err = hook.AddFieldRule("id_no", "id_no", `.*`, "********************")
+redactor, err := redact.New(
+    // 字段规则：精确匹配字段名并保留首尾字符
+    redact.Field("id_no", redact.KeepEdges(6, 4)),
+    // 内容规则：正则匹配后完整替换
+    redact.Content("access-key", `AKIA[A-Z0-9]{16}`, redact.Replace("******")),
+)
 ```
 
-### 规则管理
+Redactor 支持运行时原子更新规则。执行计划保持不可变，日志读取路径无锁：
 
 ```go
-hook.DisableRule("phone")   // 禁用，不删除规则
-hook.EnableRule("phone")    // 重新启用
-hook.IsEnabled("phone")     // 查询启用状态
-hook.RemoveRule("phone")    // 永久删除
-hook.GetRule("phone")       // 获取规则实例
-hook.GetRules()             // 列出所有规则名
-hook.RuleCount()            // 规则总数
-hook.Clear()                // 清空
+redactor.AddRule(redact.Field("phone", redact.KeepEdges(3, 4)))
+redactor.DisableRule("phone")
+redactor.EnableRule("phone")
+redactor.RemoveRule("phone")
 ```
 
 ## 全局日志器
@@ -194,10 +168,8 @@ hook.Clear()                // 清空
 ```go
 // 替换全局日志器
 logger, _ := log.NewFile(config, log.WithCaller(), log.WithLevel(zerolog.InfoLevel))
-log.SetGlobalLogger(logger)
-
-// 修改 zerolog 全局级别（影响所有 zerolog 实例）
-log.SetZerologGlobalLevel(zerolog.WarnLevel)
+old := log.SetGlobal(logger)
+defer old.Close()
 ```
 
 全局函数返回 `*zerolog.Event`，支持链式调用：
@@ -205,15 +177,9 @@ log.SetZerologGlobalLevel(zerolog.WarnLevel)
 ```go
 log.Debug().Str("k", "v").Msg("debug")
 log.Info().Str("user", uid).Dur("elapsed", d).Msg("done")
-log.Error().Err(err).Msg("failed")  // 自动附加堆栈
-log.Fatal().Err(err).Msg("abort")   // 自动附加堆栈，退出进程
-```
-
-格式化函数（Error/Fatal/Panic 系列自动附加堆栈）：
-
-```go
-log.Infof("connected to %s", addr)
-log.Errorf("query failed: %v", err)
+log.Error().Err(err).Msg("failed")
+log.Error().Stack().Err(err).Msg("failed with stack")
+log.Fatal().Err(err).Msg("abort")   // 退出进程
 ```
 
 ## 最佳实践
@@ -223,22 +189,21 @@ log.Errorf("query failed: %v", err)
 ```go
 import (
     "github.com/kochabx/kit/log"
-    "github.com/kochabx/kit/log/desensitize"
+    "github.com/kochabx/kit/log/redact"
     "github.com/kochabx/kit/log/writer"
     "github.com/rs/zerolog"
 )
 
-hook := desensitize.NewHook()
-hook.AddBuiltin(desensitize.BuiltinRules()...)
-hook.AddBuiltin(desensitize.PhoneRule, desensitize.EmailRule)
+redactor, err := redact.New(redact.BuiltinRules()...)
+if err != nil {
+    panic(err)
+}
 
 logger, err := log.NewFile(
-    log.FileConfig{
+    writer.FileConfig{
         RotateMode: writer.RotateModeSize,
-        Filepath:   "/var/log/myapp",
-        Filename:   "app",
-        FileExt:    "log",
-        LumberjackConfig: log.LumberjackConfig{
+        Path:         "/var/log/myapp/app.log",
+        SizeRotate: writer.SizeRotateConfig{
             MaxSize:    100,
             MaxBackups: 10,
             MaxAge:     30,
@@ -247,14 +212,15 @@ logger, err := log.NewFile(
     },
     log.WithCaller(),
     log.WithLevel(zerolog.InfoLevel),
-    log.WithDesensitize(hook),
+    log.WithRedactor(redactor),
 )
 if err != nil {
     panic(err)
 }
 defer logger.Close()
 
-log.SetGlobalLogger(logger)
+old := log.SetGlobal(logger)
+defer old.Close()
 ```
 
 ### 开发环境
@@ -266,7 +232,8 @@ logger := log.New(
     log.WithCaller(),
     log.WithLevel(zerolog.DebugLevel),
 )
-log.SetGlobalLogger(logger)
+old := log.SetGlobal(logger)
+defer old.Close()
 ```
 
 ### 结构化日志
@@ -298,58 +265,60 @@ if err != nil {
 | 函数 | 说明 |
 |------|------|
 | `New(opts ...Option) *Logger` | 控制台日志器 |
-| `NewFile(c FileConfig, opts ...Option) (*Logger, error)` | 文件日志器 |
-| `NewMulti(c FileConfig, opts ...Option) (*Logger, error)` | 文件 + 控制台双路输出 |
+| `NewFile(c writer.FileConfig, opts ...Option) (*Logger, error)` | 文件日志器 |
+| `NewMulti(c writer.FileConfig, opts ...Option) (*Logger, error)` | 文件 + 控制台双路输出 |
 
 ### Logger 方法
 
 | 方法 | 说明 |
 |------|------|
 | `Close() error` | 释放文件句柄等资源 |
-| `GetDesensitizeHook() *desensitize.Hook` | 获取绑定的脱敏 Hook |
+| `Redactor() *redact.Redactor` | 获取绑定的脱敏 Redactor |
 
 ### 全局函数
 
 | 函数 | 说明 |
 |------|------|
-| `SetGlobalLogger(logger *Logger)` | 替换全局日志器 |
-| `SetZerologGlobalLevel(level zerolog.Level)` | 设置 zerolog 全局级别 |
-| `Debug/Info/Warn/Error/Fatal/Panic() *zerolog.Event` | 各级别（Error+ 自动附堆栈）|
-| `Debugf/Infof/Warnf/Errorf/Fatalf/Panicf(...)` | 格式化输出（Error+ 自动附堆栈）|
+| `Global() *Logger` | 获取全局日志器 |
+| `SetGlobal(logger *Logger) *Logger` | 原子替换并返回旧的全局日志器 |
+| `ConfigureZerolog()` | 显式配置进程级时间和错误堆栈格式 |
+| `Debug/Info/Warn/Error/Fatal/Panic() *zerolog.Event` | 创建对应级别的日志事件 |
 
-### 脱敏 Hook 方法
+### 脱敏 Redactor API
 
 | 方法 | 说明 |
 |------|------|
-| `NewHook() *Hook` | 创建 Hook |
-| `AddRule(rule Rule)` | 添加规则实例 |
-| `AddContentRule(name, pattern, replacement string) error` | 添加内容规则 |
-| `AddFieldRule(name, fieldName, pattern, replacement string) error` | 添加字段规则 |
-| `AddBuiltin(rules ...Rule)` | 批量添加规则 |
-| `RemoveRule(name string) bool` | 删除规则 |
-| `EnableRule(name string) bool` | 启用规则 |
-| `DisableRule(name string) bool` | 禁用规则 |
-| `IsEnabled(name string) bool` | 查询启用状态 |
-| `GetRule(name string) (Rule, bool)` | 获取规则 |
-| `GetRules() []string` | 列出所有规则名 |
-| `RuleCount() int` | 规则数量 |
-| `Clear()` | 清空所有规则 |
+| `New(rules ...Rule) (*Redactor, error)` | 校验并编译初始规则 |
+| `AddRule(rule Rule) error` | 原子添加并启用规则 |
+| `AddRules(rules ...Rule) error` | 原子批量添加并启用规则 |
+| `RemoveRule(name string) bool` | 原子删除规则 |
+| `EnableRule(name string) bool` | 原子启用规则 |
+| `DisableRule(name string) bool` | 原子禁用规则 |
+| `Field(name string, mask Mask) Rule` | 创建字段规则 |
+| `Content(name, pattern string, mask Mask) Rule` | 创建内容正则规则 |
+| `Replace(value string) Mask` | 完整替换策略 |
+| `KeepEdges(prefix, suffix int) Mask` | 保留首尾字符策略 |
+| `Email() Mask` | 保留邮箱域名及用户名首尾字符 |
+| `BuiltinRules() []Rule` | 获取内置安全规则 |
+| `RedactString(value string) string` | 对字符串执行脱敏 |
 
 ## 模块结构
 
 ```
 log/
 ├── logger.go              # Logger 实现
-├── config.go              # FileConfig / LumberjackConfig / RotatelogsConfig
+├── file.go                # 文件日志构造与配置
 ├── options.go             # Option 函数
 ├── global.go              # 全局日志实例与函数
+├── zerolog.go             # Zerolog 进程级配置
 ├── writer/
 │   ├── console.go         # 控制台 writer
 │   ├── file.go            # 文件 writer 工厂
 │   └── rotate.go          # RotateMode 与轮转实现
-└── desensitize/
-    ├── desensitize.go     # Hook 与原子快照实现
-    ├── rules.go           # Rule 接口、ContentRule、FieldRule
+└── redact/
+    ├── engine.go          # 动态规则管理与不可变执行计划
+    ├── rule.go            # 字段规则与内容规则
+    ├── mask.go            # 脱敏策略
     ├── writer.go          # 脱敏 io.Writer 包装
     └── builtin.go         # 内置规则
 ```

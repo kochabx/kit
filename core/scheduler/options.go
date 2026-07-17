@@ -112,7 +112,7 @@ type Options struct {
 	Health HealthOptions
 
 	// 日志配置
-	CustomLogger *log.Logger // 自定义日志记录器（可选，默认使用 log.L）
+	CustomLogger *log.Logger // 自定义日志记录器（可选，默认使用 log.Global()）
 }
 
 // DefaultOptions 返回默认配置

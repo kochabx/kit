@@ -55,7 +55,7 @@ func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 	}
 
 	if cfg.Logger == nil {
-		cfg.Logger = log.G
+		cfg.Logger = log.Global()
 	}
 
 	if cfg.ErrorHandler == nil {

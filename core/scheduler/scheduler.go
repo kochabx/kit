@@ -119,7 +119,7 @@ func New(opts ...Option) (*Scheduler, error) {
 	logger := options.CustomLogger
 	if logger == nil {
 		// 使用项目全局日志记录器
-		logger = log.G
+		logger = log.Global()
 	}
 
 	// 创建调度器

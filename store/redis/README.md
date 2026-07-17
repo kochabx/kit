@@ -182,7 +182,7 @@ import (
 
 func main() {
     ctx := context.Background()
-    logger := log.G
+    logger := log.Global()
     
     // 生产环境配置
     cfg := redis.Cluster("node1:6379", "node2:6379", "node3:6379")

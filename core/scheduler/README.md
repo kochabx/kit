@@ -296,22 +296,25 @@ s, _ := scheduler.New(
 ```go
 import (
     "github.com/kochabx/kit/log"
+    "github.com/kochabx/kit/log/writer"
     "github.com/kochabx/kit/core/scheduler"
     "github.com/rs/zerolog"
 )
 
 // 创建文件日志
-fileLog := log.NewFile(log.Config{
-    Filepath:   "/var/log/scheduler",
-    Filename:   "scheduler",
-    RotateMode: log.RotateModeSize,
-    LumberjackConfig: log.LumberjackConfig{
+fileLog, err := log.NewFile(writer.FileConfig{
+    Path:         "/var/log/scheduler/scheduler.log",
+    RotateMode: writer.RotateModeSize,
+    SizeRotate: writer.SizeRotateConfig{
         MaxSize:    100,
         MaxBackups: 10,
         MaxAge:     30,
         Compress:   true,
     },
 }, log.WithLevel(zerolog.InfoLevel))
+if err != nil {
+    panic(err)
+}
 
 s, _ := scheduler.New(
     scheduler.WithCustomLogger(fileLog),

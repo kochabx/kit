@@ -25,7 +25,7 @@ func New(config *Config, opts ...Option) (*Client, error) {
 	}
 
 	options := &clientOptions{
-		logger: log.G,
+		logger: log.Global(),
 	}
 
 	for _, opt := range opts {

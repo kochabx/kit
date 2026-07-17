@@ -28,7 +28,7 @@ func Recovery(cfgs ...RecoveryConfig) func(http.Handler) http.Handler {
 	}
 
 	if cfg.Logger == nil {
-		cfg.Logger = log.G
+		cfg.Logger = log.Global()
 	}
 
 	return func(next http.Handler) http.Handler {

@@ -32,7 +32,7 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 	clientOpts := applyOptions(cfg, opts)
 	logger := clientOpts.logger
 	if logger == nil {
-		logger = log.G
+		logger = log.Global()
 	}
 
 	client := &Client{

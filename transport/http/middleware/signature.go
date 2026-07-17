@@ -82,7 +82,7 @@ func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 	}
 
 	if cfg.Logger == nil {
-		cfg.Logger = log.G
+		cfg.Logger = log.Global()
 	}
 
 	if cfg.Signer == nil {
