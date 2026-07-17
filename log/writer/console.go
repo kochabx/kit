@@ -11,12 +11,11 @@ import (
 
 // Console 创建控制台输出 writer
 func NewConsole() zerolog.ConsoleWriter {
-	output := zerolog.ConsoleWriter{
+	return zerolog.ConsoleWriter{
 		Out:         os.Stdout,
 		TimeFormat:  time.DateTime,
 		FormatLevel: formatLevel,
 	}
-	return output
 }
 
 // formatLevel 格式化日志级别显示

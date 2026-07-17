@@ -12,17 +12,17 @@ import (
 func Value[T any](ctx context.Context, key any) (T, error) {
 	var zero T
 	if ctx == nil {
-		return zero, errors.Internal("context is nil, key: %v", key)
+		return zero, errors.Newf(500, "context is nil, key: %v", key)
 	}
 
 	val := ctx.Value(key)
 	if val == nil {
-		return zero, errors.Internal("context value not found, key: %v", key)
+		return zero, errors.Newf(500, "context value not found, key: %v", key)
 	}
 
 	if v, ok := val.(T); ok {
 		return v, nil
 	}
 
-	return zero, errors.Internal("context value type mismatch, key: %v, expected: %T, got: %T", key, zero, val)
+	return zero, errors.Newf(500, "context value type mismatch, key: %v, expected: %T, got: %T", key, zero, val)
 }

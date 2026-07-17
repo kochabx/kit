@@ -29,10 +29,6 @@ func (w *Writer) Write(p []byte) (n int, err error) {
 		return 0, nil
 	}
 
-	// 快速路径：如果没有规则，直接写入
-	if !w.redactor.HasRules() {
-		return w.writer.Write(p)
-	}
 	redacted, changed := w.redactor.Append(nil, p)
 	if !changed {
 		return w.writer.Write(p)

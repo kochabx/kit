@@ -137,6 +137,25 @@ func TestOptionAppliedOnce(t *testing.T) {
 	}
 }
 
+func TestCallerOptions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		opt  Option
+		want int
+	}{
+		{name: "caller", opt: WithCaller(), want: 0},
+		{name: "caller skip", opt: WithCallerSkip(2), want: 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := loggerOptions{}
+			test.opt(&options)
+			if !options.caller || options.callerSkip != test.want {
+				t.Fatalf("caller skip = %v, want %d", options.callerSkip, test.want)
+			}
+		})
+	}
+}
+
 func mustRedactor(t *testing.T) *redact.Redactor {
 	t.Helper()
 	r, err := redact.New()

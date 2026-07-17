@@ -167,11 +167,17 @@ func TestRedactorDynamicRules(t *testing.T) {
 	if !r.DisableRule("phone") {
 		t.Fatal("failed to disable rule")
 	}
+	if r.IsEnabled("phone") {
+		t.Fatal("disabled rule reported as enabled")
+	}
 	if got := r.RedactString(`{"phone":"13812345678"}`); !strings.Contains(got, "13812345678") {
 		t.Fatalf("disabled rule still took effect: %s", got)
 	}
 	if !r.EnableRule("phone") {
 		t.Fatal("failed to enable rule")
+	}
+	if !r.IsEnabled("phone") {
+		t.Fatal("enabled rule reported as disabled")
 	}
 	if !r.RemoveRule("phone") {
 		t.Fatal("failed to remove rule")

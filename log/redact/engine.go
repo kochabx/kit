@@ -28,7 +28,7 @@ type ruleEntry struct {
 // Redactor atomically publishes immutable execution plans. Reads are lock-free;
 // rule updates are serialized and become visible as one complete snapshot.
 type Redactor struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	rules   []ruleEntry
 	index   map[string]int
 	current atomic.Pointer[plan]
@@ -92,6 +92,9 @@ func (r *Redactor) AddRule(rule Rule) error {
 
 // AddRules atomically adds and enables a set of rules.
 func (r *Redactor) AddRules(rules ...Rule) error {
+	if len(rules) == 0 {
+		return nil
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	next := append([]ruleEntry(nil), r.rules...)
@@ -139,6 +142,14 @@ func (r *Redactor) EnableRule(name string) bool { return r.setEnabled(name, true
 // DisableRule atomically disables a rule.
 func (r *Redactor) DisableRule(name string) bool { return r.setEnabled(name, false) }
 
+// IsEnabled reports whether a rule exists and is enabled.
+func (r *Redactor) IsEnabled(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	i, exists := r.index[name]
+	return exists && r.rules[i].enabled
+}
+
 func (r *Redactor) setEnabled(name string, enabled bool) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -176,11 +187,14 @@ func (r *Redactor) HasRules() bool {
 // Append appends redacted src to dst. When src is unchanged, it returns dst
 // unchanged and changed=false.
 func (r *Redactor) Append(dst, src []byte) ([]byte, bool) {
-	if !r.HasRules() || len(src) == 0 {
+	if r == nil || len(src) == 0 {
 		return dst, false
 	}
 
 	compiled := r.current.Load()
+	if compiled == nil || (len(compiled.fields) == 0 && len(compiled.content) == 0) {
+		return dst, false
+	}
 	base := len(dst)
 	result, fieldChanged := redactFields(compiled.fields, dst, src)
 	input := src
