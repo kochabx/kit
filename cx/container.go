@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -22,7 +23,7 @@ const (
 	StateRunning               // All components started
 	StateStopping              // Stop() in progress
 	StateStopped               // All components stopped
-	StateFailed                // Start or Stop failed
+	StateFailed                // Start failed
 )
 
 func (s State) String() string {
@@ -113,6 +114,7 @@ type provider struct {
 	constructor func(*Container) (any, error)
 	value       any
 	built       bool
+	started     bool
 	deps        []string // keys this provider depends on (recorded during build)
 }
 
@@ -456,11 +458,14 @@ func (c *Container) Start(ctx context.Context) error {
 	var startedComps []started
 
 	rollback := func() {
-		for i := len(startedComps) - 1; i >= 0; i-- {
-			s := startedComps[i]
+		for _, s := range slices.Backward(startedComps) {
 			stopCtx, cancel := context.WithTimeout(context.Background(), c.stopTimeout)
 			_ = s.stop(stopCtx) // best-effort
 			cancel()
+
+			c.mu.Lock()
+			c.providers[s.key].started = false
+			c.mu.Unlock()
 		}
 	}
 
@@ -484,6 +489,9 @@ func (c *Container) Start(ctx context.Context) error {
 		}
 		if s, ok := val.(Stopper); ok {
 			startedComps = append(startedComps, started{key: key, stop: s.Stop})
+			c.mu.Lock()
+			p.started = true
+			c.mu.Unlock()
 		}
 	}
 
@@ -527,13 +535,13 @@ func (c *Container) Stop(ctx context.Context) error {
 	}
 
 	// Stop in reverse build order.
-	for i := len(order) - 1; i >= 0; i-- {
-		key := order[i]
+	for _, key := range slices.Backward(order) {
 		c.mu.RLock()
 		p := c.providers[key]
 		val := p.value
+		started := p.started
 		c.mu.RUnlock()
-		if s, ok := val.(Stopper); ok {
+		if s, ok := val.(Stopper); ok && started {
 			stopCtx, cancel := context.WithTimeout(ctx, c.stopTimeout)
 			if err := s.Stop(stopCtx); err != nil {
 				errs = append(errs, fmt.Errorf("cx: stop %s: %w", key, err))
@@ -554,6 +562,7 @@ func (c *Container) Stop(ctx context.Context) error {
 	c.state = StateStopped
 	for _, p := range c.providers {
 		p.built = false
+		p.started = false
 		p.value = nil
 		p.deps = nil
 	}

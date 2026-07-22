@@ -61,6 +61,14 @@ type failStarter struct{ stopped bool }
 func (f *failStarter) Start(context.Context) error { return errors.New("start failed") }
 func (f *failStarter) Stop(context.Context) error  { f.stopped = true; return nil }
 
+type countingComponent struct {
+	starts int
+	stops  int
+}
+
+func (c *countingComponent) Start(context.Context) error { c.starts++; return nil }
+func (c *countingComponent) Stop(context.Context) error  { c.stops++; return nil }
+
 // orderRecorder records Start/Stop call order.
 type orderRecorder struct {
 	key    string
@@ -545,6 +553,21 @@ func TestHooks_OnStartedError_Rollback(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "onStarted hook")
 	assert.True(t, svc.stopped) // rollback
+}
+
+func TestStart_RollbackDoesNotStopComponentTwice(t *testing.T) {
+	c := New(WithOnStarted(func(context.Context) error {
+		return errors.New("hook failed")
+	}))
+
+	svc := &countingComponent{}
+	require.NoError(t, Supply(c, "svc", svc))
+	require.Error(t, c.Start(context.Background()))
+	assert.Equal(t, 1, svc.starts)
+	assert.Equal(t, 1, svc.stops)
+
+	require.NoError(t, c.Stop(context.Background()))
+	assert.Equal(t, 1, svc.stops)
 }
 
 // ---------------------------------------------------------------------------
