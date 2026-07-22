@@ -73,9 +73,10 @@ func TestWatch(t *testing.T) {
 	if err := c.Watch(); err != nil {
 		t.Fatal(err)
 	}
+	if err := c.Watch(); err != nil {
+		t.Fatalf("second Watch call should be idempotent: %v", err)
+	}
 
-	// WatchConfig starts its fsnotify watcher asynchronously.
-	time.Sleep(100 * time.Millisecond)
 	if err := os.WriteFile(configFile, []byte("server:\n  host: after\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -105,13 +106,11 @@ func TestEnvOverride(t *testing.T) {
 
 	// Viper automatically applies environment variable overrides
 	if cfg.Server.Host != "example.com" {
-		t.Logf("Note: Viper env override for SERVER_HOST: expected='example.com', got='%s'", cfg.Server.Host)
+		t.Fatalf("expected SERVER_HOST override, got %q", cfg.Server.Host)
 	}
 	if cfg.Server.Port != 9090 {
-		t.Logf("Note: Viper env override for SERVER_PORT: expected=9090, got=%d", cfg.Server.Port)
+		t.Fatalf("expected SERVER_PORT override, got %d", cfg.Server.Port)
 	}
-
-	t.Logf("Viper AutomaticEnv test completed: %+v", cfg)
 }
 
 func TestEnvExpansionInConfigFile(t *testing.T) {
@@ -146,74 +145,72 @@ targets:
 	}
 }
 
-func TestSet(t *testing.T) {
-	dir := t.TempDir()
-	configFile := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(configFile, []byte("number: 1.23\nserver:\n  port: 80\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg := new(mock)
-	v := viper.New()
-	loader := NewFileLoader("config.yaml", []string{dir}, v, validator.Validate)
-	c := New(cfg, WithViper(v), WithLoader(loader))
-
-	if err := c.Load(); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("Before set: %+v", cfg)
-
-	// Dynamically set a nested value
-	if err := c.Set("server.port", 9999); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Server.Port != 9999 {
-		t.Fatalf("expected port 9999, got %d", cfg.Server.Port)
-	}
-
-	// Verify GetViper returns the updated value
-	if port := c.GetViper().GetInt("server.port"); port != 9999 {
-		t.Fatalf("expected GetViper to return 9999, got %v", port)
-	}
-
-	// Set a top-level value
-	if err := c.Set("number", 99.9); err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Number != 99.9 {
-		t.Fatalf("expected number 99.9, got %f", cfg.Number)
-	}
-
-	t.Logf("After set: %+v", cfg)
-}
-
-func TestSetValidatesBeforeWriting(t *testing.T) {
+func TestLoadIsTransactional(t *testing.T) {
 	type validatedConfig struct {
-		Port int `json:"port" validate:"min=1,max=65535"`
+		Host string `json:"host" default:"localhost"`
+		Port int    `json:"port" validate:"min=1,max=65535"`
 	}
 
 	dir := t.TempDir()
 	configFile := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(configFile, []byte("port: 8080\n"), 0o600); err != nil {
+	if err := os.WriteFile(configFile, []byte("host: before\nport: 8080\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	cfg := new(validatedConfig)
 	v := viper.New()
-	loader := NewFileLoader("config.yaml", []string{dir}, v, validator.Validate)
-	c := New(cfg, WithViper(v), WithLoader(loader))
+	c := New(cfg,
+		WithViper(v),
+		WithLoader(NewFileLoader("config.yaml", []string{dir}, v, validator.Validate)),
+	)
 	if err := c.Load(); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := c.Set("port", 70000); err == nil {
-		t.Fatal("expected validation error")
-	}
-	content, err := os.ReadFile(configFile)
-	if err != nil {
+	if err := os.WriteFile(configFile, []byte("host: after\nport: 70000\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if string(content) != "port: 8080\n" {
-		t.Fatalf("expected config file to remain unchanged, got %q", content)
+	if err := c.Load(); err == nil {
+		t.Fatal("expected validation error")
+	}
+	if cfg.Host != "before" || cfg.Port != 8080 {
+		t.Fatalf("expected target to remain unchanged, got %+v", cfg)
+	}
+}
+
+func TestLoadClearsRemovedValues(t *testing.T) {
+	type appConfig struct {
+		Host string `json:"host" default:"localhost"`
+		Port int    `json:"port"`
+	}
+
+	dir := t.TempDir()
+	configFile := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(configFile, []byte("host: custom\nport: 8080\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := new(appConfig)
+	v := viper.New()
+	c := New(cfg, WithViper(v), WithLoader(NewFileLoader("config.yaml", []string{dir}, v, nil)))
+	if err := c.Load(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(configFile, []byte("{}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Host != "localhost" || cfg.Port != 0 {
+		t.Fatalf("expected removed values to be reset, got %+v", cfg)
+	}
+}
+
+func TestNewRejectsInvalidTargetOnLoad(t *testing.T) {
+	c := New(nil)
+	if err := c.Load(); err == nil {
+		t.Fatal("expected invalid target error")
 	}
 }

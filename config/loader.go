@@ -1,11 +1,10 @@
 package config
 
-// Loader defines the interface for configuration loaders
+// Loader reads configuration and reports changes to its source.
 type Loader interface {
-	// Load loads the configuration into the target
+	// Load decodes the current configuration into target.
 	Load(target any) error
 
-	// Watch starts watching for configuration changes
-	// The callback is invoked when configuration changes are detected
+	// Watch invokes callback when the configuration source changes.
 	Watch(callback func()) error
 }

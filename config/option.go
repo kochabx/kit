@@ -5,31 +5,31 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Option is a function that configures a Config
+// Option customizes a Config.
 type Option func(*Config)
 
-// WithViper sets a custom viper instance
+// WithViper uses v for the default file loader.
 func WithViper(v *viper.Viper) Option {
 	return func(c *Config) {
 		c.viper = v
 	}
 }
 
-// WithValidator sets a custom validator
+// WithValidator uses v to validate loaded configuration.
 func WithValidator(v validator.Validator) Option {
 	return func(c *Config) {
 		c.validate = v
 	}
 }
 
-// WithLoader sets the configuration loader
+// WithLoader replaces the default file loader.
 func WithLoader(loader Loader) Option {
 	return func(c *Config) {
 		c.loader = loader
 	}
 }
 
-// WithOnChange sets a callback that is invoked after configuration is successfully reloaded
+// WithOnChange registers fn to run after a successful watched reload.
 func WithOnChange(fn func()) Option {
 	return func(c *Config) {
 		c.onChange = fn

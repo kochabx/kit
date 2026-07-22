@@ -3,11 +3,11 @@ package config
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"io"
+	"errors"
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -17,22 +17,20 @@ import (
 	"github.com/kochabx/kit/core/validator"
 )
 
-// FileLoader loads configuration from file
+// FileLoader loads and watches a file-backed configuration through Viper.
 type FileLoader struct {
-	viper    *viper.Viper
-	validate validator.Validator
-	name     string
-	paths    []string
+	viper     *viper.Viper
+	validate  validator.Validator
+	watchOnce sync.Once
 }
 
-// NewFileLoader creates a new file loader
+// NewFileLoader creates a file loader for name and searches paths in order.
+// Environment variables override file values using underscores for nested keys.
 func NewFileLoader(name string, paths []string, v *viper.Viper, validate validator.Validator) *FileLoader {
-	// Determine config type from file extension
 	extension := path.Ext(name)
 	configName := strings.TrimSuffix(name, extension)
 	configType := strings.TrimPrefix(extension, ".")
 
-	// Add configuration paths to viper
 	for _, configPath := range paths {
 		v.AddConfigPath(configPath)
 	}
@@ -45,13 +43,11 @@ func NewFileLoader(name string, paths []string, v *viper.Viper, validate validat
 
 	return &FileLoader{
 		viper:    v,
-		paths:    paths,
-		name:     name,
 		validate: validate,
 	}
 }
 
-// Load implements Loader interface
+// Load reads, expands, decodes, defaults, and validates the configuration.
 func (l *FileLoader) Load(target any) error {
 	if err := l.viper.ReadInConfig(); err != nil {
 		return err
@@ -65,13 +61,10 @@ func (l *FileLoader) Load(target any) error {
 		return err
 	}
 
-	// Apply default values from struct tags AFTER unmarshalling
-	// This fills in defaults only for zero-value fields not present in config file
 	if err := defaults.Apply(target); err != nil {
 		return err
 	}
 
-	// Validate configuration
 	if l.validate != nil {
 		if err := l.validate.Struct(context.Background(), target); err != nil {
 			return err
@@ -100,49 +93,25 @@ func (l *FileLoader) readExpandedConfigFile() error {
 	return nil
 }
 
-// Watch implements Loader interface
+// Watch starts a debounced file watcher. Repeated calls are ignored.
 func (l *FileLoader) Watch(callback func()) error {
-	notify := make(chan struct{}, 1)
-
-	go func() {
-		lastHash := l.fileHash()
-		timer := time.NewTimer(0)
-		timer.Stop()
-
-		for {
-			select {
-			case <-notify:
-				timer.Reset(100 * time.Millisecond)
-			case <-timer.C:
-				if h := l.fileHash(); h != [sha256.Size]byte{} && h != lastHash {
-					lastHash = h
-					callback()
-				}
-			}
-		}
-	}()
-
-	l.viper.OnConfigChange(func(e fsnotify.Event) {
-		select {
-		case notify <- struct{}{}:
-		default:
-		}
-	})
-
-	l.viper.WatchConfig()
-	return nil
-}
-
-// fileHash computes the SHA-256 checksum of the config file.
-func (l *FileLoader) fileHash() [sha256.Size]byte {
-	f, err := os.Open(l.viper.ConfigFileUsed())
-	if err != nil {
-		return [sha256.Size]byte{}
+	if callback == nil {
+		return errors.New("config watch callback must not be nil")
 	}
-	defer f.Close()
-	h := sha256.New()
-	io.Copy(h, f)
-	var sum [sha256.Size]byte
-	copy(sum[:], h.Sum(nil))
-	return sum
+
+	l.watchOnce.Do(func() {
+		var mu sync.Mutex
+		var timer *time.Timer
+
+		l.viper.OnConfigChange(func(fsnotify.Event) {
+			mu.Lock()
+			defer mu.Unlock()
+			if timer != nil {
+				timer.Stop()
+			}
+			timer = time.AfterFunc(100*time.Millisecond, callback)
+		})
+		l.viper.WatchConfig()
+	})
+	return nil
 }
