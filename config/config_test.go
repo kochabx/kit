@@ -77,8 +77,11 @@ func TestWatch(t *testing.T) {
 		t.Fatalf("second Watch call should be idempotent: %v", err)
 	}
 
-	if err := os.WriteFile(configFile, []byte("server:\n  host: after\n"), 0o600); err != nil {
-		t.Fatal(err)
+	for _, host := range []string{"during-1", "during-2", "after"} {
+		if err := os.WriteFile(configFile, []byte("server:\n  host: "+host+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 
 	select {
@@ -88,6 +91,12 @@ func TestWatch(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("timed out waiting for config reload")
+	}
+
+	select {
+	case <-changed:
+		t.Fatal("expected rapid changes to be debounced into one reload")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 

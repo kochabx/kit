@@ -102,14 +102,23 @@ func (l *FileLoader) Watch(callback func()) error {
 	l.watchOnce.Do(func() {
 		var mu sync.Mutex
 		var timer *time.Timer
+		var generation uint64
 
 		l.viper.OnConfigChange(func(fsnotify.Event) {
 			mu.Lock()
 			defer mu.Unlock()
+			generation++
+			current := generation
 			if timer != nil {
 				timer.Stop()
 			}
-			timer = time.AfterFunc(100*time.Millisecond, callback)
+			timer = time.AfterFunc(100*time.Millisecond, func() {
+				mu.Lock()
+				defer mu.Unlock()
+				if current == generation {
+					callback()
+				}
+			})
 		})
 		l.viper.WatchConfig()
 	})
