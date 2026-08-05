@@ -3,38 +3,32 @@ package scheduler
 import "errors"
 
 var (
-	// 任务相关错误
-	ErrTaskNotFound      = errors.New("task not found")
-	ErrTaskAlreadyExists = errors.New("task already exists")
-	ErrInvalidTaskType   = errors.New("invalid task type")
-	ErrInvalidPriority   = errors.New("invalid priority")
-	ErrInvalidTimeout    = errors.New("invalid timeout")
-	ErrInvalidMaxRetry   = errors.New("invalid max retry")
-	ErrTaskCancelled     = errors.New("task cancelled")
-	ErrTaskTimeout       = errors.New("task timeout")
-	ErrTaskDuplicate     = errors.New("task duplicate")
-
-	// Handler相关错误
-	ErrHandlerNotFound = errors.New("handler not found")
-	ErrHandlerPanic    = errors.New("handler panic")
-
-	// Worker相关错误
-	ErrWorkerNotFound = errors.New("worker not found")
-	ErrAcquireLock    = errors.New("failed to acquire lock")
-	ErrReleaseLock    = errors.New("failed to release lock")
-
-	// 队列相关错误
-	ErrQueueFull  = errors.New("queue is full")
-	ErrQueueEmpty = errors.New("queue is empty")
-
-	// 系统相关错误
-	ErrRedisConnection    = errors.New("redis connection error")
-	ErrShutdown           = errors.New("scheduler is shutting down")
-	ErrRateLimitExceeded  = errors.New("rate limit exceeded")
-	ErrCircuitBreakerOpen = errors.New("circuit breaker is open")
-
-	// 配置相关错误
-	ErrInvalidConfig    = errors.New("invalid configuration")
-	ErrMissingNamespace = errors.New("namespace is required")
-	ErrInvalidCron      = errors.New("invalid cron expression")
+	ErrClosed             = errors.New("scheduler is closed")
+	ErrAlreadyRun         = errors.New("scheduler is already running")
+	ErrNotFound           = errors.New("job not found")
+	ErrDuplicate          = errors.New("unique job already exists")
+	ErrInvalidState       = errors.New("job state does not allow this operation")
+	ErrLeaseLost          = errors.New("job execution lease lost")
+	ErrNoHandler          = errors.New("job handler is not registered")
+	ErrShutdownTimeout    = errors.New("scheduler shutdown timed out")
+	ErrJobCancelled       = errors.New("job cancellation requested")
+	ErrDefinitionMismatch = errors.New("job definition does not match registered handler")
 )
+
+// Permanent marks an error as non-retryable.
+func Permanent(err error) error {
+	if err == nil {
+		return nil
+	}
+	return permanentError{err: err}
+}
+
+type permanentError struct{ err error }
+
+func (e permanentError) Error() string { return e.err.Error() }
+func (e permanentError) Unwrap() error { return e.err }
+
+func isPermanent(err error) bool {
+	var target permanentError
+	return errors.As(err, &target)
+}

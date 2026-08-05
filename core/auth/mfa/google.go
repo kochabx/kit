@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha1"
 	"encoding/base32"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/kochabx/kit/core/x/qrcode"
+	"github.com/skip2/go-qrcode"
 )
 
 const (
@@ -245,11 +246,19 @@ func (ga *GoogleAuthenticator) GenerateQRCode(label, issuer, secret string) (str
 	}
 
 	qrData := ga.generateQRData(label, issuer, secret)
-	qrCode, err := qrcode.Generate(qrData, ga.QrCodeSize)
+	qrCode, err := generateQRCode(qrData, ga.QrCodeSize)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrQRCodeGeneration, err)
 	}
 	return qrCode, nil
+}
+
+func generateQRCode(content string, size int) (string, error) {
+	png, err := qrcode.Encode(content, qrcode.Medium, size)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(png), nil
 }
 
 // generateQRData 为二维码生成TOTP URI

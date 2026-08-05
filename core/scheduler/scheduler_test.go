@@ -5,236 +5,977 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
-func TestScheduler_ProduceConsumeFlow(t *testing.T) {
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
-	redisPassword := os.Getenv("REDIS_PASSWORD")
-	if redisPassword == "" {
-		redisPassword = "12345678"
-	}
-
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     redisAddr,
-		Password: redisPassword,
-	})
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer pingCancel()
-	if err := rdb.Ping(pingCtx).Err(); err != nil {
-		t.Skipf("redis not available at %s: %v", redisAddr, err)
-	}
-
-	namespace := "scheduler-e2e-" + uuid.NewString()[:8]
-	s, err := New(
-		WithRedisClient(rdb),
-		WithNamespace(namespace),
-		WithWorkerCount(1),
-		WithWorkerConcurrency(1),
-		WithScanInterval(20*time.Millisecond),
-		WithBatchSize(20),
-		WithDeduplication(false, 0),
-		WithDLQ(false, 0),
-		WithMetrics(false),
-		WithHealth(false),
-		func(o *Options) {
-			o.Worker.LeaseTTL = 2 * time.Second
-			o.Worker.RenewInterval = 200 * time.Millisecond
-			o.Worker.ShutdownGracePeriod = 2 * time.Second
-			o.LockTimeout = 2 * time.Second
-		},
-	)
+func TestConfigDefaultsAndValidation(t *testing.T) {
+	c, err := prepareConfig(Config{})
 	if err != nil {
-		t.Fatalf("New scheduler: %v", err)
+		t.Fatalf("default config: %v", err)
 	}
-
-	t.Cleanup(func() {
-		cleanupNamespace(t, rdb, namespace)
-	})
-
-	// 确保队列干净（即使 namespace 冲突也尽量自愈）
-	if q, ok := s.queue.(*Queue); ok {
-		_ = q.Clear(context.Background())
+	if c.Concurrency != 16 || c.MaxPayloadBytes != 1<<20 {
+		t.Fatalf("unexpected defaults: %+v", c)
 	}
-
-	type testPayload struct {
-		N int `json:"n"`
+	c.LeaseDuration = time.Second
+	if _, err := prepareConfig(c); err == nil {
+		t.Fatal("expected invalid lease duration")
 	}
+}
 
-	started := make(chan struct{})
-	allowFinish := make(chan struct{})
-	done := make(chan testPayload, 1)
-	var calls atomic.Int64
-	var startOnce sync.Once
-	if err := SchedulerRegister[testPayload](s, "e2e.test", HandlerFunc[testPayload](func(ctx context.Context, p testPayload) error {
-		t.Logf("handler executing, payload=%+v", p)
-		calls.Add(1)
-		startOnce.Do(func() { close(started) })
-		select {
-		case <-allowFinish:
-		case <-ctx.Done():
-			return ctx.Err()
+func TestExponential(t *testing.T) {
+	p := Exponential{MaxAttempts: 4, Initial: time.Second, Max: 3 * time.Second, Multiplier: 2}
+	want := []time.Duration{time.Second, 2 * time.Second, 3 * time.Second}
+	for attempt, expected := range want {
+		got, retry := p.NextDelay(attempt+1, errors.New("failed"))
+		if !retry || got != expected {
+			t.Fatalf("attempt %d: got %v, %v", attempt+1, got, retry)
 		}
-		select {
-		case done <- p:
-		default:
+	}
+	if _, retry := p.NextDelay(4, errors.New("failed")); retry {
+		t.Fatal("expected retry budget to be exhausted")
+	}
+}
+
+func TestRedisFailureBackoffUsesConfiguredBounds(t *testing.T) {
+	b := newFailureBackoff(100*time.Millisecond, time.Second)
+	for attempt := range 20 {
+		d := b.Next()
+		if d < 50*time.Millisecond || d > 1500*time.Millisecond {
+			t.Fatalf("attempt %d: backoff %v outside jitter bounds", attempt, d)
+		}
+	}
+	b.Reset()
+	if d := b.Next(); d < 50*time.Millisecond || d > 150*time.Millisecond {
+		t.Fatalf("reset backoff=%v", d)
+	}
+}
+
+func TestSchedulerLifecycle(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 2, DispatchInterval: 10 * time.Millisecond, PollTimeout: 50 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type payload struct {
+		Value string `json:"value"`
+	}
+	definition := Define[payload]("test.job", WithTimeout(time.Second), WithRetry(NoRetry{}))
+	result := make(chan string, 1)
+	if err := Handle(s, definition, func(_ context.Context, p payload) error { result <- p.Value; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	job, err := Enqueue(s, context.Background(), definition, payload{Value: "ok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case got := <-result:
+		if got != "ok" {
+			t.Fatalf("payload = %q", got)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("job was not executed")
+	}
+	eventually(t, 2*time.Second, func() bool {
+		current, err := s.Get(context.Background(), job.ID)
+		return err == nil && current.State == StateSucceeded
+	})
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not stop")
+	}
+}
+
+func TestUniqueAndCancel(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("unique.job")
+	first, err := Enqueue(s, context.Background(), d, "one", Delay(time.Hour), Unique("account:1", time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Enqueue(s, context.Background(), d, "two", Delay(time.Hour), Unique("account:1", time.Minute))
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("expected duplicate, got %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("duplicate id = %q, want %q", second.ID, first.ID)
+	}
+	if err := s.Cancel(context.Background(), first.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Get(context.Background(), first.ID)
+	if err != nil || current.State != StateCancelled {
+		t.Fatalf("cancelled job: %+v, %v", current, err)
+	}
+}
+
+func TestRetry(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("retry.job", WithRetry(Exponential{MaxAttempts: 2, Initial: 10 * time.Millisecond, Max: 10 * time.Millisecond}))
+	var calls atomic.Int32
+	if err := Handle(s, d, func(context.Context, string) error {
+		if calls.Add(1) == 1 {
+			return errors.New("try again")
 		}
 		return nil
-	})); err != nil {
-		t.Fatalf("register handler: %v", err)
+	}); err != nil {
+		t.Fatal(err)
 	}
-
-	runCtx := t.Context()
-	if err := s.Start(runCtx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	t.Cleanup(func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutdownCtx)
-	})
-
-	taskID, err := Submit[testPayload](
-		s,
-		context.Background(),
-		"e2e.test",
-		testPayload{N: 42},
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(2*time.Second),
-		WithTaskMaxRetry(0),
-		WithScheduleAt(time.Now()),
-	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	job, err := Enqueue(s, context.Background(), d, "payload")
 	if err != nil {
-		t.Fatalf("Submit: %v", err)
+		t.Fatal(err)
 	}
+	eventually(t, 3*time.Second, func() bool {
+		current, err := s.Get(context.Background(), job.ID)
+		return err == nil && current.State == StateSucceeded && current.Attempt == 2
+	})
+	cancel()
+	<-done
+}
 
-	// 等待 Worker 真正开始执行（进入 handler），并在放行前校验任务处于 running。
-	select {
-	case <-started:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timeout waiting worker to start executing, task_id=%s", taskID)
+func TestCronCreatesIndependentJob(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	runningCtx, runningCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer runningCancel()
-	for {
-		info, err := s.GetTaskInfo(runningCtx, taskID)
-		if err == nil {
-			if info.Status != StatusRunning {
-				t.Fatalf("expected status running, got %s", info.Status)
-			}
-			if info.WorkerID == "" {
-				t.Fatalf("expected worker_id to be set")
-			}
-			if info.StartTime == nil {
-				t.Fatalf("expected start_time to be set")
-			}
-			break
-		}
-		if runningCtx.Err() != nil {
-			t.Fatalf("expected task to be running, last err=%v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
+	d := Define[string]("cron.job")
+	schedule, err := ScheduleCron(s, context.Background(), d, "payload", "@every 1s", time.UTC)
+	if err != nil {
+		t.Fatal(err)
 	}
+	due := time.Now().Add(-time.Second).UnixMilli()
+	if err := client.HSet(context.Background(), s.store.keys.schedule(schedule.ID), "next_at", due).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(context.Background(), s.store.keys.schedules(), redis.Z{Score: float64(due), Member: schedule.ID}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.dispatchSchedules(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := client.ZRange(context.Background(), s.store.keys.scheduled(), 0, -1).Result()
+	if err != nil || len(ids) != 1 {
+		t.Fatalf("cron instances = %v, %v", ids, err)
+	}
+	if ids[0] != schedule.ID+":"+fmt.Sprint(due) {
+		t.Fatalf("instance id = %q", ids[0])
+	}
+	if err := s.dispatchSchedules(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if count := client.ZCard(context.Background(), s.store.keys.scheduled()).Val(); count != 1 {
+		t.Fatalf("duplicate cron occurrence: %d", count)
+	}
+}
 
-	// 任务执行中，消息应处于 pending（尚未 ACK）。
-	if q, ok := s.queue.(*Queue); ok {
-		pendingCtx, pendingCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer pendingCancel()
-		for {
-			pending, err := q.GetPendingCount(pendingCtx, PriorityNormal)
-			if err == nil && pending > 0 {
-				break
-			}
-			if pendingCtx.Err() != nil {
-				t.Fatalf("expected pending message while running, last err=%v", err)
-			}
-			time.Sleep(20 * time.Millisecond)
+func TestPermanentFailureAndDeadRetry(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("dead.job")
+	if err := Handle(s, d, func(context.Context, string) error { return Permanent(errors.New("bad input")) }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 3*time.Second, func() bool {
+		current, getErr := s.Get(context.Background(), job.ID)
+		return getErr == nil && current.State == StateDead
+	})
+	dead, err := s.DeadJobs(context.Background(), 0, 10)
+	if err != nil || len(dead) != 1 {
+		t.Fatalf("dead jobs = %v, %v", dead, err)
+	}
+	if err := s.RetryDead(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Get(context.Background(), job.ID)
+	if err != nil || (current.State != StateScheduled && current.State != StateReady) || current.Attempt != 0 {
+		t.Fatalf("retried job = %+v, %v", current, err)
+	}
+}
+
+func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("lease.job")
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.ensureGroups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.dispatch(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	deliveries, err := s.store.receive(context.Background(), "worker-a", 10*time.Millisecond, 1)
+	if err != nil || len(deliveries) != 1 {
+		t.Fatalf("receive: %v, %v", deliveries, err)
+	}
+	delivery := deliveries[0]
+	if _, err := s.store.start(context.Background(), delivery, "token-a", "worker-a", 3*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	messages, _, err := client.XAutoClaim(context.Background(), &redis.XAutoClaimArgs{Stream: s.store.keys.ready(), Group: s.store.keys.group(), Consumer: "worker-b", MinIdle: 0, Start: "0-0", Count: 1}).Result()
+	if err != nil || len(messages) != 1 {
+		t.Fatalf("claim: %v, %v", messages, err)
+	}
+	claimed := delivery
+	claimed.messageID = messages[0].ID
+	if _, err := s.store.start(context.Background(), claimed, "token-b", "worker-b", 3*time.Second); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("start active lease: %v", err)
+	}
+	pending, err := client.XPending(context.Background(), s.store.keys.ready(), s.store.keys.group()).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Count != 1 {
+		t.Fatalf("active delivery was acknowledged, pending=%d job=%s", pending.Count, job.ID)
+	}
+}
+
+func TestBatchEnqueue(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[int]("batch.job")
+	results := BatchEnqueue(s, context.Background(), d, []int{1, 2, 3})
+	for i, result := range results {
+		if result.Err != nil || result.Job == nil || result.Job.State != StateReady {
+			t.Fatalf("result %d: %+v", i, result)
 		}
 	}
-
-	close(allowFinish)
-
-	// 等待消费完成
-	select {
-	case got := <-done:
-		if got.N != 42 {
-			t.Fatalf("unexpected payload: %+v", got)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timeout waiting task to be consumed, task_id=%s", taskID)
+	stats, err := s.Stats(context.Background())
+	if err != nil || stats.Ready != 3 || stats.Scheduled != 0 {
+		t.Fatalf("stats=%+v err=%v", stats, err)
 	}
+}
 
-	// 稍微等待一个 tick，确保没有重复执行（成功任务按设计应只执行一次）。
-	time.Sleep(100 * time.Millisecond)
-	if calls.Load() != 1 {
-		t.Fatalf("expected handler called once, got %d", calls.Load())
+func TestReadyStreamExecutesAllJobs(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// 成功后任务元数据会被删除
-	delCtx, delCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer delCancel()
-	for {
-		_, err := s.GetTaskInfo(delCtx, taskID)
-		if err == ErrTaskNotFound {
-			break
-		}
-		if delCtx.Err() != nil {
-			t.Fatalf("expected task metadata to be deleted, last err=%v", err)
-		}
-		time.Sleep(20 * time.Millisecond)
+	d := Define[int]("stream.job", WithRetry(NoRetry{}))
+	handled := make(chan int, 3)
+	if err := Handle(s, d, func(_ context.Context, v int) error { handled <- v; return nil }); err != nil {
+		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	jobs := make([]*Job, 0, 3)
+	for i := range 3 {
+		job, enqueueErr := Enqueue(s, context.Background(), d, i)
+		if enqueueErr != nil {
+			t.Fatal(enqueueErr)
+		}
+		jobs = append(jobs, job)
+	}
+	for range 3 {
+		select {
+		case <-handled:
+		case <-time.After(3 * time.Second):
+			t.Fatal("ready job not executed")
+		}
+	}
+	for _, job := range jobs {
+		eventually(t, time.Second, func() bool {
+			current, getErr := s.Get(context.Background(), job.ID)
+			return getErr == nil && current.State == StateSucceeded
+		})
+	}
+	cancel()
+	<-done
+}
 
-	// 队列侧断言：延迟队列应为空，pending（未 ACK）应为 0
-	if q, ok := s.queue.(*Queue); ok {
-		ctx := context.Background()
-		delayed, err := q.GetDelayedCount(ctx)
-		if err != nil {
-			t.Fatalf("GetDelayedCount: %v", err)
-		}
-		if delayed != 0 {
-			t.Fatalf("expected delayed queue empty, delayed=%d", delayed)
-		}
+func TestDefinitionMismatchIsRejected(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer := Define[string]("attempt.job", WithRetry(Exponential{MaxAttempts: 2, Initial: 5 * time.Millisecond, Max: 5 * time.Millisecond}))
+	worker := Define[string]("attempt.job", WithRetry(Exponential{MaxAttempts: 10, Initial: 5 * time.Millisecond, Max: 5 * time.Millisecond}))
+	if err := Handle(s, worker, func(context.Context, string) error { return errors.New("always fails") }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	job, err := Enqueue(s, context.Background(), producer, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 3*time.Second, func() bool {
+		current, getErr := s.Get(context.Background(), job.ID)
+		return getErr == nil && current.State == StateDead && current.Attempt == 1 && current.LastError == ErrDefinitionMismatch.Error()
+	})
+}
 
-		pending, err := q.GetPendingCount(ctx, PriorityNormal)
-		if err != nil {
-			t.Fatalf("GetPendingCount: %v", err)
-		}
-		if pending != 0 {
-			t.Fatalf("expected no pending messages, pending=%d", pending)
+func TestOrphanedUniqueKeyIsRepaired(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	d := Define[string]("unique.repair")
+	first, err := Enqueue(s, context.Background(), d, "one", Unique("key", time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Del(context.Background(), s.store.keys.job(first.ID)).Err(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Enqueue(s, context.Background(), d, "two", Unique("key", time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.ID == first.ID {
+		t.Fatal("orphaned unique key was not replaced")
+	}
+}
+
+func TestCronManagement(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	d := Define[string]("cron.manage")
+	schedule, err := ScheduleCron(s, context.Background(), d, "payload", "@every 1h", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PauseSchedule(context.Background(), schedule.ID); err != nil {
+		t.Fatal(err)
+	}
+	paused, err := s.GetSchedule(context.Background(), schedule.ID)
+	if err != nil || paused.State != ScheduleStatePaused {
+		t.Fatalf("paused=%+v err=%v", paused, err)
+	}
+	if err := s.ResumeSchedule(context.Background(), schedule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateSchedule(context.Background(), schedule.ID, "@every 2h", time.UTC); err != nil {
+		t.Fatal(err)
+	}
+	items, err := s.ListSchedules(context.Background(), ScheduleQuery{Limit: 10})
+	if err != nil || len(items) != 1 || items[0].Expression != "@every 2h" {
+		t.Fatalf("items=%+v err=%v", items, err)
+	}
+	if err := s.DeleteSchedule(context.Background(), schedule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetSchedule(context.Background(), schedule.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get deleted: %v", err)
+	}
+}
+
+func TestInvalidAndOrphanedCronSchedulesAreQuarantined(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule, err := ScheduleCron(s, context.Background(), Define[string]("cron.invalid"), "payload", "@every 1h", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	due := time.Now().Add(-time.Second).UnixMilli()
+	if err := client.HSet(context.Background(), s.store.keys.schedule(schedule.ID), "cron", "invalid", "next_at", due).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(context.Background(), s.store.keys.schedules(), redis.Z{Score: float64(due), Member: schedule.ID}, redis.Z{Score: float64(due), Member: "orphan"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.dispatchSchedules(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	state, err := client.HGet(context.Background(), s.store.keys.schedule(schedule.ID), "state").Result()
+	if err != nil || state != "invalid" {
+		t.Fatalf("invalid schedule state=%q err=%v", state, err)
+	}
+	for _, id := range []string{schedule.ID, "orphan"} {
+		if _, err := client.ZScore(context.Background(), s.store.keys.schedules(), id).Result(); !errors.Is(err, redis.Nil) {
+			t.Fatalf("schedule %q was not removed: %v", id, err)
 		}
 	}
 }
 
-func cleanupNamespace(t *testing.T, rdb *redis.Client, namespace string) {
-	t.Helper()
+func TestRunningJobCancellation(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("cancel.running", WithTimeout(10*time.Second), WithRetry(NoRetry{}))
+	started := make(chan struct{})
+	if err := Handle(s, d, func(ctx context.Context, _ string) error { close(started); <-ctx.Done(); return ctx.Err() }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	defer func() {
+		cancel()
+		<-done
+	}()
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job did not start")
+	}
+	if err := s.Cancel(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, 3*time.Second, func() bool {
+		current, getErr := s.Get(context.Background(), job.ID)
+		return getErr == nil && current.State == StateCancelled
+	})
+}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
+func TestSeparateDispatcherAndWorkerRoles(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	dispatcher, err := New(client, Config{Namespace: namespace, Role: RoleDispatcher, DispatchInterval: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := New(client, Config{Namespace: namespace, Role: RoleWorker, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("roles.job", WithRetry(NoRetry{}))
+	handled := make(chan struct{}, 1)
+	if err := Handle(worker, d, func(context.Context, string) error { handled <- struct{}{}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 2)
+	go func() { done <- dispatcher.Run(ctx) }()
+	go func() { done <- worker.Run(ctx) }()
+	job, err := Enqueue(dispatcher, context.Background(), d, "payload", Delay(30*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("separate worker did not execute job")
+	}
+	eventually(t, time.Second, func() bool {
+		current, getErr := worker.Get(context.Background(), job.ID)
+		return getErr == nil && current.State == StateSucceeded
+	})
+	cancel()
+	<-done
+	<-done
+}
 
-	var cursor uint64
-	pattern := namespace + ":*"
-	for {
-		keys, next, err := rdb.Scan(ctx, cursor, pattern, 1000).Result()
+func TestImmediateJobDoesNotRequireDispatcher(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Role: RoleWorker, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("immediate.fast", WithRetry(NoRetry{}))
+	handled := make(chan struct{}, 1)
+	if err := Handle(s, d, func(context.Context, string) error { handled <- struct{}{}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != StateReady {
+		t.Fatalf("initial state=%s", job.State)
+	}
+	select {
+	case <-handled:
+	case <-time.After(time.Second):
+		t.Fatal("immediate job waited for dispatcher")
+	}
+	cancel()
+	<-done
+}
+
+func TestDelayUsesRedisClock(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := client.Time(context.Background()).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := Enqueue(s, context.Background(), Define[string]("delay.clock"), "payload", Delay(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := client.Time(context.Background()).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := time.UnixMilli(before.Add(time.Minute).UnixMilli())
+	upper := time.UnixMilli(after.Add(time.Minute).UnixMilli())
+	if job.RunAt.Before(lower) || job.RunAt.After(upper) {
+		t.Fatalf("run_at %v is not based on Redis interval [%v, %v]", job.RunAt, before, after)
+	}
+}
+
+func TestStatsSeparateReadyAndPending(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.ensureGroups(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(s, context.Background(), Define[string]("stats.job"), "payload"); err != nil {
+		t.Fatal(err)
+	}
+	stats, err := s.Stats(context.Background())
+	if err != nil || stats.Ready != 1 || stats.Pending != 0 {
+		t.Fatalf("before receive: stats=%+v err=%v", stats, err)
+	}
+	if _, err := s.store.receive(context.Background(), "stats-consumer", time.Millisecond, 1); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = s.Stats(context.Background())
+	if err != nil || stats.Ready != 0 || stats.Pending != 1 {
+		t.Fatalf("after receive: stats=%+v err=%v", stats, err)
+	}
+}
+
+func TestRemoteRunningJobCancellation(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	worker, err := New(client, Config{Namespace: namespace, Role: RoleWorker, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: time.Second, CancellationCheckInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	producer, err := New(client, Config{Namespace: namespace, Role: RoleDispatcher})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("cancel.remote", WithTimeout(10*time.Second), WithRetry(NoRetry{}))
+	started := make(chan struct{})
+	if err := Handle(worker, d, func(ctx context.Context, _ string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	defer func() { cancel(); <-done }()
+	job, err := Enqueue(producer, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("job did not start")
+	}
+	if err := producer.Cancel(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, time.Second, func() bool {
+		current, getErr := producer.Get(context.Background(), job.ID)
+		return getErr == nil && current.State == StateCancelled
+	})
+}
+
+func TestJanitorCleansIndexesInBoundedBatches(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, MaintenanceBatch: 2, MaintenanceDrainLimit: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	now, err := client.Time(ctx).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(ctx, s.store.keys.dead(),
+		redis.Z{Score: float64(now.Add(-time.Second).UnixMilli()), Member: "expired-1"},
+		redis.Z{Score: float64(now.Add(-time.Second).UnixMilli()), Member: "expired-2"},
+		redis.Z{Score: float64(now.Add(time.Hour).UnixMilli()), Member: "retained"},
+	).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(ctx, s.store.keys.scheduled(), redis.Z{Score: float64(now.Add(time.Hour).UnixMilli()), Member: "orphan-job"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(ctx, s.store.keys.schedules(), redis.Z{Score: float64(now.Add(time.Hour).UnixMilli()), Member: "orphan-cron"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ZAdd(ctx, s.store.keys.scheduleCatalog(), redis.Z{Score: float64(now.UnixMilli()), Member: "orphan-cron"}).Err(); err != nil {
+		t.Fatal(err)
+	}
+
+	var scheduledCursor, cronCursor uint64
+	for range 10 {
+		scheduledCursor, cronCursor, err = s.runMaintenance(ctx, scheduledCursor, cronCursor)
 		if err != nil {
-			t.Logf("cleanup scan failed: %v", err)
+			t.Fatal(err)
+		}
+		if scheduledCursor == 0 && cronCursor == 0 {
+			break
+		}
+	}
+	if got := client.ZCard(ctx, s.store.keys.dead()).Val(); got != 1 {
+		t.Fatalf("dead index size=%d", got)
+	}
+	if got := client.ZCard(ctx, s.store.keys.scheduled()).Val(); got != 0 {
+		t.Fatalf("scheduled index size=%d", got)
+	}
+	if got := client.ZCard(ctx, s.store.keys.schedules()).Val(); got != 0 {
+		t.Fatalf("cron index size=%d", got)
+	}
+}
+
+func TestJanitorDeletesOnlyIdleConsumersWithoutPendingMessages(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if err := s.store.ensureGroups(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.XGroupCreateConsumer(ctx, s.store.keys.ready(), s.store.keys.group(), "empty").Err(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Enqueue(s, ctx, Define[string]("consumer.cleanup"), "payload"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.store.receive(ctx, "pending", time.Millisecond, 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, err := s.store.cleanupStaleConsumers(ctx, time.Millisecond, 10); err != nil {
+		t.Fatal(err)
+	}
+	consumers, err := client.XInfoConsumers(ctx, s.store.keys.ready(), s.store.keys.group()).Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(consumers) != 1 || consumers[0].Name != "pending" || consumers[0].Pending != 1 {
+		t.Fatalf("consumers=%+v", consumers)
+	}
+}
+
+func TestGracefulShutdownKeepsActiveJobLeasedUntilCompletion(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond, CancellationCheckInterval: 50 * time.Millisecond, ShutdownTimeout: 2 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("shutdown.complete", WithTimeout(5*time.Second), WithRetry(NoRetry{}))
+	started, release := make(chan struct{}), make(chan struct{})
+	if err := Handle(s, d, func(context.Context, string) error { close(started); <-release; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	cancel()
+	time.Sleep(250 * time.Millisecond) // crosses multiple renew intervals during shutdown
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Get(context.Background(), job.ID)
+	if err != nil || current.State != StateSucceeded {
+		t.Fatalf("job=%+v err=%v", current, err)
+	}
+}
+
+func TestShutdownTimeoutLeavesJobRecoverable(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond, CancellationCheckInterval: 50 * time.Millisecond, ShutdownTimeout: 50 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("shutdown.timeout", WithTimeout(5*time.Second), WithRetry(NoRetry{}))
+	started, release := make(chan struct{}), make(chan struct{})
+	if err := Handle(s, d, func(context.Context, string) error { close(started); <-release; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, ErrShutdownTimeout) {
+		t.Fatalf("shutdown error=%v", err)
+	}
+	close(release)
+	current, err := s.Get(context.Background(), job.ID)
+	if err != nil || current.State != StateRunning {
+		t.Fatalf("job=%+v err=%v", current, err)
+	}
+}
+
+func TestCancelledReadyMessageIsDeletedFromStream(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Role: RoleWorker, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("cancel.ready")
+	job, err := Enqueue(s, context.Background(), d, "payload")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Cancel(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	eventually(t, time.Second, func() bool { return client.XLen(context.Background(), s.store.keys.ready()).Val() == 0 })
+	cancel()
+	<-done
+}
+
+func TestMaintenanceLeaseHasSingleOwner(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	store := store{client: client, keys: newKeys(namespace)}
+	first, err := store.acquireMaintenance(context.Background(), "one", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.acquireMaintenance(context.Background(), "two", time.Second)
+	if err != nil || !first || second {
+		t.Fatalf("first=%v second=%v err=%v", first, second, err)
+	}
+}
+
+func TestScheduleCatalogIncludesInactiveStates(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := Define[string]("cron.catalog")
+	paused, _ := ScheduleCron(s, context.Background(), d, "one", "@every 1h", time.UTC)
+	cancelled, _ := ScheduleCron(s, context.Background(), d, "two", "@every 1h", time.UTC)
+	if err := s.PauseSchedule(context.Background(), paused.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelSchedule(context.Background(), cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	all, err := s.ListSchedules(context.Background(), ScheduleQuery{Limit: 10})
+	if err != nil || len(all) != 2 {
+		t.Fatalf("all=%+v err=%v", all, err)
+	}
+	items, err := s.ListSchedules(context.Background(), ScheduleQuery{Limit: 10, State: ScheduleStatePaused})
+	if err != nil || len(items) != 1 || items[0].ID != paused.ID {
+		t.Fatalf("paused=%+v err=%v", items, err)
+	}
+}
+
+func TestDeadTypeQueryAppliesOffsetAfterGlobalFiltering(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i, typ := range []string{"a", "b", "a", "b", "a"} {
+		id := fmt.Sprintf("dead-%d", i)
+		if err := client.HSet(ctx, s.store.keys.job(id), "id", id, "type", typ, "state", string(StateDead)).Err(); err != nil {
+			t.Fatal(err)
+		}
+		if err := client.ZAdd(ctx, s.store.keys.dead(), redis.Z{Score: float64(i), Member: id}).Err(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	jobs, err := s.QueryDead(ctx, DeadQuery{Offset: 1, Limit: 2, Type: "a"})
+	if err != nil || len(jobs) != 2 || jobs[0].ID != "dead-2" || jobs[1].ID != "dead-0" {
+		t.Fatalf("jobs=%+v err=%v", jobs, err)
+	}
+}
+
+func BenchmarkBatchEnqueue(b *testing.B) {
+	client := testRedis(b)
+	namespace := fmt.Sprintf("scheduler-bench-%d", time.Now().UnixNano())
+	b.Cleanup(func() { cleanup(b, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer s.Close()
+	d := Define[int]("bench.job")
+	payloads := make([]int, 100)
+	b.ResetTimer()
+	for range b.N {
+		results := BatchEnqueue(s, context.Background(), d, payloads)
+		for _, result := range results {
+			if result.Err != nil {
+				b.Fatal(result.Err)
+			}
+		}
+	}
+}
+
+func testRedis(t testing.TB) *redis.Client {
+	t.Helper()
+	addr := os.Getenv("REDIS_ADDR")
+	if addr == "" {
+		addr = "localhost:6379"
+	}
+	password := os.Getenv("REDIS_PASSWORD")
+	if password == "" {
+		password = "12345678"
+	}
+	client := redis.NewClient(&redis.Options{Addr: addr, Password: password})
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	if err := client.Ping(ctx).Err(); err != nil {
+		client.Close()
+		if os.Getenv("SCHEDULER_INTEGRATION_REQUIRED") == "1" {
+			t.Fatalf("required Redis integration unavailable: %v", err)
+		}
+		t.Skipf("redis unavailable: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+	return client
+}
+
+func cleanup(t testing.TB, client *redis.Client, namespace string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	pattern := "scheduler:{" + namespace + "}:*"
+	var cursor uint64
+	for {
+		keys, next, err := client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
 			return
 		}
 		if len(keys) > 0 {
-			if err := rdb.Del(ctx, keys...).Err(); err != nil {
-				t.Logf("cleanup del failed: %v", err)
-				return
-			}
+			_ = client.Del(ctx, keys...).Err()
 		}
 		cursor = next
 		if cursor == 0 {
@@ -243,505 +984,14 @@ func cleanupNamespace(t *testing.T, rdb *redis.Client, namespace string) {
 	}
 }
 
-// testRedisClient 获取测试用 Redis 客户端，不可用则 Skip
-func testRedisClient(t *testing.T) *redis.Client {
+func eventually(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
-	redisAddr := os.Getenv("REDIS_ADDR")
-	if redisAddr == "" {
-		redisAddr = "localhost:6379"
-	}
-	redisPassword := os.Getenv("REDIS_PASSWORD")
-	if redisPassword == "" {
-		redisPassword = "12345678"
-	}
-
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     redisAddr,
-		Password: redisPassword,
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		t.Skipf("redis not available at %s: %v", redisAddr, err)
-	}
-	return rdb
-}
-
-// newTestScheduler 创建测试用调度器，带常用默认值
-func newTestScheduler(t *testing.T, rdb *redis.Client, extraOpts ...Option) (*Scheduler, string) {
-	t.Helper()
-	namespace := "test-" + uuid.NewString()[:8]
-
-	baseOpts := []Option{
-		WithRedisClient(rdb),
-		WithNamespace(namespace),
-		WithWorkerCount(1),
-		WithWorkerConcurrency(2),
-		WithScanInterval(20 * time.Millisecond),
-		WithBatchSize(20),
-		WithDeduplication(false, 0),
-		WithDLQ(true, 100),
-		WithMetrics(false),
-		WithHealth(false),
-		func(o *Options) {
-			o.Worker.LeaseTTL = 2 * time.Second
-			o.Worker.RenewInterval = 200 * time.Millisecond
-			o.Worker.ShutdownGracePeriod = 2 * time.Second
-			o.LockTimeout = 2 * time.Second
-			o.Retry.BaseDelay = 50 * time.Millisecond
-			o.Retry.MaxDelay = 500 * time.Millisecond
-			o.Retry.Multiplier = 2.0
-			o.Retry.Jitter = false
-		},
-	}
-	baseOpts = append(baseOpts, extraOpts...)
-
-	s, err := New(baseOpts...)
-	if err != nil {
-		t.Fatalf("New scheduler: %v", err)
-	}
-
-	t.Cleanup(func() {
-		cleanupNamespace(t, rdb, namespace)
-	})
-
-	if q, ok := s.queue.(*Queue); ok {
-		_ = q.Clear(context.Background())
-	}
-
-	return s, namespace
-}
-
-type testPayloadMsg struct {
-	Value string `json:"value"`
-}
-
-// ─── Retry + DLQ ───────────────────────────────────────────
-
-func TestScheduler_RetryAndDLQ(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb)
-
-	var attempts atomic.Int64
-	errFail := errors.New("always fail")
-
-	if err := SchedulerRegister[testPayloadMsg](s, "retry.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		attempts.Add(1)
-		return errFail
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutCtx)
-	})
-
-	// maxRetry=2 → handler 被调用 2 次后进入 DLQ
-	taskID, err := Submit[testPayloadMsg](s, ctx, "retry.test", testPayloadMsg{Value: "fail"},
-		WithTaskMaxRetry(2),
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(2*time.Second),
-	)
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-
-	// 等待任务进入 DLQ（最多等 10s）
-	deadline := time.After(10 * time.Second)
-	for {
-		select {
-		case <-deadline:
-			t.Fatalf("timeout waiting for task to enter DLQ, attempts=%d, taskID=%s", attempts.Load(), taskID)
-		default:
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if fn() {
+			return
 		}
-
-		count, err := s.dlq.Count(ctx)
-		if err == nil && count > 0 {
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(10 * time.Millisecond)
 	}
-
-	// 验证 handler 被调用了 maxRetry 次
-	got := attempts.Load()
-	if got != 2 {
-		t.Fatalf("expected 2 attempts, got %d", got)
-	}
-
-	// 验证任务元数据已删除（进入 DLQ 后删除）
-	_, err = s.GetTaskInfo(ctx, taskID)
-	if err != ErrTaskNotFound {
-		t.Fatalf("expected task metadata deleted after DLQ, err=%v", err)
-	}
-}
-
-// ─── Delayed Task ──────────────────────────────────────────
-
-func TestScheduler_DelayedTask(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb)
-
-	executed := make(chan time.Time, 1)
-	if err := SchedulerRegister[testPayloadMsg](s, "delay.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		executed <- time.Now()
-		return nil
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutCtx)
-	})
-
-	// 延迟队列使用 Unix 秒级精度 (ScheduleAt.Unix())，因此实际执行时间
-	// 可能比请求的 delay 短 ~1 秒。使用 2 秒延迟 + 1 秒最小期望。
-	submitTime := time.Now()
-	delay := 2 * time.Second
-	_, err := Submit[testPayloadMsg](s, ctx, "delay.test", testPayloadMsg{Value: "delayed"},
-		WithDelay(delay),
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(5*time.Second),
-		WithTaskMaxRetry(0),
-	)
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-
-	select {
-	case execTime := <-executed:
-		elapsed := execTime.Sub(submitTime)
-		if elapsed < 1*time.Second {
-			t.Fatalf("task executed too early: elapsed=%v, expected >= 1s", elapsed)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatalf("timeout waiting for delayed task")
-	}
-}
-
-// ─── Deduplication ─────────────────────────────────────────
-
-func TestScheduler_Deduplication(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb, WithDeduplication(true, 5*time.Second))
-
-	var calls atomic.Int64
-	if err := SchedulerRegister[testPayloadMsg](s, "dedup.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		calls.Add(1)
-		return nil
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutCtx)
-	})
-
-	// 提交两次相同 dedup key
-	_, err := Submit[testPayloadMsg](s, ctx, "dedup.test", testPayloadMsg{Value: "a"},
-		WithTaskDeduplication("same-key", 5*time.Second),
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(2*time.Second),
-		WithTaskMaxRetry(0),
-	)
-	if err != nil {
-		t.Fatalf("first submit: %v", err)
-	}
-
-	_, err = Submit[testPayloadMsg](s, ctx, "dedup.test", testPayloadMsg{Value: "b"},
-		WithTaskDeduplication("same-key", 5*time.Second),
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(2*time.Second),
-		WithTaskMaxRetry(0),
-	)
-	if !errors.Is(err, ErrTaskDuplicate) {
-		t.Fatalf("expected ErrTaskDuplicate, got %v", err)
-	}
-
-	// 等待第一个任务执行完成
-	time.Sleep(1 * time.Second)
-
-	if calls.Load() != 1 {
-		t.Fatalf("expected 1 handler call, got %d", calls.Load())
-	}
-}
-
-// ─── Batch Submit ──────────────────────────────────────────
-
-func TestScheduler_BatchSubmit(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb)
-
-	var received sync.Map
-	var count atomic.Int64
-
-	if err := SchedulerRegister[testPayloadMsg](s, "batch.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		received.Store(p.Value, true)
-		count.Add(1)
-		return nil
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutCtx)
-	})
-
-	payloads := []testPayloadMsg{
-		{Value: "batch-1"},
-		{Value: "batch-2"},
-		{Value: "batch-3"},
-	}
-
-	taskIDs, err := BatchSubmit[testPayloadMsg](s, ctx, "batch.test", payloads,
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(2*time.Second),
-		WithTaskMaxRetry(0),
-	)
-	if err != nil {
-		t.Fatalf("BatchSubmit: %v", err)
-	}
-	if len(taskIDs) != 3 {
-		t.Fatalf("expected 3 task IDs, got %d", len(taskIDs))
-	}
-
-	deadline := time.After(5 * time.Second)
-	for count.Load() < 3 {
-		select {
-		case <-deadline:
-			t.Fatalf("timeout waiting for all batch tasks, count=%d", count.Load())
-		default:
-			time.Sleep(50 * time.Millisecond)
-		}
-	}
-
-	for _, p := range payloads {
-		if _, ok := received.Load(p.Value); !ok {
-			t.Fatalf("missing payload: %s", p.Value)
-		}
-	}
-}
-
-// ─── Task Timeout ──────────────────────────────────────────
-
-func TestScheduler_TaskTimeout(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb)
-
-	handlerStarted := make(chan struct{})
-	handlerCtxDone := make(chan struct{})
-
-	if err := SchedulerRegister[testPayloadMsg](s, "timeout.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		close(handlerStarted)
-		<-ctx.Done()
-		close(handlerCtxDone)
-		return ctx.Err()
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutCtx)
-	})
-
-	_, err := Submit[testPayloadMsg](s, ctx, "timeout.test", testPayloadMsg{Value: "slow"},
-		WithTaskTimeout(200*time.Millisecond),
-		WithPriority(PriorityNormal),
-		WithTaskMaxRetry(0),
-	)
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-
-	select {
-	case <-handlerStarted:
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timeout waiting for handler to start")
-	}
-
-	select {
-	case <-handlerCtxDone:
-		// context was cancelled due to timeout — correct
-	case <-time.After(3 * time.Second):
-		t.Fatalf("timeout waiting for task context to be cancelled")
-	}
-}
-
-// ─── Cancel Task ───────────────────────────────────────────
-
-func TestScheduler_CancelTask(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb)
-
-	var calls atomic.Int64
-	if err := SchedulerRegister[testPayloadMsg](s, "cancel.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		calls.Add(1)
-		return nil
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-	if err := s.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	t.Cleanup(func() {
-		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = s.Shutdown(shutCtx)
-	})
-
-	// 延迟 10 秒执行，我们有时间取消
-	taskID, err := Submit[testPayloadMsg](s, ctx, "cancel.test", testPayloadMsg{Value: "cancel-me"},
-		WithDelay(10*time.Second),
-		WithPriority(PriorityNormal),
-		WithTaskTimeout(2*time.Second),
-		WithTaskMaxRetry(0),
-	)
-	if err != nil {
-		t.Fatalf("Submit: %v", err)
-	}
-
-	// 取消
-	if err := s.CancelTask(ctx, taskID); err != nil {
-		t.Fatalf("CancelTask: %v", err)
-	}
-
-	// 验证状态
-	info, err := s.GetTaskInfo(ctx, taskID)
-	if err != nil {
-		t.Fatalf("GetTaskInfo: %v", err)
-	}
-	if info.Status != StatusCancelled {
-		t.Fatalf("expected status %s, got %s", StatusCancelled, info.Status)
-	}
-
-	// 等一段时间确认 handler 没被调用
-	time.Sleep(500 * time.Millisecond)
-	if calls.Load() != 0 {
-		t.Fatalf("expected 0 handler calls, got %d", calls.Load())
-	}
-}
-
-// ─── Priority Order ────────────────────────────────────────
-
-func TestScheduler_PriorityOrder(t *testing.T) {
-	rdb := testRedisClient(t)
-	// 不启动 worker，手工验证 pop 顺序
-	s, _ := newTestScheduler(t, rdb)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	q, ok := s.queue.(*Queue)
-	if !ok {
-		t.Skip("queue is not *Queue")
-	}
-	q.SetConsumer("test-consumer")
-
-	// 先提交 low，再 normal，再 high
-	for _, p := range []struct {
-		id       string
-		priority Priority
-	}{
-		{"low-1", PriorityLow},
-		{"normal-1", PriorityNormal},
-		{"high-1", PriorityHigh},
-	} {
-		if err := q.AddReady(ctx, p.id, p.priority); err != nil {
-			t.Fatalf("AddReady(%s): %v", p.id, err)
-		}
-	}
-
-	// PopReady 应该按 high → normal → low 顺序
-	expected := []string{"high-1", "normal-1", "low-1"}
-	for _, exp := range expected {
-		taskID, _, _, err := q.PopReady(ctx, 1)
-		if err != nil {
-			t.Fatalf("PopReady: %v", err)
-		}
-		if taskID != exp {
-			t.Fatalf("expected %s, got %s", exp, taskID)
-		}
-	}
-}
-
-// ─── Concurrent Dedup (SetNX atomicity) ────────────────────
-
-func TestScheduler_ConcurrentDedup(t *testing.T) {
-	rdb := testRedisClient(t)
-	s, _ := newTestScheduler(t, rdb, WithDeduplication(true, 5*time.Second))
-
-	if err := SchedulerRegister[testPayloadMsg](s, "cdedup.test", HandlerFunc[testPayloadMsg](func(ctx context.Context, p testPayloadMsg) error {
-		return nil
-	})); err != nil {
-		t.Fatalf("register: %v", err)
-	}
-
-	ctx := context.Background()
-
-	// 并发提交 20 个相同 dedup key 的任务
-	const n = 20
-	var (
-		wg        sync.WaitGroup
-		successes atomic.Int64
-		dupes     atomic.Int64
-	)
-
-	for i := 0; i < n; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			_, err := Submit[testPayloadMsg](s, ctx, "cdedup.test",
-				testPayloadMsg{Value: fmt.Sprintf("v%d", i)},
-				WithTaskDeduplication("concurrent-key", 5*time.Second),
-				WithPriority(PriorityNormal),
-				WithTaskTimeout(2*time.Second),
-				WithTaskMaxRetry(0),
-			)
-			if err == nil {
-				successes.Add(1)
-			} else if errors.Is(err, ErrTaskDuplicate) {
-				dupes.Add(1)
-			}
-		}(i)
-	}
-	wg.Wait()
-
-	// 正好 1 个成功，其余全部重复
-	if successes.Load() != 1 {
-		t.Fatalf("expected exactly 1 success, got %d (dupes=%d)", successes.Load(), dupes.Load())
-	}
-	if successes.Load()+dupes.Load() != int64(n) {
-		t.Fatalf("expected %d total, got success=%d dupes=%d", n, successes.Load(), dupes.Load())
-	}
+	t.Fatal("condition was not met")
 }
