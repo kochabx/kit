@@ -1,123 +1,114 @@
 # rate
 
-基于 Redis + Lua 的分布式限流器，提供三种算法实现，统一接口。
+`rate` 提供基于 Redis 的分布式限流器。限流判定及结果时间均在 Redis
+服务端原子计算，不受应用节点时钟偏差影响。
 
-## 特性
+## 算法
 
-- **统一接口** — 所有算法实现同一个 `Limiter` 接口，可互换使用
-- **key 参数化** — 单个 Limiter 实例可服务多个 key（per-user、per-IP 等），运行时动态传入
-- **显式错误返回** — 调用方自行决定 fail-open 或 fail-closed 策略
-- **结构化结果** — 返回 `Result`，包含剩余配额、重试等待时间、重置时间等元信息
-- **原子操作** — 所有限流逻辑封装在 Lua 脚本中，Redis 端原子执行
-- **毫秒级精度** — Token Bucket 和 Sliding Window 均使用毫秒时间戳
+| 算法 | Redis 数据结构 | 特点 |
+|---|---|---|
+| 令牌桶 | HASH | 按固定速率补充令牌，支持突发流量 |
+| 固定窗口 | HASH | 开销较低，按自然时间边界划分窗口 |
+| 滑动窗口 | ZSET | 精确记录带权事件，不存在固定窗口的边界突发 |
 
-## 算法对比
-
-| 算法 | Redis 数据结构 | 精度 | 适用场景 |
-|---|---|---|---|
-| **Token Bucket** | HASH | 毫秒 | 需要平滑限流 + 允许突发的场景（API 网关） |
-| **Sliding Window** | ZSET | 毫秒 | 需要精确窗口统计的场景（计费、配额） |
-| **Fixed Window** | STRING (INCR) | 秒 | 简单场景，最轻量（窗口边界处可能出现 2x 突发） |
-
-## 接口
+所有算法均实现以下接口：
 
 ```go
 type Limiter interface {
-    Allow(ctx context.Context, key string, n int) (Result, error)
-}
-
-type Result struct {
-    Allowed    bool          // 是否放行
-    Remaining  int64         // 剩余配额
-    Limit      int64         // 总配额上限
-    RetryAfter time.Duration // 被拒绝时建议的重试等待时间
-    ResetAt    time.Time     // 配额重置时间点
+    AllowN(ctx context.Context, key string, n int64) (Result, error)
 }
 ```
 
-## 使用示例
+`n` 表示本次申请的配额数量，必须大于零。构造函数负责校验限流参数。
+Redis 错误会直接返回，由调用方决定故障时放行还是拒绝。
 
-### Token Bucket
+三个具体限流器还提供 `Allow(ctx, key)` 便捷方法，默认申请一个配额；
+`Limiter` 接口仅保留不可再简化的核心能力 `AllowN`。
 
-令牌桶：以固定速率填充令牌，支持突发流量消耗已积累的令牌。
+## 使用方式
+
+### 令牌桶
 
 ```go
-// 桶容量 100，每秒填充 10 个令牌
-limiter := rate.NewTokenBucketLimiter(redisClient, 100, 10)
-
-result, err := limiter.Allow(ctx, "user:123", 1)
+limiter, err := rate.NewTokenBucket(
+    redisClient,
+    10,  // 每秒补充的令牌数
+    100, // 最大突发容量
+    rate.WithKeyPrefix("orders"),
+)
 if err != nil {
-    // Redis 故障，自行决定策略
-    log.Warn().Err(err).Msg("rate limiter error")
-    // fail-open: 放行
-    // fail-closed: 拒绝
+    return err
+}
+
+result, err := limiter.Allow(ctx, "user:123")
+if err != nil {
+    return err
 }
 if !result.Allowed {
-    // 被限流，可使用 result.RetryAfter 告知客户端
-    fmt.Printf("rate limited, retry after %v\n", result.RetryAfter)
+    return fmt.Errorf("请求被限流，请在 %s 后重试", result.RetryAfter)
 }
 ```
 
-### Sliding Window
-
-滑动窗口：在滑动的时间窗口内精确计数，无边界突发问题。
+### 固定窗口
 
 ```go
-// 10 秒窗口，最多 100 个请求
-limiter := rate.NewSlidingWindowLimiter(redisClient, 10*time.Second, 100)
-
-result, err := limiter.Allow(ctx, "ip:10.0.0.1", 1)
+// 60 秒内最多允许 60 个配额
+limiter, err := rate.NewFixedWindow(redisClient, 60, 60)
 ```
 
-### Fixed Window
-
-固定窗口：最简单的计数器方案，窗口到期后自动重置。
+### 滑动窗口
 
 ```go
-// 1 分钟窗口，最多 60 个请求
-limiter := rate.NewFixedWindowLimiter(redisClient, time.Minute, 60)
-
-result, err := limiter.Allow(ctx, "api:/v1/orders", 1)
+// 10 秒内最多允许 100 个配额
+limiter, err := rate.NewSlidingWindow(redisClient, 100, 10)
 ```
 
-### 批量请求
+## Redis key
 
-所有限流器都支持一次请求多个配额：
+默认 Redis key 前缀为 `rate`，可通过 `WithKeyPrefix` 修改：
 
 ```go
-// 一次请求 5 个配额
-result, err := limiter.Allow(ctx, "user:123", 5)
+limiter, err := rate.NewFixedWindow(
+    redisClient,
+    60,
+    60,
+    rate.WithKeyPrefix("orders"),
+)
 ```
 
-## 错误处理
+Redis key 包含前缀、算法、限流参数和业务 key，例如：
 
-`Allow` 返回 `error` 而非静默失败，典型策略：
+```text
+orders:fixed-window:60:60:user:123
+```
+
+不同算法和限流参数不会共享状态。每个 Lua 脚本只操作一个 Redis key，
+可用于 Redis Cluster。
+
+## 返回结果
 
 ```go
-result, err := limiter.Allow(ctx, key, 1)
-if err != nil {
-    // fail-open: Redis 故障时放行
-    return true
+type Result struct {
+    Allowed    bool
+    Remaining  int64
+    Limit      int64
+    RetryAfter time.Duration
+    ResetAt    time.Time
 }
-return result.Allowed
 ```
 
-## 实现细节
+- `Allowed`：是否允许本次请求。
+- `Limit`：配额上限。
+- `Remaining`：判定完成后的剩余配额；拒绝的请求不会消耗配额。
+- `RetryAfter`：再次申请相同数量配额前的最短等待时间；请求被允许时为零。
+- `ResetAt`：当前已消耗配额预计完全恢复的时间。
 
-### Token Bucket
+## 测试
 
-- 使用单个 HASH key 存储 `tokens`（当前令牌数）和 `ts`（上次更新时间戳）
-- 每次请求时根据经过时间补充令牌：`filled = min(capacity, tokens + elapsed_ms * rate / 1000)`
-- TTL 自动设为填满时间的 2 倍，避免无用 key 堆积
+单元测试不依赖 Redis。需要运行真实 Redis 集成测试时，设置以下环境变量：
 
-### Sliding Window
-
-- 使用 ZSET，score 为毫秒时间戳，member 为唯一标识
-- 每次请求：`ZREMRANGEBYSCORE` 清理过期 → `ZCARD` 计数 → 条件 `ZADD`
-- 操作复杂度 O(log n)，适合高流量场景
-
-### Fixed Window
-
-- 使用 `INCR` + `EXPIRE`，最少的 Redis 命令开销
-- 首次写入时设置窗口过期时间
-- 注意：窗口边界处可能出现最多 2x 的瞬时流量
+```bash
+RATE_REDIS_ADDR=localhost:6379 \
+RATE_REDIS_PASSWORD=secret \
+go test ./core/rate -count=1
+```
