@@ -18,7 +18,7 @@ func TestNewServer_Defaults(t *testing.T) {
 	require.NotNil(t, s)
 	assert.NotNil(t, s.Handler())
 	assert.Equal(t, defaultAddr, s.srv.Addr)
-	assert.Equal(t, defaultName, s.name)
+	assert.Equal(t, defaultName, s.opts.name)
 	assert.Equal(t, defaultReadTimeout, s.srv.ReadTimeout)
 	assert.Equal(t, defaultWriteTimeout, s.srv.WriteTimeout)
 	assert.Equal(t, defaultIdleTimeout, s.srv.IdleTimeout)
@@ -32,15 +32,15 @@ func TestNewServer_CustomOptions(t *testing.T) {
 		WithTimeout(5*time.Second, 15*time.Second, 30*time.Second),
 	)
 	assert.Equal(t, ":9090", s.srv.Addr)
-	assert.Equal(t, "api", s.name)
+	assert.Equal(t, "api", s.opts.name)
 	assert.Equal(t, 5*time.Second, s.srv.ReadTimeout)
 	assert.Equal(t, 15*time.Second, s.srv.WriteTimeout)
 	assert.Equal(t, 30*time.Second, s.srv.IdleTimeout)
 }
 
-func TestNewServer_InvalidAddrFallback(t *testing.T) {
+func TestNewServer_AddrPassedThrough(t *testing.T) {
 	s := NewServer(http.NotFoundHandler(), WithAddr("not-valid"))
-	assert.Equal(t, defaultAddr, s.srv.Addr)
+	assert.Equal(t, "not-valid", s.srv.Addr)
 }
 
 func TestServer_HealthEndpoint(t *testing.T) {

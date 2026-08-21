@@ -2,7 +2,6 @@ package grpc
 
 import (
 	"context"
-	"crypto/tls"
 	"net"
 
 	"google.golang.org/grpc"
@@ -27,73 +26,15 @@ type Server struct {
 	lis  net.Listener
 }
 
-// config holds the builder state for NewServer.
-type config struct {
-	addr               string
-	name               string
-	tlsConfig          *tls.Config
-	unaryInterceptors  []grpc.UnaryServerInterceptor
-	streamInterceptors []grpc.StreamServerInterceptor
-	serverOptions      []grpc.ServerOption
-}
-
-// Option configures a Server.
-type Option func(*config)
-
-func defaultConfig() config {
-	return config{
-		addr: defaultAddr,
-		name: defaultName,
-	}
-}
-
-// WithAddr sets the TCP address the server listens on (e.g. ":50051").
-func WithAddr(addr string) Option {
-	return func(c *config) { c.addr = addr }
-}
-
-// WithName sets the server name, used in log output.
-func WithName(name string) Option {
-	return func(c *config) { c.name = name }
-}
-
-// WithTLSConfig enables TLS using the provided *tls.Config.
-func WithTLSConfig(tlsCfg *tls.Config) Option {
-	return func(c *config) { c.tlsConfig = tlsCfg }
-}
-
-// WithUnaryInterceptor appends unary server interceptors applied in order.
-func WithUnaryInterceptor(interceptors ...grpc.UnaryServerInterceptor) Option {
-	return func(c *config) {
-		c.unaryInterceptors = append(c.unaryInterceptors, interceptors...)
-	}
-}
-
-// WithStreamInterceptor appends stream server interceptors applied in order.
-func WithStreamInterceptor(interceptors ...grpc.StreamServerInterceptor) Option {
-	return func(c *config) {
-		c.streamInterceptors = append(c.streamInterceptors, interceptors...)
-	}
-}
-
-// WithServerOption appends raw grpc.ServerOption values.
-func WithServerOption(opts ...grpc.ServerOption) Option {
-	return func(c *config) {
-		c.serverOptions = append(c.serverOptions, opts...)
-	}
-}
-
 // NewServer creates a gRPC server with the provided options.
 // Register service implementations on Srv() before calling Run.
 func NewServer(opts ...Option) *Server {
-	cfg := defaultConfig()
+	cfg := options{
+		addr: defaultAddr,
+		name: defaultName,
+	}
 	for _, opt := range opts {
 		opt(&cfg)
-	}
-
-	if !transport.ValidAddress(cfg.addr) {
-		log.Warn().Msgf("invalid address %q, falling back to %s", cfg.addr, defaultAddr)
-		cfg.addr = defaultAddr
 	}
 
 	serverOpts := cfg.serverOptions
