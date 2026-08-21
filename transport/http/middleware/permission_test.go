@@ -40,9 +40,8 @@ func TestPermission_Deny(t *testing.T) {
 	mw := Permission(PermissionConfig{Checker: checker})
 
 	w := do(mw(okHandler), http.MethodGet, "/resource", nil)
-	// Fail 写入 HTTP 200 + 业务码 403
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d (Fail uses business code)", w.Code, http.StatusOK)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 	if !containsString(w.Body.String(), `"code":403`) {
 		t.Errorf("body should contain code 403, got: %s", w.Body.String())
@@ -130,8 +129,8 @@ func TestRoleBasedChecker_Deny(t *testing.T) {
 	handler := withContextValue("claims", claims)(mw(okHandler))
 
 	w := do(handler, http.MethodGet, "/", nil)
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d (Fail uses business code)", w.Code, http.StatusOK)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 	if !containsString(w.Body.String(), `"code":403`) {
 		t.Errorf("viewer should be forbidden, got: %s", w.Body.String())

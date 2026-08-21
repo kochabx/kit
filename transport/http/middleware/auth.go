@@ -117,7 +117,7 @@ func Auth[T Claims](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 	}
 	if cfg.ErrorHandler == nil {
 		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			kithttp.Fail(w, http.StatusUnauthorized, err)
+			kithttp.Fail(w, http.StatusUnauthorized, http.StatusUnauthorized, err)
 		}
 	}
 

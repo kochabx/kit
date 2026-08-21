@@ -60,7 +60,7 @@ func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 
 	if cfg.ErrorHandler == nil {
 		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			kithttp.Fail(w, http.StatusBadRequest, ErrDecryptFailed)
+			kithttp.Fail(w, http.StatusBadRequest, http.StatusBadRequest, ErrDecryptFailed)
 		}
 	}
 

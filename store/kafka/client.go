@@ -231,7 +231,6 @@ func (c *Client) Close() error {
 
 	// 关闭同步生产者
 	for _, w := range c.syncProducers {
-		w := w
 		eg.Go(func() error {
 			return w.Close()
 		})
@@ -239,7 +238,6 @@ func (c *Client) Close() error {
 
 	// 关闭异步生产者
 	for _, w := range c.asyncProducers {
-		w := w
 		eg.Go(func() error {
 			return w.Close()
 		})
@@ -247,7 +245,6 @@ func (c *Client) Close() error {
 
 	// 关闭消费者
 	for _, r := range c.consumers {
-		r := r
 		eg.Go(func() error {
 			return r.Close()
 		})

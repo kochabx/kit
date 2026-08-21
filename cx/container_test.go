@@ -606,14 +606,12 @@ func TestConcurrentGet(t *testing.T) {
 	require.NoError(t, c.Start(context.Background()))
 
 	var wg sync.WaitGroup
-	for i := 0; i < 100; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 100 {
+		wg.Go(func() {
 			v, err := Get[int](c, "x")
 			assert.NoError(t, err)
 			assert.Equal(t, 42, v)
-		}()
+		})
 	}
 	wg.Wait()
 }

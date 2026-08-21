@@ -1,5 +1,7 @@
 package httpx
 
+import "slices"
+
 import "net/http"
 
 // RoundTripFunc 把函数适配为 http.RoundTripper。
@@ -29,8 +31,8 @@ func chain(base http.RoundTripper, mws []Middleware) http.RoundTripper {
 	}
 	final := RoundTripFunc(base.RoundTrip)
 	// 反向迭代，使第一个中间件位于最外层。
-	for i := len(mws) - 1; i >= 0; i-- {
-		final = mws[i](final)
+	for _, mw := range slices.Backward(mws) {
+		final = mw(final)
 	}
 	return final
 }

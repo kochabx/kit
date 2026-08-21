@@ -161,10 +161,7 @@ func (a *CachedAuthenticator) Revoke(ctx context.Context, tokenString string) er
 	exp, _ := claims.GetExpirationTime()
 	var ttl time.Duration
 	if exp != nil {
-		ttl = time.Until(exp.Time)
-		if ttl < 0 {
-			ttl = 0
-		}
+		ttl = max(time.Until(exp.Time), 0)
 	}
 
 	// 添加到黑名单
@@ -188,10 +185,7 @@ func (a *CachedAuthenticator) RevokeAll(ctx context.Context, subject string) err
 	}
 
 	for _, session := range sessions {
-		ttl := time.Until(session.ExpiresAt)
-		if ttl < 0 {
-			ttl = 0
-		}
+		ttl := max(time.Until(session.ExpiresAt), 0)
 
 		if err := a.blacklist.Add(ctx, session.JTI, ttl); err != nil {
 			return fmt.Errorf("add to blacklist: %w", err)
@@ -219,10 +213,7 @@ func (a *CachedAuthenticator) RevokeDevice(ctx context.Context, subject, deviceI
 
 	for _, session := range sessions {
 		if session.DeviceID == deviceID {
-			ttl := time.Until(session.ExpiresAt)
-			if ttl < 0 {
-				ttl = 0
-			}
+			ttl := max(time.Until(session.ExpiresAt), 0)
 
 			if err := a.blacklist.Add(ctx, session.JTI, ttl); err != nil {
 				return fmt.Errorf("add to blacklist: %w", err)

@@ -20,7 +20,7 @@ func TestGoogleAuthenticator_GenerateSecret(t *testing.T) {
 
 	// Test multiple generations to ensure uniqueness
 	secrets := make(map[string]bool)
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		secret := ga.GenerateSecret()
 		if secrets[secret] {
 			t.Errorf("Generated duplicate secret: %s", secret)
@@ -131,7 +131,7 @@ func BenchmarkGenerateSecret(b *testing.B) {
 	ga := NewGoogleAuthenticator()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ga.GenerateSecret()
 	}
 }
@@ -141,7 +141,7 @@ func BenchmarkGenerateCode(b *testing.B) {
 	secret := ga.GenerateSecret()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ga.GenerateCode(secret)
 	}
 }
@@ -152,7 +152,7 @@ func BenchmarkValidateCode(b *testing.B) {
 	code, _ := ga.GenerateCode(secret)
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		ga.ValidateCode(secret, code)
 	}
 }

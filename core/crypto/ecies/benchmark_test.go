@@ -20,7 +20,7 @@ func BenchmarkEncrypt(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := Encrypt(publicKey, plaintext)
 		if err != nil {
 			b.Fatalf("Encryption failed: %v", err)
@@ -47,7 +47,7 @@ func BenchmarkDecrypt(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := Decrypt(privateKey, ciphertext)
 		if err != nil {
 			b.Fatalf("Decryption failed: %v", err)
@@ -59,7 +59,7 @@ func BenchmarkDecrypt(b *testing.B) {
 func BenchmarkKeyGeneration(b *testing.B) {
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		key, err := GenerateKey()
 		if err != nil {
 			b.Fatalf("Key generation failed: %v", err)
@@ -80,7 +80,7 @@ func BenchmarkECDH(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, err := privateKey1.Encapsulate(publicKey2)
 		if err != nil {
 			b.Fatalf("ECDH failed: %v", err)
@@ -111,7 +111,7 @@ func BenchmarkEncryptSizes(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, err := Encrypt(publicKey, plaintext)
 				if err != nil {
 					b.Fatalf("Encryption failed: %v", err)
@@ -145,7 +145,7 @@ func BenchmarkDecryptSizes(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
 
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				_, err := Decrypt(privateKey, ciphertext)
 				if err != nil {
 					b.Fatalf("Decryption failed: %v", err)
@@ -163,14 +163,14 @@ func BenchmarkPublicKeyBytes(b *testing.B) {
 
 	b.Run("uncompressed", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = publicKey.Bytes(false)
 		}
 	})
 
 	b.Run("compressed", func(b *testing.B) {
 		b.ReportAllocs()
-		for i := 0; i < b.N; i++ {
+		for b.Loop() {
 			_ = publicKey.Bytes(true)
 		}
 	})
@@ -186,7 +186,7 @@ func BenchmarkKeyEquality(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = key1.Equals(key2)
 	}
 }

@@ -340,14 +340,14 @@ func TestApplyNilStructPointerWithDefaults(t *testing.T) {
 
 // Benchmark tests
 func BenchmarkApply(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		mock := &tagMock{}
 		_ = Apply(mock)
 	}
 }
 
 func BenchmarkApplyComplex(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		mock := &mockWithSlice{
 			Apis: []Api{
 				{Name: "api1", Url: "http://example.com"},
@@ -362,7 +362,7 @@ func BenchmarkApplyCached(b *testing.B) {
 	// First call populates cache; subsequent calls benefit from cached struct metadata
 	_ = Apply(&tagMock{})
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		mock := &tagMock{}
 		_ = Apply(mock)
 	}

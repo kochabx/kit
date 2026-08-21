@@ -39,7 +39,7 @@ func TestDistributedLock_Integration(t *testing.T) {
 		var mu sync.Mutex
 
 		// 启动多个 goroutine 尝试获取同一个锁
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
@@ -262,8 +262,8 @@ func BenchmarkServiceRegistry_Register(b *testing.B) {
 	require.NoError(b, client.Start(context.Background()))
 	defer client.Close()
 
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	i := 0
+	for b.Loop() {
 		registry := client.NewServiceRegistry("bench-services", 30)
 		serviceID := fmt.Sprintf("service-%d", i)
 		serviceInfo := fmt.Sprintf("localhost:80%02d", i%100)
@@ -272,6 +272,7 @@ func BenchmarkServiceRegistry_Register(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
+		i++
 
 		// 清理
 		registry.Deregister(context.Background())

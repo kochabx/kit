@@ -599,7 +599,7 @@ func BenchmarkURLBuilder_Build(b *testing.B) {
 		Fragment("section")
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = builder.Build()
 	}
 }
@@ -608,7 +608,7 @@ func BenchmarkURLBuilder_AppendPath(b *testing.B) {
 	builder := NewURLBuilder().Path("/base")
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		builder.AppendPath("segment")
 		builder.path.Reset()
 		builder.path.WriteString("/base")
@@ -619,7 +619,7 @@ func BenchmarkFromURL(b *testing.B) {
 	testURL := "https://example.com:8080/api/v1?param1=value1&param2=value2#section"
 
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_, _ = FromURL(testURL)
 	}
 }

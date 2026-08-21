@@ -19,37 +19,37 @@ type Violation struct {
 	Message string
 }
 
-// ValidationError 是 Struct / Var 在有字段校验失败时返回的聚合错误。
+// Error 是 Struct / Var 在有字段校验失败时返回的聚合错误。
 //
 // 推荐通过 errors.As 提取：
 //
-//	var ve *validator.ValidationError
+//	var ve *validator.Error
 //	if errors.As(err, &ve) { … }
-type ValidationError struct {
+type Error struct {
 	violations []Violation
 	message    string
 }
 
 // Error 实现 error 接口。
-func (ve *ValidationError) Error() string { return ve.message }
+func (ve *Error) Error() string { return ve.message }
 
 // Violations 返回各字段校验错误，顺序与遇到的顺序一致。
-func (ve *ValidationError) Violations() []Violation { return ve.violations }
+func (ve *Error) Violations() []Violation { return ve.violations }
 
-// newValidationError 根据 Violation 切片构造 *ValidationError。
-func newValidationError(violations []Violation) *ValidationError {
+// newError 根据 Violation 切片构造 *Error。
+func newError(violations []Violation) *Error {
 	msgs := make([]string, len(violations))
 	for i, v := range violations {
 		msgs[i] = v.Message
 	}
-	return &ValidationError{
+	return &Error{
 		violations: violations,
 		message:    strings.Join(msgs, "; "),
 	}
 }
 
-// AsValidationError 报告 err（或其 Unwrap 链路中的某个错误）是否为 *ValidationError。
-func AsValidationError(err error) bool {
-	var ve *ValidationError
+// AsError 报告 err（或其 Unwrap 链路中的某个错误）是否为 *Error。
+func AsError(err error) bool {
+	var ve *Error
 	return errors.As(err, &ve)
 }

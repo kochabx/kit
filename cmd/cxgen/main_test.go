@@ -27,7 +27,9 @@ func makeModule(t *testing.T, modName string, pkgs map[string]string) string {
 
 	// go.mod — add replace directive for the cx stub if needed.
 	var gomod strings.Builder
-	gomod.WriteString("module " + modName + "\n\ngo 1.21\n")
+	gomod.WriteString("module ")
+	gomod.WriteString(modName)
+	gomod.WriteString("\n\ngo 1.21\n")
 	if needsCxStub && modName != cxPkg {
 		// Create a standalone cx stub module next to the test module.
 		cxRoot := filepath.Join(filepath.Dir(root), "cxstub")
@@ -43,7 +45,9 @@ func makeModule(t *testing.T, modName string, pkgs map[string]string) string {
 			t.Fatal(err)
 		}
 		gomod.WriteString("\nrequire " + cxPkg + " v0.0.0\n")
-		gomod.WriteString("replace " + cxPkg + " => " + cxRoot + "\n")
+		gomod.WriteString("replace " + cxPkg + " => ")
+		gomod.WriteString(cxRoot)
+		gomod.WriteString("\n")
 	}
 	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte(gomod.String()), 0o644); err != nil {
 		t.Fatal(err)

@@ -124,7 +124,7 @@ func TestWithMetrics(t *testing.T) {
 	}
 
 	// 执行一些命令
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		client.UniversalClient().Ping(ctx)
 	}
 
@@ -204,9 +204,9 @@ func TestConcurrentAccess(t *testing.T) {
 
 	done := make(chan bool, goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
-			for j := 0; j < commands; j++ {
+			for range commands {
 				key := "test:concurrent"
 				_ = client.UniversalClient().Incr(ctx, key).Err()
 			}
@@ -215,7 +215,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 
 	// 等待所有 goroutine 完成
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		<-done
 	}
 

@@ -12,38 +12,39 @@ import (
 )
 
 const (
-	defaultSuccessMsg = "ok"
-	defaultErrorMsg   = "failed"
+	defaultOKMsg   = "ok"
+	defaultFailMsg = "fail"
 )
 
-// Response is the standard JSON API response envelope.
+// Response defines the JSON envelope returned by HTTP handlers.
+// Code is an application-level business code and is independent of the HTTP status.
 type Response[T any] struct {
-	Code int    `json:"code"`           // business status code
-	Msg  string `json:"msg,omitempty"`  // human-readable message
-	Data T      `json:"data,omitempty"` // response payload
+	Code int    `json:"code"`           // application-level business code
+	Msg  string `json:"msg,omitempty"`  // message intended for the client
+	Data T      `json:"data,omitempty"` // successful response payload
 }
 
-// OK writes a successful JSON response to w.
-// Always returns HTTP 200, code 200, and msg "ok".
+// OK writes a successful response with HTTP status 200, business code 200,
+// message "ok", and the supplied payload. A nil writer is ignored.
 func OK[T any](w http.ResponseWriter, data T) {
 	if w == nil {
 		return
 	}
-	writeJSON(w, &Response[T]{
+	writeJSON(w, http.StatusOK, &Response[T]{
 		Code: http.StatusOK,
-		Msg:  defaultSuccessMsg,
+		Msg:  defaultOKMsg,
 		Data: data,
 	})
 }
 
-// Fail writes an error JSON response with a custom business code.
-// HTTP status is always 200; the business code is carried in the body.
+// Fail writes an error response using status as the HTTP status and bcode as
+// the application-level business code.
 //
-// The cause parameter is flexible:
-//   - error  → message is extracted from the error (kit/errors.Error preferred)
-//   - string → used directly as the message
-//   - nil/other → falls back to the default error message
-func Fail(w http.ResponseWriter, code int, cause any) {
+// The response message is selected from cause as follows:
+//   - error: use the error message; errors.Error uses its client-facing Message
+//   - string: use the string unchanged
+//   - any other value, including nil: use "fail"
+func Fail(w http.ResponseWriter, status, bcode int, cause any) {
 	if w == nil {
 		return
 	}
@@ -56,33 +57,56 @@ func Fail(w http.ResponseWriter, code int, cause any) {
 	case string:
 		msg = v
 	default:
-		msg = defaultErrorMsg
+		msg = defaultFailMsg
 	}
 
-	writeJSON(w, &Response[any]{
-		Code: code,
+	writeJSON(w, status, &Response[any]{
+		Code: bcode,
 		Msg:  msg,
 	})
 }
 
-// writeJSON encodes v as JSON and writes it to w with Content-Type application/json.
-func writeJSON(w http.ResponseWriter, v any) {
+// writeJSON marshals v before committing the response headers. Invalid HTTP
+// statuses and JSON encoding failures produce a generic HTTP 500 response.
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	status = normalizeStatus(status)
+	body, err := json.Marshal(v)
+	if err != nil {
+		status = http.StatusInternalServerError
+		body = fallbackBody()
+	}
+
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	_ = json.NewEncoder(w).Encode(v)
+	w.WriteHeader(status)
+	_, _ = w.Write(body)
 }
 
-// message returns a human-readable message from err.
+func fallbackBody() []byte {
+	body, _ := json.Marshal(&Response[any]{
+		Code: http.StatusInternalServerError,
+		Msg:  defaultFailMsg,
+	})
+	return body
+}
+
+func normalizeStatus(status int) int {
+	if status < 100 || status > 599 {
+		return http.StatusInternalServerError
+	}
+	return status
+}
+
+// message extracts the client-facing message from err. Validation errors keep
+// their formatted details, errors.Error uses Message, and other errors use Error.
 func message(err error) string {
 	if err == nil {
-		return defaultErrorMsg
+		return defaultFailMsg
 	}
-	// go-playground/validator or kit validator errors: return err.Error() directly.
-	var validationErrors gv.ValidationErrors
-	if stderrors.As(err, &validationErrors) || validator.AsValidationError(err) {
+	var ve gv.ValidationErrors
+	if stderrors.As(err, &ve) || validator.AsError(err) {
 		return err.Error()
 	}
-	var e *errors.Error
-	if stderrors.As(err, &e) {
+	if e, ok := stderrors.AsType[*errors.Error](err); ok {
 		return e.Message()
 	}
 	return err.Error()

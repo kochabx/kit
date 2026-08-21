@@ -295,9 +295,7 @@ func TestFixedWindowConcurrentIntegration(t *testing.T) {
 	var wg sync.WaitGroup
 	errorsCh := make(chan error, 100)
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			result, allowErr := limiter.Allow(t.Context(), key)
 			if allowErr != nil {
 				errorsCh <- allowErr
@@ -306,7 +304,7 @@ func TestFixedWindowConcurrentIntegration(t *testing.T) {
 			if result.Allowed {
 				allowed.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	close(errorsCh)

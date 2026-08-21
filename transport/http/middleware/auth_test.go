@@ -278,9 +278,8 @@ func TestAuth_MissingToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	// Fail writes HTTP 200 with business code 401 in JSON body
-	if w.Code != http.StatusOK {
-		t.Errorf("HTTP status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("HTTP status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 	if !containsString(w.Body.String(), `"code":401`) {
 		t.Errorf("response should contain code 401, got: %s", w.Body.String())
@@ -303,8 +302,8 @@ func TestAuth_InvalidToken(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("HTTP status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("HTTP status = %d, want %d", w.Code, http.StatusUnauthorized)
 	}
 	if !containsString(w.Body.String(), `"code":401`) {
 		t.Errorf("response should contain code 401, got: %s", w.Body.String())

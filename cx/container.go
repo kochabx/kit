@@ -386,10 +386,8 @@ func (c *Container) recordDepEdgeLocked(key string) {
 	if caller == nil {
 		return
 	}
-	for _, d := range caller.deps {
-		if d == key {
-			return
-		}
+	if slices.Contains(caller.deps, key) {
+		return
 	}
 	caller.deps = append(caller.deps, key)
 }

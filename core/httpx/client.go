@@ -247,10 +247,7 @@ func (c *Client) resolveURL(target string, extraQuery url.Values) (string, error
 
 // doWithRetry 在需要时重试。每次重试都会重建 *http.Request 以便重放 body。
 func (c *Client) doWithRetry(ctx context.Context, method, fullURL string, header http.Header, bodyBytes []byte) (*http.Response, error) {
-	maxAttempts := c.retry.MaxAttempts
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
+	maxAttempts := max(c.retry.MaxAttempts, 1)
 	retryOn := c.retry.RetryOn
 	if retryOn == nil {
 		retryOn = defaultRetryOn

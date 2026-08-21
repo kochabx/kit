@@ -91,7 +91,7 @@ func TestStruct_Valid(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestStruct_Invalid_ReturnsValidationError(t *testing.T) {
+func TestStruct_Invalid_ReturnsError(t *testing.T) {
 	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{
 		Name:     "",    // required
@@ -100,8 +100,8 @@ func TestStruct_Invalid_ReturnsValidationError(t *testing.T) {
 		Username: "ab",  // min=3
 	})
 	require.Error(t, err)
-	require.True(t, AsValidationError(err))
-	var ve *ValidationError
+	require.True(t, AsError(err))
+	var ve *Error
 	require.True(t, errors.As(err, &ve))
 	assert.Len(t, ve.Violations(), 4)
 }
@@ -119,8 +119,8 @@ func TestFieldName_JSONTag(t *testing.T) {
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 
-	require.True(t, AsValidationError(err))
-	var ve *ValidationError
+	require.True(t, AsError(err))
+	var ve *Error
 	require.True(t, errors.As(err, &ve))
 	for _, vi := range ve.Violations() {
 		if vi.Tag == "required" {
@@ -136,8 +136,8 @@ func TestFieldName_GoStructField(t *testing.T) {
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
 
-	require.True(t, AsValidationError(err))
-	var ve *ValidationError
+	require.True(t, AsError(err))
+	var ve *Error
 	require.True(t, errors.As(err, &ve))
 	for _, vi := range ve.Violations() {
 		if vi.Tag == "required" {
@@ -241,8 +241,8 @@ func TestViolation_Attributes(t *testing.T) {
 	err := v.Struct(context.Background(), &testUser{Name: "", Email: "bad"})
 	require.Error(t, err)
 
-	require.True(t, AsValidationError(err))
-	var ve *ValidationError
+	require.True(t, AsError(err))
+	var ve *Error
 	require.True(t, errors.As(err, &ve))
 	violations := ve.Violations()
 	require.NotEmpty(t, violations)
@@ -289,12 +289,12 @@ func TestWithStructValidation(t *testing.T) {
 
 // ---- 错误工具 ----
 
-func TestAsValidationError(t *testing.T) {
+func TestAsError(t *testing.T) {
 	v := mustNew(t)
 	err := v.Struct(context.Background(), &testUser{Name: ""})
-	assert.True(t, AsValidationError(err))
-	assert.False(t, AsValidationError(nil))
-	assert.False(t, AsValidationError(errors.New("plain")))
+	assert.True(t, AsError(err))
+	assert.False(t, AsError(nil))
+	assert.False(t, AsError(errors.New("plain")))
 }
 
 // ---- 并发安全 ----
@@ -302,7 +302,7 @@ func TestAsValidationError(t *testing.T) {
 func TestConcurrentValidation(t *testing.T) {
 	v := mustNew(t)
 	done := make(chan struct{}, 20)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		go func(i int) {
 			defer func() { done <- struct{}{} }()
 			u := &testUser{
@@ -314,7 +314,7 @@ func TestConcurrentValidation(t *testing.T) {
 			assert.NoError(t, v.Struct(context.Background(), u))
 		}(i)
 	}
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		<-done
 	}
 }
@@ -331,7 +331,7 @@ func BenchmarkStruct_Valid(b *testing.B) {
 		Username: "alice99",
 	}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = v.Struct(ctx, u)
 	}
 }
@@ -341,7 +341,7 @@ func BenchmarkStruct_Invalid(b *testing.B) {
 	ctx := context.Background()
 	u := &testUser{Name: "", Email: "bad", Age: -1, Username: "ab"}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		_ = v.Struct(ctx, u)
 	}
 }

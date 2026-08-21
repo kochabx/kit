@@ -126,12 +126,18 @@ log.WithRedactor(redactor)         // 绑定脱敏 Redactor
 
 ## 数据脱敏
 
-### 内置规则
+完整的规则说明、常用配置和动态管理示例见 [`redact/README.md`](redact/README.md)。
+
+### 配置规则
 
 ```go
 import "github.com/kochabx/kit/log/redact"
 
-redactor, err := redact.New(redact.BuiltinRules()...)
+redactor, err := redact.New(
+	redact.Field("password", redact.Replace("******")),
+	redact.Field("token", redact.Replace("******")),
+	redact.Field("phone", redact.KeepEdges(3, 4)),
+)
 if err != nil {
     panic(err)
 }
@@ -141,9 +147,9 @@ logger.Info().Str("phone", "13812345678").Msg("user info")
 // 输出: "phone":"138****5678"
 ```
 
-`BuiltinRules()` 默认完整隐藏 password、token 和 secret，手机号等标识类数据仅保留必要的首尾字符。
+规则由应用显式配置，避免基础库对字段名和脱敏策略作业务假设。
 
-### 自定义规则
+### 内容规则
 
 ```go
 redactor, err := redact.New(
@@ -195,7 +201,13 @@ import (
     "github.com/rs/zerolog"
 )
 
-redactor, err := redact.New(redact.BuiltinRules()...)
+redactor, err := redact.New(
+	redact.Field("password", redact.Replace("******")),
+	redact.Field("token", redact.Replace("******")),
+	redact.Field("secret", redact.Replace("******")),
+	redact.Field("phone", redact.KeepEdges(3, 4)),
+	redact.Content("email", `\b[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`, redact.Email()),
+)
 if err != nil {
     panic(err)
 }
@@ -301,7 +313,6 @@ if err != nil {
 | `Replace(value string) Mask` | 完整替换策略 |
 | `KeepEdges(prefix, suffix int) Mask` | 保留首尾字符策略 |
 | `Email() Mask` | 保留邮箱域名及用户名首尾字符 |
-| `BuiltinRules() []Rule` | 获取内置安全规则 |
 | `RedactString(value string) string` | 对字符串执行脱敏 |
 
 ## 模块结构
@@ -321,8 +332,7 @@ log/
     ├── engine.go          # 动态规则管理与不可变执行计划
     ├── rule.go            # 字段规则与内容规则
     ├── mask.go            # 脱敏策略
-    ├── writer.go          # 脱敏 io.Writer 包装
-    └── builtin.go         # 内置规则
+    └── writer.go          # 脱敏 io.Writer 包装
 ```
 
 ## 依赖

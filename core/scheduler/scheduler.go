@@ -212,7 +212,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		go func() { leaseDone <- s.leaseLoop(leaseCtx) }()
 		g.Go(func() error { return s.fetchLoop(gctx, deliveries) })
 		g.Go(func() error { return s.recoveryLoop(gctx, deliveries) })
-		for i := 0; i < s.config.Concurrency; i++ {
+		for i := range s.config.Concurrency {
 			slot := fmt.Sprintf("%s-%d", s.consumer, i)
 			g.Go(func() error { return s.executorLoop(gctx, slot, deliveries) })
 		}

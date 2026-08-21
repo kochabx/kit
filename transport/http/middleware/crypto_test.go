@@ -60,8 +60,8 @@ func TestCrypto_DecryptFail(t *testing.T) {
 	w := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d (Fail uses business code)", w.Code, http.StatusOK)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 	if !strings.Contains(w.Body.String(), `"code"`) {
 		t.Errorf("response should contain error code, got: %s", w.Body.String())

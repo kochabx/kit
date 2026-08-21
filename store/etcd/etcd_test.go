@@ -277,7 +277,7 @@ func TestEtcd_ErrorConstants(t *testing.T) {
 
 // BenchmarkEtcd_ConfigInit 基准测试配置初始化
 func BenchmarkEtcd_ConfigInit(b *testing.B) {
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		config := &Config{}
 		_ = config.init()
 	}

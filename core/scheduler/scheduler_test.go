@@ -928,8 +928,7 @@ func BenchmarkBatchEnqueue(b *testing.B) {
 	defer s.Close()
 	d := Define[int]("bench.job")
 	payloads := make([]int, 100)
-	b.ResetTimer()
-	for range b.N {
+	for b.Loop() {
 		results := BatchEnqueue(s, context.Background(), d, payloads)
 		for _, result := range results {
 			if result.Err != nil {

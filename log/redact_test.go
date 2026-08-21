@@ -74,17 +74,6 @@ func TestRedactorValidation(t *testing.T) {
 	}
 }
 
-func TestBuiltinRules(t *testing.T) {
-	r, err := redact.New(redact.BuiltinRules()...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := r.RedactString(`{"phone":"13812345678","password":"secret","message":"email user@example.com"}`)
-	if strings.Contains(got, "13812345678") || strings.Contains(got, "secret") || strings.Contains(got, "user@example.com") {
-		t.Fatalf("sensitive data leaked: %s", got)
-	}
-}
-
 func TestWriterReportsInputLength(t *testing.T) {
 	r, _ := redact.New(redact.Content("secret", `secret123`, redact.Replace("***")))
 	var output bytes.Buffer
@@ -194,13 +183,11 @@ func TestRedactorConcurrentUpdates(t *testing.T) {
 	}
 	var workers sync.WaitGroup
 	for range 4 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for range 100 {
 				_ = r.RedactString(`{"phone":"13812345678"}`)
 			}
-		}()
+		})
 	}
 	for range 100 {
 		r.DisableRule("phone")

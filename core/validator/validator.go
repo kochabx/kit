@@ -14,7 +14,7 @@ import (
 
 // Validator 是结构体 / 变量校验接口。
 type Validator interface {
-	// Struct 校验非 nil 结构体指针的所有导出字段，失败时返回 *ValidationError。
+	// Struct 校验非 nil 结构体指针的所有导出字段，失败时返回 *Error。
 	// 通过 WithLocaleExtractor 设置的 Locale 用于翻译错误消息。
 	Struct(ctx context.Context, s any) error
 
@@ -49,7 +49,7 @@ func build(o *options) (*validator, error) {
 	if o.fieldNameTag != "" {
 		tag := o.fieldNameTag
 		v.RegisterTagNameFunc(func(fld reflect.StructField) string {
-			name := strings.SplitN(fld.Tag.Get(tag), ",", 2)[0]
+			name, _, _ := strings.Cut(fld.Tag.Get(tag), ",")
 			if name == "-" || name == "" {
 				return fld.Name
 			}
@@ -116,7 +116,7 @@ func (vi *validator) resolveLocale(ctx context.Context) Locale {
 	return vi.defaultLocale
 }
 
-// wrap 将底层 gv.ValidationErrors 转换为 *ValidationError。
+// wrap 将底层 gv.ValidationErrors 转换为 *Error。
 func (vi *validator) wrap(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
@@ -150,5 +150,5 @@ func (vi *validator) wrap(ctx context.Context, err error) error {
 		}
 	}
 
-	return newValidationError(violations)
+	return newError(violations)
 }

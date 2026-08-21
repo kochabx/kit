@@ -72,7 +72,10 @@ func TestSignature_MissingHeader(t *testing.T) {
 	w := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(w, req)
 
-	// Fail → HTTP 200 + 业务错误码
+	// Fail → HTTP 400 + 业务错误码
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
 	if !containsString(w.Body.String(), `"code"`) {
 		t.Errorf("missing signature header should return error code, got: %s", w.Body.String())
 	}

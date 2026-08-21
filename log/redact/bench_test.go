@@ -8,7 +8,13 @@ import (
 var benchInput = []byte(`{"level":"info","time":"2026-03-21 12:00:00","caller":"handler.go:42","message":"user login","phone":"13812345678","password":"secret123","token":"eyJhbGciOiJIUzI1NiJ9.payload.sig","email":"user@example.com","idcard":"110101199003079234"}`)
 
 func benchmarkRedactor(b *testing.B) *Redactor {
-	r, err := New(BuiltinRules()...)
+	r, err := New(
+		Field("password", Replace("******")),
+		Field("token", Replace("******")),
+		Field("phone", KeepEdges(3, 4)),
+		Field("idcard", KeepEdges(6, 4)),
+		Content("email", `\b[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`, Email()),
+	)
 	if err != nil {
 		b.Fatal(err)
 	}

@@ -95,7 +95,7 @@ func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
 
 	if cfg.ErrorHandler == nil {
 		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-			kithttp.Fail(w, http.StatusBadRequest, ErrSignatureFailed)
+			kithttp.Fail(w, http.StatusBadRequest, http.StatusBadRequest, ErrSignatureFailed)
 		}
 	}
 

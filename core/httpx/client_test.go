@@ -236,9 +236,9 @@ func TestClient_ContextCancel(t *testing.T) {
 }
 
 func TestClient_Retry_Until_OK(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
+		n := calls.Add(1)
 		if n < 3 {
 			w.WriteHeader(503)
 			return
@@ -260,15 +260,15 @@ func TestClient_Retry_Until_OK(t *testing.T) {
 	if !out["ok"] {
 		t.Errorf("out = %v", out)
 	}
-	if c := atomic.LoadInt32(&calls); c != 3 {
+	if c := calls.Load(); c != 3 {
 		t.Errorf("calls = %d, want 3", c)
 	}
 }
 
 func TestClient_Retry_Exhausted(t *testing.T) {
-	var calls int32
+	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&calls, 1)
+		calls.Add(1)
 		w.WriteHeader(503)
 	}))
 	defer srv.Close()
@@ -279,7 +279,7 @@ func TestClient_Retry_Exhausted(t *testing.T) {
 	if !errors.As(err, &herr) || herr.StatusCode != 503 {
 		t.Fatalf("expected 503 HTTPError, got %v", err)
 	}
-	if c := atomic.LoadInt32(&calls); c != 3 {
+	if c := calls.Load(); c != 3 {
 		t.Errorf("calls = %d, want 3", c)
 	}
 }

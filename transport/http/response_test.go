@@ -47,48 +47,54 @@ func TestOK(t *testing.T) {
 
 func TestFail(t *testing.T) {
 	tests := []struct {
-		name string
-		code int
-		msg  any
-		want string
+		name   string
+		status int
+		bcode  int
+		msg    any
+		want   string
 	}{
 		{
-			name: "with kit error",
-			code: 10001,
-			msg:  kiterrors.New(10001, "custom error message"),
-			want: `{"code":10001,"msg":"custom error message"}`,
+			name:   "with kit error",
+			status: http.StatusBadRequest,
+			bcode:  10001,
+			msg:    kiterrors.New(10001, "custom error message"),
+			want:   `{"code":10001,"msg":"custom error message"}`,
 		},
 		{
-			name: "with standard error",
-			code: 500,
-			msg:  errors.New("standard error"),
-			want: `{"code":500,"msg":"standard error"}`,
+			name:   "with standard error",
+			status: http.StatusInternalServerError,
+			bcode:  500,
+			msg:    errors.New("standard error"),
+			want:   `{"code":500,"msg":"standard error"}`,
 		},
 		{
-			name: "with string message",
-			code: 400,
-			msg:  "bad request",
-			want: `{"code":400,"msg":"bad request"}`,
+			name:   "with string message",
+			status: http.StatusBadRequest,
+			bcode:  400,
+			msg:    "bad request",
+			want:   `{"code":400,"msg":"bad request"}`,
 		},
 		{
-			name: "with nil",
-			code: 500,
-			msg:  nil,
-			want: `{"code":500,"msg":"failed"}`,
+			name:   "with nil",
+			status: http.StatusInternalServerError,
+			bcode:  500,
+			msg:    nil,
+			want:   `{"code":500,"msg":"fail"}`,
 		},
 		{
-			name: "with unsupported message type",
-			code: 201,
-			msg:  map[string]any{"id": 123},
-			want: `{"code":201,"msg":"failed"}`,
+			name:   "with unsupported message type",
+			status: http.StatusInternalServerError,
+			bcode:  201,
+			msg:    map[string]any{"id": 123},
+			want:   `{"code":201,"msg":"fail"}`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			Fail(w, tt.code, tt.msg)
-			assert.Equal(t, http.StatusOK, w.Code)
+			Fail(w, tt.status, tt.bcode, tt.msg)
+			assert.Equal(t, tt.status, w.Code)
 			assert.JSONEq(t, tt.want, w.Body.String())
 		})
 	}
@@ -97,7 +103,7 @@ func TestFail(t *testing.T) {
 func TestOKAndFail_NilWriter(t *testing.T) {
 	// must not panic
 	OK(nil, "test")
-	Fail(nil, 500, "error")
+	Fail(nil, 500, 500, "error")
 }
 
 func TestErrorMessage(t *testing.T) {
@@ -109,7 +115,7 @@ func TestErrorMessage(t *testing.T) {
 		{
 			name: "nil error",
 			err:  nil,
-			want: "failed",
+			want: "fail",
 		},
 		{
 			name: "kit error",
@@ -135,11 +141,29 @@ func TestErrorMessage(t *testing.T) {
 	}
 }
 
+func TestOK_EncodingFailure(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	OK(w, make(chan int))
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.JSONEq(t, `{"code":500,"msg":"fail"}`, w.Body.String())
+}
+
+func TestFail_InvalidHTTPStatus(t *testing.T) {
+	w := httptest.NewRecorder()
+
+	Fail(w, 10001, 10001, "custom error")
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.JSONEq(t, `{"code":10001,"msg":"custom error"}`, w.Body.String())
+}
+
 func BenchmarkOK(b *testing.B) {
 	w := httptest.NewRecorder()
 	testData := map[string]string{"key": "value"}
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w.Body.Reset()
 		OK(w, testData)
 	}
@@ -149,9 +173,9 @@ func BenchmarkFail(b *testing.B) {
 	w := httptest.NewRecorder()
 	testErr := kiterrors.New(500, "benchmark error")
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		w.Body.Reset()
-		Fail(w, 500, testErr)
+		Fail(w, 500, 500, testErr)
 	}
 }
 
@@ -179,13 +203,13 @@ func TestOK_WithStdlibHandler(t *testing.T) {
 func TestFail_WithStdlibHandler(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/err", func(w http.ResponseWriter, r *http.Request) {
-		Fail(w, 400, errors.New("bad input"))
+		Fail(w, http.StatusBadRequest, 400, errors.New("bad input"))
 	})
 
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/err", nil))
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.JSONEq(t, `{"code":400,"msg":"bad input"}`, w.Body.String())
 }
 
@@ -212,13 +236,13 @@ func TestFail_WithGin_KitError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.GET("/fail", func(c *gin.Context) {
-		Fail(c.Writer, 10001, kiterrors.New(10001, "resource not found"))
+		Fail(c.Writer, http.StatusNotFound, 10001, kiterrors.New(10001, "resource not found"))
 	})
 
 	w := httptest.NewRecorder()
 	engine.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/fail", nil))
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusNotFound, w.Code)
 	assert.JSONEq(t, `{"code":10001,"msg":"resource not found"}`, w.Body.String())
 }
 
@@ -227,14 +251,14 @@ func TestFail_WithGin_StringMsg(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := gin.New()
 	engine.POST("/submit", func(c *gin.Context) {
-		Fail(c.Writer, 422, "validation error")
+		Fail(c.Writer, http.StatusUnprocessableEntity, 10002, "validation error")
 	})
 
 	w := httptest.NewRecorder()
 	engine.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/submit", nil))
 
-	assert.Equal(t, http.StatusOK, w.Code)
-	assert.JSONEq(t, `{"code":422,"msg":"validation error"}`, w.Body.String())
+	assert.Equal(t, http.StatusUnprocessableEntity, w.Code)
+	assert.JSONEq(t, `{"code":10002,"msg":"validation error"}`, w.Body.String())
 }
 
 // TestOK_WithGin_NilData verifies OK() omits the data field when nil is passed.

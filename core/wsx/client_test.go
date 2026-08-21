@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"net/http"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -308,13 +309,7 @@ func TestPostmanEcho_ContinuousMessageReceiving(t *testing.T) {
 
 		// 验证每条消息都收到了
 		for _, expectedMsg := range messages {
-			found := false
-			for _, receivedMsg := range finalMessages {
-				if receivedMsg == expectedMsg {
-					found = true
-					break
-				}
-			}
+			found := slices.Contains(finalMessages, expectedMsg)
 			assert.True(t, found, "应该收到消息: %s", expectedMsg)
 		}
 
