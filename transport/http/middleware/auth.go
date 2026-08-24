@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
 	"github.com/kochabx/kit/errors"
 	kithttp "github.com/kochabx/kit/transport/http"
 )
@@ -22,16 +21,13 @@ var (
 	ErrAuthenticatorNil = errors.Unauthorized("authenticator missing")
 )
 
-// Claims JWT Claims 类型约束
-type Claims = jwt.Claims
-
 // Authenticator 认证器接口
-type Authenticator[T Claims] interface {
+type Authenticator[T any] interface {
 	Authenticate(ctx context.Context, token string) (T, error)
 }
 
 // AuthenticatorFunc 函数适配器
-type AuthenticatorFunc[T Claims] func(ctx context.Context, token string) (T, error)
+type AuthenticatorFunc[T any] func(ctx context.Context, token string) (T, error)
 
 func (f AuthenticatorFunc[T]) Authenticate(ctx context.Context, token string) (T, error) {
 	return f(ctx, token)
@@ -98,7 +94,7 @@ func ChainExtractor(extractors ...TokenExtractor) TokenExtractor {
 }
 
 // AuthConfig 认证中间件配置
-type AuthConfig[T Claims] struct {
+type AuthConfig[T any] struct {
 	Skip           SkipConfig                                      // 跳过配置
 	Authenticator  Authenticator[T]                                // 认证器（必需）
 	Extractor      TokenExtractor                                  // Token 提取器，默认 BearerExtractor
@@ -108,7 +104,7 @@ type AuthConfig[T Claims] struct {
 }
 
 // Auth 创建认证中间件
-func Auth[T Claims](cfg AuthConfig[T]) func(http.Handler) http.Handler {
+func Auth[T any](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 	if cfg.Extractor == nil {
 		cfg.Extractor = BearerExtractor()
 	}
@@ -159,7 +155,7 @@ func Auth[T Claims](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 }
 
 // GetClaims 从 Context 获取 claims
-func GetClaims[T Claims](ctx context.Context, key ...string) (T, bool) {
+func GetClaims[T any](ctx context.Context, key ...string) (T, bool) {
 	var zero T
 	k := contextKey
 	if len(key) > 0 && key[0] != "" {
