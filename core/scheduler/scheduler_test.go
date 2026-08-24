@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+
+	kitvalidator "github.com/kochabx/kit/core/validator"
 )
 
 func TestConfigDefaultsAndValidation(t *testing.T) {
@@ -23,6 +25,27 @@ func TestConfigDefaultsAndValidation(t *testing.T) {
 	c.LeaseDuration = time.Second
 	if _, err := prepareConfig(c); err == nil {
 		t.Fatal("expected invalid lease duration")
+	}
+
+	for _, namespace := range []string{"-invalid", "invalid namespace", "调度器"} {
+		if _, err := prepareConfig(Config{Namespace: namespace}); err == nil {
+			t.Fatalf("expected invalid namespace %q", namespace)
+		}
+	}
+}
+
+func TestConfigCanBeValidatedByDefaultValidator(t *testing.T) {
+	type applicationConfig struct {
+		Scheduler Config `json:"scheduler"`
+	}
+
+	schedulerConfig, err := prepareConfig(Config{Namespace: "jobs"})
+	if err != nil {
+		t.Fatalf("prepare scheduler config: %v", err)
+	}
+	c := applicationConfig{Scheduler: schedulerConfig}
+	if err := kitvalidator.Validate.Struct(context.Background(), &c); err != nil {
+		t.Fatalf("validate embedded scheduler config: %v", err)
 	}
 }
 

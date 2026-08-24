@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"time"
 
-	playground "github.com/go-playground/validator/v10"
 	"github.com/kochabx/kit/core/defaults"
 	kitvalidator "github.com/kochabx/kit/core/validator"
 	"github.com/kochabx/kit/log"
@@ -22,11 +21,11 @@ const (
 
 var (
 	validNamespace  = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
-	configValidator = newConfigValidator()
+	configValidator = kitvalidator.Validate
 )
 
 type Config struct {
-	Namespace                 string        `json:"namespace" default:"scheduler" validate:"scheduler_namespace"`
+	Namespace                 string        `json:"namespace" default:"scheduler" validate:"required,max=128,ascii"`
 	Concurrency               int           `json:"concurrency" default:"16" validate:"gt=0"`
 	Role                      Role          `json:"role" default:"3" validate:"oneof=1 2 3"`
 	DispatchBatch             int64         `json:"dispatch_batch" default:"100" validate:"gt=0"`
@@ -66,6 +65,9 @@ func prepareConfig(config Config) (Config, error) {
 	if err := configValidator.Struct(context.Background(), &config); err != nil {
 		return Config{}, fmt.Errorf("validate scheduler config: %w", err)
 	}
+	if !validNamespace.MatchString(config.Namespace) {
+		return Config{}, fmt.Errorf("validate scheduler config: namespace must match %s", validNamespace)
+	}
 	if config.Logger == nil {
 		config.Logger = log.Global()
 	}
@@ -73,17 +75,4 @@ func prepareConfig(config Config) (Config, error) {
 		config.Observer = noopObserver{}
 	}
 	return config, nil
-}
-
-func newConfigValidator() kitvalidator.Validator {
-	v, err := kitvalidator.New(kitvalidator.WithValidation(
-		"scheduler_namespace",
-		func(field playground.FieldLevel) bool {
-			return validNamespace.MatchString(field.Field().String())
-		},
-	))
-	if err != nil {
-		panic(fmt.Sprintf("create scheduler config validator: %v", err))
-	}
-	return v
 }

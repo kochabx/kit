@@ -178,16 +178,6 @@ make info         # 显示项目信息
 make help         # 查看所有命令
 ```
 
-## 上手路径
-
-如果你是第一次接入，建议按以下顺序了解：
-
-1. **[app](app/) + [config](config/README.md)**：理解应用启动与配置模型
-2. **[log](log/README.md) + [errors](errors/)**：建立日志与错误规范
-3. **[transport/http](transport/http/) 或 [transport/grpc](transport/grpc/)**：搭建服务入口
-4. 按需接入 **[store/db](store/db/)、[store/redis](store/redis/README.md)、[cx](cx/README.md)**
-5. 高阶能力：**[core/scheduler](core/scheduler/README.md)、[core/rate](core/rate/)、[core/auth/jwt](core/auth/jwt/)**
-
 ## 许可证
 
 本项目基于 [MIT License](LICENSE) 发布。
