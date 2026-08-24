@@ -25,12 +25,7 @@ type builder struct {
 	container       *cx.Container
 	cxOpts          []cx.Option
 	servers         []transport.Server
-	components      []component
-}
-
-type component struct {
-	key   string
-	value any
+	components      []func(*cx.Container)
 }
 
 // Option 配置 Application。
@@ -95,11 +90,9 @@ func WithServers(servers ...transport.Server) Option {
 
 // WithComponent 注册一个自定义 cx 组件（可实现 cx.Starter / cx.Stopper / cx.HealthChecker）。
 // 组件按注册顺序启动，按反向顺序关闭。
-func WithComponent(key string, value any) Option {
+func WithComponent[T any](key cx.Key[T], value T) Option {
 	return func(b *builder) {
-		if key != "" && value != nil {
-			b.components = append(b.components, component{key: key, value: value})
-		}
+		b.components = append(b.components, func(c *cx.Container) { cx.MustSupply(c, key, value) })
 	}
 }
 
@@ -167,19 +160,19 @@ func New(options ...Option) *Application {
 	// 构建容器：优先使用外部容器，否则用收集的 cx.Option 创建
 	container := b.container
 	if container == nil {
-		b.cxOpts = append(b.cxOpts, cx.WithStopTimeout(b.shutdownTimeout))
+		b.cxOpts = append(b.cxOpts, cx.WithShutdownTimeout(b.shutdownTimeout))
 		container = cx.New(b.cxOpts...)
 	}
 
 	// 将 servers 注册为 cx 组件（transport.Server 已实现 cx.Starter/cx.Stopper）
 	for i, s := range b.servers {
-		key := fmt.Sprintf("app:server:%d", i)
+		key := cx.NewKey[transport.Server](fmt.Sprintf("app:server:%d", i))
 		cx.MustSupply(container, key, s)
 	}
 
 	// 注册自定义组件
 	for _, comp := range b.components {
-		cx.MustSupply(container, comp.key, comp.value)
+		comp(container)
 	}
 
 	ctx := b.ctx
@@ -203,7 +196,7 @@ func (app *Application) Container() *cx.Container {
 }
 
 // HealthCheck 返回所有组件的聚合健康报告。
-func (app *Application) HealthCheck(ctx context.Context) cx.HealthReport {
+func (app *Application) HealthCheck(ctx context.Context) (cx.HealthReport, error) {
 	return app.container.HealthCheck(ctx)
 }
 
@@ -227,13 +220,20 @@ func (app *Application) Run() error {
 	signal.Notify(quit, app.signals...)
 	defer signal.Stop(quit)
 
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- app.container.Wait(ctx) }()
+	var runErr error
 	select {
 	case sig := <-quit:
 		log.Info().Str("signal", sig.String()).Msg("received shutdown signal")
 	case <-ctx.Done():
+	case err := <-waitErr:
+		if ctx.Err() == nil {
+			runErr = fmt.Errorf("app: supervised component: %w", err)
+		}
 	}
-
-	return app.shutdown()
+	app.cancel()
+	return errors.Join(runErr, app.shutdown())
 }
 
 // Shutdown 触发优雅关闭。

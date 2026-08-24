@@ -8,7 +8,8 @@
 package main
 
 import (
-    "github.com/kochabx/kit/app"
+	"github.com/kochabx/kit/app"
+	"github.com/kochabx/kit/cx"
     "github.com/kochabx/kit/store/db"
     "github.com/kochabx/kit/transport/http"
 
@@ -23,7 +24,7 @@ func main() {
 
     a := app.New(
         app.WithServer(http.NewServer(r, http.WithAddr(":8080"))),
-        app.WithComponent("db", dbClient),
+		app.WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
     )
     if err := a.Run(); err != nil {
         panic(err)
@@ -31,14 +32,14 @@ func main() {
 }
 ```
 
-`Run()` 阻塞直到收到 `SIGINT` / `SIGTERM` / `SIGQUIT`，然后按注册的逆序优雅关闭所有组件。
+`Run()` 阻塞直到收到关闭信号、根 context 取消，或受监督的 Runner 意外退出，然后按依赖逆序优雅关闭所有组件。
 
 ## 生命周期
 
 ```
 New() → Run()
               ├─ container.Start()     // 按注册顺序启动组件
-              ├─ 阻塞等待信号 / ctx 取消
+              ├─ 等待信号 / ctx 取消 / Runner 退出
               └─ container.Stop()  // 按注册逆序关闭组件
 ```
 
@@ -63,7 +64,7 @@ New() → Run()
 ## 健康检查
 
 ```go
-report := a.HealthCheck(ctx)
+report, err := a.HealthCheck(ctx)
 fmt.Println(report.Healthy) // true / false
 ```
 
@@ -72,5 +73,5 @@ fmt.Println(report.Healthy) // true / false
 ## 手动关闭
 
 ```go
-a.Stop() // 取消根上下文，触发 Run() 退出
+a.Shutdown() // 取消根上下文，触发 Run() 退出
 ```

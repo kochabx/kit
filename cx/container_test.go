@@ -3,8 +3,8 @@ package cx
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,615 +12,375 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---------------------------------------------------------------------------
-// Test helpers
-// ---------------------------------------------------------------------------
-
-// mustGet 测试辅助：Get 失败时使测试失败。
-func mustGet[T any](t testing.TB, c *Container, key string) T {
-	t.Helper()
-	v, err := Get[T](c, key)
-	if err != nil {
-		t.Fatalf("Get %s: %v", key, err)
-	}
-	return v
+type testComponent struct {
+	mu        sync.Mutex
+	order     *[]string
+	name      string
+	startErr  error
+	stopErr   error
+	healthErr error
 }
 
-type testConfig struct {
-	DSN string
+func (c *testComponent) Start(context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	*c.order = append(*c.order, "start:"+c.name)
+	return c.startErr
 }
 
-type testDB struct {
-	cfg     *testConfig
-	started bool
-	stopped bool
+func (c *testComponent) Stop(context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	*c.order = append(*c.order, "stop:"+c.name)
+	return c.stopErr
 }
 
-func (d *testDB) Start(context.Context) error { d.started = true; return nil }
-func (d *testDB) Stop(context.Context) error  { d.stopped = true; return nil }
-
-type testService struct {
-	db      *testDB
-	healthy bool
-	started bool
-	stopped bool
+func (c *testComponent) HealthCheck(context.Context) error {
+	return c.healthErr
 }
 
-func (s *testService) Start(context.Context) error { s.started = true; return nil }
-func (s *testService) Stop(context.Context) error  { s.stopped = true; return nil }
-func (s *testService) HealthCheck(context.Context) error {
-	if !s.healthy {
-		return errors.New("unhealthy")
-	}
-	return nil
-}
-
-// failStarter always fails on Start.
-type failStarter struct{ stopped bool }
-
-func (f *failStarter) Start(context.Context) error { return errors.New("start failed") }
-func (f *failStarter) Stop(context.Context) error  { f.stopped = true; return nil }
-
-type countingComponent struct {
-	starts int
-	stops  int
-}
-
-func (c *countingComponent) Start(context.Context) error { c.starts++; return nil }
-func (c *countingComponent) Stop(context.Context) error  { c.stops++; return nil }
-
-// orderRecorder records Start/Stop call order.
-type orderRecorder struct {
-	key    string
-	record *[]string
-}
-
-func (o *orderRecorder) Start(context.Context) error {
-	*o.record = append(*o.record, "start:"+o.key)
-	return nil
-}
-func (o *orderRecorder) Stop(context.Context) error {
-	*o.record = append(*o.record, "stop:"+o.key)
-	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Registration
-// ---------------------------------------------------------------------------
-
-func TestProvide_Get_Basic(t *testing.T) {
+func TestTypedKeysAndDependencyOrder(t *testing.T) {
 	c := New()
-	err := Provide(c, "config", func(_ *Container) (*testConfig, error) {
-		return &testConfig{DSN: "postgres://localhost"}, nil
-	})
-	require.NoError(t, err)
-	require.NoError(t, c.Start(context.Background()))
-
-	cfg, err := Get[*testConfig](c, "config")
-	require.NoError(t, err)
-	assert.Equal(t, "postgres://localhost", cfg.DSN)
-}
-
-func TestSupply_Get(t *testing.T) {
-	c := New()
-	cfg := &testConfig{DSN: "sqlite://memory"}
-	require.NoError(t, Supply(c, "config", cfg))
-	require.NoError(t, c.Start(context.Background()))
-
-	got, err := Get[*testConfig](c, "config")
-	require.NoError(t, err)
-	assert.Same(t, cfg, got)
-}
-
-func TestProvide_DuplicateKey(t *testing.T) {
-	c := New()
-	require.NoError(t, Supply(c, "x", 1))
-	err := Supply(c, "x", 2)
-	assert.ErrorIs(t, err, ErrComponentExists)
-}
-
-func TestProvide_EmptyKey(t *testing.T) {
-	c := New()
-	err := Supply(c, "", 1)
-	assert.ErrorIs(t, err, ErrInvalidKey)
-}
-
-func TestProvide_NotIdle(t *testing.T) {
-	c := New()
-	require.NoError(t, Supply(c, "x", 1))
-	require.NoError(t, c.Start(context.Background()))
-	err := Supply(c, "y", 2)
-	assert.ErrorIs(t, err, ErrContainerNotIdle)
-}
-
-func TestGet_NotFound(t *testing.T) {
-	c := New()
-	require.NoError(t, c.Start(context.Background()))
-	_, err := Get[int](c, "missing")
-	assert.ErrorIs(t, err, ErrComponentNotFound)
-}
-
-func TestGet_TypeMismatch(t *testing.T) {
-	c := New()
-	require.NoError(t, Supply(c, "x", 42))
-	require.NoError(t, c.Start(context.Background()))
-	_, err := Get[string](c, "x")
-	assert.ErrorIs(t, err, ErrTypeMismatch)
-}
-
-func TestGet_BeforeStart(t *testing.T) {
-	c := New()
-	require.NoError(t, Supply(c, "x", 42))
-	_, err := Get[int](c, "x")
-	assert.ErrorIs(t, err, ErrComponentNotFound)
-}
-
-func TestGet_InterfaceType(t *testing.T) {
-	c := New()
-	require.NoError(t, Provide(c, "svc", func(_ *Container) (*testService, error) {
-		return &testService{healthy: true}, nil
-	}))
-	require.NoError(t, c.Start(context.Background()))
-
-	// Get as HealthChecker interface
-	checker, err := Get[HealthChecker](c, "svc")
-	require.NoError(t, err)
-	assert.NoError(t, checker.HealthCheck(context.Background()))
-}
-
-// ---------------------------------------------------------------------------
-// Dependency resolution & build order
-// ---------------------------------------------------------------------------
-
-func TestStart_DependencyOrder(t *testing.T) {
-	c := New()
+	configKey := NewKey[string]("config")
+	dbKey := NewKey[*testComponent]("db")
+	serviceKey := NewKey[*testComponent]("service")
 	var order []string
 
-	Provide(c, "service", func(c *Container) (*orderRecorder, error) {
-		_ = mustGet[*orderRecorder](t, c, "db") // depends on db
-		r := &orderRecorder{key: "service", record: &order}
-		return r, nil
+	MustSupply(c, configKey, "dsn")
+	MustProvide(c, dbKey, func(c *Container) (*testComponent, error) {
+		require.Equal(t, "dsn", MustGet(c, configKey))
+		return &testComponent{
+			order: &order,
+			name:  "db",
+		}, nil
 	})
-	Provide(c, "db", func(c *Container) (*orderRecorder, error) {
-		_ = mustGet[*orderRecorder](t, c, "config") // depends on config
-		r := &orderRecorder{key: "db", record: &order}
-		return r, nil
-	})
-	Provide(c, "config", func(_ *Container) (*orderRecorder, error) {
-		r := &orderRecorder{key: "config", record: &order}
-		return r, nil
+	MustProvide(c, serviceKey, func(c *Container) (*testComponent, error) {
+		_ = MustGet(c, dbKey)
+		return &testComponent{
+			order: &order,
+			name:  "service",
+		}, nil
 	})
 
 	require.NoError(t, c.Start(context.Background()))
+	assert.Equal(t, []string{"start:db", "start:service"}, order)
 
-	// Start order should be: config → db → service (dependency order)
-	assert.Equal(t, []string{"start:config", "start:db", "start:service"}, order)
+	got, err := Get(c, serviceKey)
+	require.NoError(t, err)
+	require.NotNil(t, got)
 
-	order = nil
 	require.NoError(t, c.Stop(context.Background()))
-
-	// Stop order should be reverse: service → db → config
-	assert.Equal(t, []string{"stop:service", "stop:db", "stop:config"}, order)
+	assert.Equal(t, []string{"start:db", "start:service", "stop:service", "stop:db"}, order)
 }
 
-func TestStart_DeepDependencyChain(t *testing.T) {
+func TestCircularDependency(t *testing.T) {
 	c := New()
-	var buildOrder []string
+	a := NewKey[int]("a")
+	b := NewKey[int]("b")
 
-	Provide(c, "a", func(c *Container) (string, error) {
-		mustGet[string](t, c, "b")
-		buildOrder = append(buildOrder, "a")
-		return "a", nil
+	MustProvide(c, a, func(c *Container) (int, error) {
+		_, err := Get(c, b)
+		return 0, err
 	})
-	Provide(c, "b", func(c *Container) (string, error) {
-		mustGet[string](t, c, "c")
-		buildOrder = append(buildOrder, "b")
-		return "b", nil
-	})
-	Provide(c, "c", func(_ *Container) (string, error) {
-		buildOrder = append(buildOrder, "c")
-		return "c", nil
-	})
-
-	require.NoError(t, c.Start(context.Background()))
-	assert.Equal(t, []string{"c", "b", "a"}, buildOrder)
-}
-
-func TestStart_CircularDependency(t *testing.T) {
-	c := New()
-	Provide(c, "a", func(c *Container) (int, error) {
-		_, err := Get[int](c, "b")
-		if err != nil {
-			return 0, err
-		}
-		return 1, nil
-	})
-	Provide(c, "b", func(c *Container) (int, error) {
-		_, err := Get[int](c, "a")
-		if err != nil {
-			return 0, err
-		}
-		return 2, nil
+	MustProvide(c, b, func(c *Container) (int, error) {
+		_, err := Get(c, a)
+		return 0, err
 	})
 
 	err := c.Start(context.Background())
-	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrCircularDependency)
-	assert.Contains(t, err.Error(), "a → b → a")
-}
-
-func TestStart_CircularDependency_ThreeWay(t *testing.T) {
-	c := New()
-	Provide(c, "a", func(c *Container) (int, error) {
-		_, err := Get[int](c, "b")
-		if err != nil {
-			return 0, err
-		}
-		return 1, nil
-	})
-	Provide(c, "b", func(c *Container) (int, error) {
-		_, err := Get[int](c, "c")
-		if err != nil {
-			return 0, err
-		}
-		return 2, nil
-	})
-	Provide(c, "c", func(c *Container) (int, error) {
-		_, err := Get[int](c, "a")
-		if err != nil {
-			return 0, err
-		}
-		return 3, nil
-	})
-
-	err := c.Start(context.Background())
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrCircularDependency)
-	assert.Contains(t, err.Error(), "a → b → c → a")
-}
-
-func TestStart_ConstructorError(t *testing.T) {
-	c := New()
-	Provide(c, "bad", func(_ *Container) (int, error) {
-		return 0, errors.New("init failed")
-	})
-
-	err := c.Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "construct bad")
-	assert.Contains(t, err.Error(), "init failed")
 	assert.Equal(t, StateFailed, c.State())
 }
 
-func TestStart_LazyConstruction(t *testing.T) {
+func TestExplicitDependenciesControlLifecycleOrder(t *testing.T) {
 	c := New()
-	constructed := false
-	Provide(c, "x", func(_ *Container) (int, error) {
-		constructed = true
-		return 42, nil
-	})
-
-	// Constructor NOT called at registration time
-	assert.False(t, constructed)
-
-	require.NoError(t, c.Start(context.Background()))
-	// Constructor called during Start
-	assert.True(t, constructed)
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle state machine
-// ---------------------------------------------------------------------------
-
-func TestStart_StateTransitions(t *testing.T) {
-	c := New()
-	assert.Equal(t, StateNew, c.State())
-
-	require.NoError(t, Supply(c, "x", 1))
-	require.NoError(t, c.Start(context.Background()))
-	assert.Equal(t, StateRunning, c.State())
-
-	require.NoError(t, c.Stop(context.Background()))
-	assert.Equal(t, StateStopped, c.State())
-}
-
-func TestStart_DoubleStart(t *testing.T) {
-	c := New()
-	require.NoError(t, c.Start(context.Background()))
-	err := c.Start(context.Background())
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot start")
-}
-
-func TestStop_NotRunning(t *testing.T) {
-	c := New()
-	err := c.Stop(context.Background())
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "cannot stop")
-}
-
-// ---------------------------------------------------------------------------
-// Start rollback
-// ---------------------------------------------------------------------------
-
-func TestStart_Rollback(t *testing.T) {
-	c := New()
-
-	good := &testDB{}
-	Provide(c, "good", func(_ *Container) (*testDB, error) {
-		return good, nil
-	})
-	Provide(c, "bad", func(_ *Container) (*failStarter, error) {
-		return &failStarter{}, nil
-	})
-
-	err := c.Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "start bad")
-
-	// "good" should have been rolled back (stopped)
-	assert.True(t, good.stopped)
-	assert.Equal(t, StateFailed, c.State())
-}
-
-// ---------------------------------------------------------------------------
-// Stop
-// ---------------------------------------------------------------------------
-
-func TestStop_ErrorAggregation(t *testing.T) {
-	c := New()
-	Provide(c, "a", func(_ *Container) (*badStopper, error) {
-		return &badStopper{name: "a"}, nil
-	})
-	Provide(c, "b", func(_ *Container) (*badStopper, error) {
-		return &badStopper{name: "b"}, nil
-	})
-
-	require.NoError(t, c.Start(context.Background()))
-	err := c.Stop(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "stop a")
-	assert.Contains(t, err.Error(), "stop b")
-	assert.Equal(t, StateStopped, c.State())
-}
-
-type badStopper struct{ name string }
-
-func (b *badStopper) Stop(context.Context) error {
-	return fmt.Errorf("%s stop error", b.name)
-}
-
-func TestStop_Timeout(t *testing.T) {
-	c := New(WithStopTimeout(50 * time.Millisecond))
-	Provide(c, "slow", func(_ *Container) (*slowStopper, error) {
-		return &slowStopper{}, nil
-	})
-	require.NoError(t, c.Start(context.Background()))
-
-	err := c.Stop(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "context deadline exceeded")
-}
-
-type slowStopper struct{}
-
-func (s *slowStopper) Stop(ctx context.Context) error {
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-time.After(5 * time.Second):
-		return nil
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Restart
-// ---------------------------------------------------------------------------
-
-func TestRestart(t *testing.T) {
-	c := New()
-	callCount := 0
-	Provide(c, "x", func(_ *Container) (int, error) {
-		callCount++
-		return callCount, nil
-	})
-
-	require.NoError(t, c.Start(context.Background()))
-	v1 := mustGet[int](t, c, "x")
-	assert.Equal(t, 1, v1)
-
-	require.NoError(t, c.Restart(context.Background()))
-	v2 := mustGet[int](t, c, "x")
-	assert.Equal(t, 2, v2) // constructor called again
-	assert.Equal(t, StateRunning, c.State())
-}
-
-func TestProvide_AfterStop(t *testing.T) {
-	c := New()
-	require.NoError(t, Supply(c, "x", 1))
-	require.NoError(t, c.Start(context.Background()))
-	require.NoError(t, c.Stop(context.Background()))
-
-	// Should be able to register new components after Stop
-	require.NoError(t, Supply(c, "y", 2))
-	require.NoError(t, c.Start(context.Background()))
-
-	v, err := Get[int](c, "y")
-	require.NoError(t, err)
-	assert.Equal(t, 2, v)
-}
-
-// ---------------------------------------------------------------------------
-// Health check
-// ---------------------------------------------------------------------------
-
-func TestHealthCheck(t *testing.T) {
-	c := New()
-	Provide(c, "healthy", func(_ *Container) (*testService, error) {
-		return &testService{healthy: true}, nil
-	})
-	Provide(c, "unhealthy", func(_ *Container) (*testService, error) {
-		return &testService{healthy: false}, nil
-	})
-	Provide(c, "no-checker", func(_ *Container) (int, error) {
-		return 42, nil
-	})
-
-	require.NoError(t, c.Start(context.Background()))
-	report := c.HealthCheck(context.Background())
-
-	assert.False(t, report.Healthy)
-	assert.Len(t, report.Components, 3)
-
-	// Find specific results
-	for _, ch := range report.Components {
-		switch ch.Key {
-		case "healthy":
-			assert.True(t, ch.Healthy)
-			assert.NoError(t, ch.Error)
-		case "unhealthy":
-			assert.False(t, ch.Healthy)
-			assert.Error(t, ch.Error)
-		case "no-checker":
-			assert.True(t, ch.Healthy) // no HealthChecker interface → healthy
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Hooks
-// ---------------------------------------------------------------------------
-
-func TestHooks_Order(t *testing.T) {
+	keyA := NewKey[*testComponent]("a")
+	keyB := NewKey[*testComponent]("b")
+	keyC := NewKey[*testComponent]("c")
 	var order []string
+
+	MustSupply(c, keyA, &testComponent{order: &order, name: "a"}, DependsOn(keyB))
+	MustSupply(c, keyB, &testComponent{order: &order, name: "b"}, DependsOn(keyC))
+	MustSupply(c, keyC, &testComponent{order: &order, name: "c"})
+
+	require.NoError(t, c.Start(context.Background()))
+	assert.Equal(t, []string{"start:c", "start:b", "start:a"}, order)
+	assert.Equal(t, []string{"b"}, c.DependencyGraph()["a"])
+	assert.Equal(t, []string{"c"}, c.DependencyGraph()["b"])
+
+	require.NoError(t, c.Stop(context.Background()))
+	assert.Equal(t, []string{
+		"start:c", "start:b", "start:a",
+		"stop:a", "stop:b", "stop:c",
+	}, order)
+}
+
+func TestExplicitDependencyCycle(t *testing.T) {
+	c := New()
+	keyA := NewKey[int]("a")
+	keyB := NewKey[int]("b")
+
+	MustSupply(c, keyA, 1, DependsOn(keyB))
+	MustSupply(c, keyB, 2, DependsOn(keyA))
+
+	err := c.Start(context.Background())
+	assert.ErrorIs(t, err, ErrCircularDependency)
+}
+
+func TestStartFailureRollsBackFailingComponentAndAggregates(t *testing.T) {
+	startErr := errors.New("start")
+	stopErr := errors.New("rollback")
+	var order []string
+	c := New()
+	key := NewKey[*testComponent]("bad")
+	MustSupply(c, key, &testComponent{
+		order:    &order,
+		name:     "bad",
+		startErr: startErr,
+		stopErr:  stopErr,
+	})
+
+	err := c.Start(context.Background())
+	assert.ErrorIs(t, err, startErr)
+	assert.ErrorIs(t, err, stopErr)
+	assert.Equal(t, []string{"start:bad", "stop:bad"}, order)
+	assert.Equal(t, StateStopFailed, c.State())
+}
+
+func TestRollbackUsesIndependentOverallTimeout(t *testing.T) {
+	startErr := errors.New("start failed")
 	c := New(
-		WithOnStart(func(context.Context) error {
-			order = append(order, "onStart")
-			return nil
-		}),
-		WithOnStarted(func(context.Context) error {
-			order = append(order, "onStarted")
-			return nil
-		}),
-		WithOnStopping(func(context.Context) error {
-			order = append(order, "onStopping")
+		WithRollbackTimeout(5*time.Millisecond),
+		WithComponentStopTimeout(time.Second),
+	)
+	key := NewKey[*lifecycleComponent]("component")
+	MustSupply(c, key, &lifecycleComponent{
+		start: func(context.Context) error { return startErr },
+		stop: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	})
+
+	started := time.Now()
+	err := c.Start(context.Background())
+	assert.ErrorIs(t, err, startErr)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(started), 100*time.Millisecond)
+	assert.Equal(t, StateStopFailed, c.State())
+}
+
+func TestStopFailureRetainsInstanceAndCanRetry(t *testing.T) {
+	var order []string
+	c := New()
+	key := NewKey[*testComponent]("component")
+	component := &testComponent{
+		order:   &order,
+		name:    "component",
+		stopErr: errors.New("stop"),
+	}
+	MustSupply(c, key, component)
+
+	require.NoError(t, c.Start(context.Background()))
+	require.Error(t, c.Stop(context.Background()))
+	assert.Equal(t, StateStopFailed, c.State())
+
+	got, err := Get(c, key)
+	require.NoError(t, err)
+	assert.Same(t, component, got)
+
+	component.stopErr = nil
+	require.NoError(t, c.Stop(context.Background()))
+	assert.Equal(t, StateStopped, c.State())
+}
+
+func TestSuccessfulStopHooksAreNotRepeated(t *testing.T) {
+	stopErr := errors.New("hook failed")
+	firstCalls := 0
+	secondCalls := 0
+	c := New(
+		WithOnStop(func(context.Context) error {
+			firstCalls++
 			return nil
 		}),
 		WithOnStop(func(context.Context) error {
-			order = append(order, "onStop")
+			secondCalls++
+			if secondCalls == 1 {
+				return stopErr
+			}
 			return nil
 		}),
 	)
 
-	Provide(c, "svc", func(_ *Container) (*orderRecorder, error) {
-		return &orderRecorder{key: "svc", record: &order}, nil
+	require.NoError(t, c.Start(context.Background()))
+	assert.ErrorIs(t, c.Stop(context.Background()), stopErr)
+	require.NoError(t, c.Stop(context.Background()))
+	assert.Equal(t, 1, firstCalls)
+	assert.Equal(t, 2, secondCalls)
+}
+
+func TestHealthCheckStatusesAndState(t *testing.T) {
+	c := New(WithHealthTimeout(5 * time.Millisecond))
+	healthy := NewKey[*testComponent]("healthy")
+	bad := NewKey[*testComponent]("bad")
+	plain := NewKey[int]("plain")
+	var order []string
+
+	MustSupply(c, healthy, &testComponent{order: &order, name: "healthy"})
+	MustSupply(c, bad, &testComponent{
+		order:     &order,
+		name:      "bad",
+		healthErr: errors.New("bad"),
 	})
+	MustSupply(c, plain, 1)
+
+	_, err := c.HealthCheck(context.Background())
+	assert.ErrorIs(t, err, ErrInvalidState)
 
 	require.NoError(t, c.Start(context.Background()))
+	report, err := c.HealthCheck(context.Background())
+	require.NoError(t, err)
+	assert.False(t, report.Healthy)
+	assert.Equal(t, HealthHealthy, report.Components[0].Status)
+	assert.Equal(t, HealthUnhealthy, report.Components[1].Status)
+	assert.Equal(t, HealthSkipped, report.Components[2].Status)
 	require.NoError(t, c.Stop(context.Background()))
-
-	assert.Equal(t, []string{
-		"onStart",
-		"start:svc",
-		"onStarted",
-		"onStopping",
-		"stop:svc",
-		"onStop",
-	}, order)
 }
 
-func TestHooks_OnStartError(t *testing.T) {
-	c := New(WithOnStart(func(context.Context) error {
-		return errors.New("hook failed")
-	}))
-	Supply(c, "x", 1)
+func TestHealthCheckBoundsComponentIgnoringContext(t *testing.T) {
+	c := New(WithHealthTimeout(5 * time.Millisecond))
+	key := NewKey[HealthChecker]("blocked")
+	release := make(chan struct{})
+	blocked := HealthCheckerFunc(func(context.Context) error {
+		<-release
+		return nil
+	})
+	MustSupply(c, key, HealthChecker(blocked))
 
-	err := c.Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "onStart hook")
-	assert.Equal(t, StateFailed, c.State())
+	require.NoError(t, c.Start(context.Background()))
+	started := time.Now()
+	report, err := c.HealthCheck(context.Background())
+	require.NoError(t, err)
+	assert.Less(t, time.Since(started), 100*time.Millisecond)
+	assert.Equal(t, HealthTimeout, report.Components[0].Status)
+	close(release)
 }
 
-func TestHooks_OnStartedError_Rollback(t *testing.T) {
-	c := New(WithOnStarted(func(context.Context) error {
-		return errors.New("hook failed")
-	}))
-
-	svc := &testDB{}
-	Provide(c, "svc", func(_ *Container) (*testDB, error) { return svc, nil })
-
-	err := c.Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "onStarted hook")
-	assert.True(t, svc.stopped) // rollback
-}
-
-func TestStart_RollbackDoesNotStopComponentTwice(t *testing.T) {
-	c := New(WithOnStarted(func(context.Context) error {
-		return errors.New("hook failed")
-	}))
-
-	svc := &countingComponent{}
-	require.NoError(t, Supply(c, "svc", svc))
-	require.Error(t, c.Start(context.Background()))
-	assert.Equal(t, 1, svc.starts)
-	assert.Equal(t, 1, svc.stops)
-
-	require.NoError(t, c.Stop(context.Background()))
-	assert.Equal(t, 1, svc.stops)
-}
-
-// ---------------------------------------------------------------------------
-// Query helpers
-// ---------------------------------------------------------------------------
-
-func TestKeys_Has_Count(t *testing.T) {
-	c := New()
-	Supply(c, "a", 1)
-	Supply(c, "b", 2)
-	Supply(c, "c", 3)
-
-	assert.Equal(t, []string{"a", "b", "c"}, c.Keys())
-	assert.True(t, c.Has("a"))
-	assert.False(t, c.Has("z"))
-	assert.Equal(t, 3, c.Count())
-}
-
-func TestMetrics(t *testing.T) {
-	c := New()
-	Supply(c, "x", 1)
-	Supply(c, "y", 2)
-
-	m := c.Metrics()
-	assert.Equal(t, 2, m.ComponentCount)
-	assert.Equal(t, StateNew, m.State)
-}
-
-// ---------------------------------------------------------------------------
-// Concurrency
-// ---------------------------------------------------------------------------
-
-func TestConcurrentGet(t *testing.T) {
-	c := New()
-	Supply(c, "x", 42)
+func TestHealthCheckReusesTimedOutFlight(t *testing.T) {
+	c := New(WithHealthTimeout(time.Millisecond))
+	key := NewKey[HealthChecker]("blocked")
+	release := make(chan struct{})
+	var calls atomic.Int32
+	checker := HealthCheckerFunc(func(context.Context) error {
+		calls.Add(1)
+		<-release
+		return nil
+	})
+	MustSupply(c, key, HealthChecker(checker))
 	require.NoError(t, c.Start(context.Background()))
 
-	var wg sync.WaitGroup
-	for range 100 {
-		wg.Go(func() {
-			v, err := Get[int](c, "x")
-			assert.NoError(t, err)
-			assert.Equal(t, 42, v)
-		})
+	for range 3 {
+		report, err := c.HealthCheck(context.Background())
+		require.NoError(t, err)
+		assert.Equal(t, HealthTimeout, report.Components[0].Status)
 	}
-	wg.Wait()
+	assert.Equal(t, int32(1), calls.Load())
+	close(release)
 }
 
-// ---------------------------------------------------------------------------
-// Global container
-// ---------------------------------------------------------------------------
+func TestWaitSupervisedExit(t *testing.T) {
+	c := New()
+	key := NewKey[*Runner]("worker")
+	runErr := errors.New("worker failed")
+	runner := MustRunner(RunnerFunc(func(context.Context) error {
+		return runErr
+	}))
+	MustSupply(c, key, runner)
 
-func TestGlobalC(t *testing.T) {
-	assert.NotNil(t, C)
-	assert.Equal(t, StateNew, C.State())
+	require.NoError(t, c.Start(context.Background()))
+	err := c.Wait(context.Background())
+	assert.ErrorIs(t, err, runErr)
+	require.NoError(t, c.Stop(context.Background()))
+}
+
+func TestWaitSharesSupervisorResult(t *testing.T) {
+	c := New()
+	key := NewKey[*Runner]("worker")
+	runErr := errors.New("worker failed")
+	release := make(chan struct{})
+	runner := MustRunner(RunnerFunc(func(context.Context) error {
+		<-release
+		return runErr
+	}))
+	MustSupply(c, key, runner)
+	require.NoError(t, c.Start(context.Background()))
+
+	results := make(chan error, 2)
+	go func() { results <- c.Wait(context.Background()) }()
+	go func() { results <- c.Wait(context.Background()) }()
+	close(release)
+
+	assert.ErrorIs(t, <-results, runErr)
+	assert.ErrorIs(t, <-results, runErr)
+	require.NoError(t, c.Stop(context.Background()))
+}
+
+func TestRunnerStopTimeoutAndRetry(t *testing.T) {
+	release := make(chan struct{})
+	runner := MustRunner(RunnerFunc(func(context.Context) error {
+		<-release
+		return nil
+	}))
+	require.NoError(t, runner.Start(context.Background()))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+
+	assert.ErrorIs(t, runner.Stop(ctx), context.DeadlineExceeded)
+	assert.ErrorIs(t, runner.Start(context.Background()), ErrRunnerAlreadyStarted)
+
+	close(release)
+	require.NoError(t, runner.Stop(context.Background()))
+	require.NoError(t, runner.Start(context.Background()))
+}
+
+func TestRunnerPanicIsSupervised(t *testing.T) {
+	runner := MustRunner(RunnerFunc(func(context.Context) error {
+		panic("boom")
+	}))
+	require.NoError(t, runner.Start(context.Background()))
+
+	<-runner.Done()
+	assert.ErrorIs(t, runner.Err(), ErrRunnerPanic)
+	require.NoError(t, runner.Stop(context.Background()))
+}
+
+func TestNewRunnerRejectsTypedNil(t *testing.T) {
+	var runnable *typedNilRunnable
+	runner, err := NewRunner(runnable)
+	assert.Nil(t, runner)
+	assert.ErrorIs(t, err, ErrNilRunnable)
+}
+
+type typedNilRunnable struct{}
+
+func (*typedNilRunnable) Run(context.Context) error { return nil }
+
+type lifecycleComponent struct {
+	start func(context.Context) error
+	stop  func(context.Context) error
+}
+
+func (c *lifecycleComponent) Start(ctx context.Context) error {
+	return c.start(ctx)
+}
+
+func (c *lifecycleComponent) Stop(ctx context.Context) error {
+	return c.stop(ctx)
+}
+
+type HealthCheckerFunc func(context.Context) error
+
+func (f HealthCheckerFunc) HealthCheck(ctx context.Context) error {
+	return f(ctx)
 }

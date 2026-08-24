@@ -2,19 +2,28 @@ package cx
 
 import "context"
 
-// Starter is implemented by values that require initialization.
-// Start is called during Container.Start in dependency order.
+// Starter initializes a component during container startup.
 type Starter interface {
-	Start(ctx context.Context) error
+	Start(context.Context) error
 }
 
-// Stopper is implemented by values that require graceful cleanup.
-// Stop is called during Container.Stop in reverse dependency order.
+// Stopper releases a component during container shutdown.
 type Stopper interface {
-	Stop(ctx context.Context) error
+	Stop(context.Context) error
 }
 
-// HealthChecker is implemented by values that can report their health status.
+// HealthChecker reports a component's current health.
 type HealthChecker interface {
-	HealthCheck(ctx context.Context) error
+	HealthCheck(context.Context) error
+}
+
+// Runnable represents a long-running, context-controlled component.
+type Runnable interface {
+	Run(context.Context) error
+}
+
+// Supervised exposes completion and failure of a long-running component.
+type Supervised interface {
+	Done() <-chan struct{}
+	Err() error
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"syscall"
 	"testing"
@@ -120,6 +121,30 @@ func TestRun_DoubleRunReturnsError(t *testing.T) {
 	<-done
 }
 
+func TestRun_SupervisedComponentFailureStopsApplication(t *testing.T) {
+	runErr := errors.New("worker failed")
+	runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return runErr }))
+	application := New(WithComponent(cx.NewKey[*cx.Runner]("worker"), runner))
+
+	err := application.Run()
+	if !errors.Is(err, runErr) {
+		t.Fatalf("expected supervised error %v, got %v", runErr, err)
+	}
+	if application.Container().State() != cx.StateStopped {
+		t.Fatalf("expected stopped container, got %s", application.Container().State())
+	}
+}
+
+func TestRun_UnexpectedComponentCancellationIsFailure(t *testing.T) {
+	runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return context.Canceled }))
+	application := New(WithComponent(cx.NewKey[*cx.Runner]("worker"), runner))
+
+	err := application.Run()
+	if err == nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected unexpected cancellation error, got %v", err)
+	}
+}
+
 func TestRun_WithOptions(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -210,7 +235,7 @@ func TestRun_WithContainer(t *testing.T) {
 	}
 
 	c := cx.New()
-	cx.MustSupply(c, "db", dbClient)
+	cx.MustSupply(c, cx.NewKey[*db.Client]("db"), dbClient)
 
 	app := New(WithContainer(c))
 
@@ -239,7 +264,7 @@ func TestHealthCheck(t *testing.T) {
 	}
 
 	c := cx.New()
-	cx.MustSupply(c, "db", dbClient)
+	cx.MustSupply(c, cx.NewKey[*db.Client]("db"), dbClient)
 
 	app := New(WithContainer(c))
 
@@ -248,7 +273,10 @@ func TestHealthCheck(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	report := app.HealthCheck(context.Background())
+	report, err := app.HealthCheck(context.Background())
+	if err != nil {
+		t.Fatalf("health check: %v", err)
+	}
 	if !report.Healthy {
 		t.Fatal("expected healthy report")
 	}
@@ -276,7 +304,7 @@ func TestRun_ShutdownOrder(t *testing.T) {
 
 	app := New(
 		WithServer(srv),
-		WithComponent("db", dbClient),
+		WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
 		WithOnStopping(func(ctx context.Context) error {
 			// 记录 db 连接状态：如果 db 已关闭，Ping 会失败
 			if dbClient.Ping(ctx) != nil {

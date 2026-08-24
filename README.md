@@ -144,8 +144,8 @@ func main() {
 	// 由 app 统一管理启动（Ping 验证连通性）和关闭。
 	application := app.New(
 		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
-		app.WithComponent("db", gormDB),
-		app.WithComponent("redis", rdb),
+		app.WithComponent(cx.NewKey[*db.Client]("db"), gormDB),
+		app.WithComponent(cx.NewKey[*redis.Client]("redis"), rdb),
 		app.WithShutdownTimeout(30*time.Second),
 	)
 
