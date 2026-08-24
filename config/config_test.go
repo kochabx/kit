@@ -16,7 +16,7 @@ type api struct {
 	Method   string            `json:"method" default:"GET"`
 	Url      string            `json:"url"`
 	Body     string            `json:"body"`
-	Headers  map[string]string `json:"headers" default:"env: production"`
+	Headers  map[string]string `json:"headers" default:"{\"env\":\"production\"}"`
 	Timeout  int               `json:"timeout" default:"3"`
 	Period   int               `json:"period" default:"10"`
 	Duration time.Duration     `json:"duration" default:"5s"`
@@ -28,7 +28,7 @@ type server struct {
 }
 
 type mock struct {
-	IDs     []string `json:"ids" default:"1,2,3"`
+	IDs     []string `json:"ids" default:"[\"1\",\"2\",\"3\"]"`
 	Number  float64  `json:"number" default:"1.23"`
 	Enabled bool     `json:"enabled" default:"true"`
 	Server  server   `json:"server"`

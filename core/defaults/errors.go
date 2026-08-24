@@ -1,46 +1,43 @@
 package defaults
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 )
 
-// Error types for tag processing
 var (
-	ErrTargetMustBePointer = fmt.Errorf("target must be a pointer")
-	ErrTargetIsNil         = fmt.Errorf("target is nil")
-	ErrUnsupportedType     = fmt.Errorf("unsupported type")
-	ErrMaxDepthExceeded    = fmt.Errorf("max recursion depth exceeded")
-	ErrInvalidTagValue     = fmt.Errorf("invalid tag value")
+	ErrTargetMustBePointer = errors.New("target must be a pointer to a struct")
+	ErrTargetIsNil         = errors.New("target is nil")
+	ErrUnsupportedType     = errors.New("unsupported default type")
+	ErrInvalidTagValue     = errors.New("invalid default value")
+	ErrInvalidOption       = errors.New("invalid defaults option")
+	ErrMaxDepthExceeded    = errors.New("maximum traversal depth exceeded")
+	ErrApplyPanic          = errors.New("panic while applying defaults")
 )
 
-// FieldError wraps an error with field path context
+// FieldError identifies a default that could not be applied. Error omits the
+// raw tag value because defaults may contain credentials.
 type FieldError struct {
-	Path  string
-	Kind  reflect.Kind
-	Tag   string
-	Value string
-	Err   error
+	Path string
+	Type reflect.Type
+	Tag  string
+	Err  error
 }
 
-// Error implements error interface
 func (e *FieldError) Error() string {
-	return fmt.Sprintf("field %q (type: %s, tag: %q, value: %q): %v",
-		e.Path, e.Kind, e.Tag, e.Value, e.Err)
+	return fmt.Sprintf("defaults: invalid value for field %q (%s), tag %q", e.Path, e.Type, e.Tag)
 }
 
-// Unwrap returns the wrapped error
 func (e *FieldError) Unwrap() error {
 	return e.Err
 }
 
-// newFieldError creates a new field error with context
-func newFieldError(path string, kind reflect.Kind, tag, value string, err error) error {
+func fieldError(path string, typ reflect.Type, tag string, err error) error {
 	return &FieldError{
-		Path:  path,
-		Kind:  kind,
-		Tag:   tag,
-		Value: value,
-		Err:   err,
+		Path: path,
+		Type: typ,
+		Tag:  tag,
+		Err:  errors.Join(ErrInvalidTagValue, err),
 	}
 }

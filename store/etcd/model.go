@@ -8,7 +8,7 @@ import (
 
 // Config ETCD 配置
 type Config struct {
-	Endpoints           []string      `json:"endpoints" default:"localhost:2379"`
+	Endpoints           []string      `json:"endpoints" default:"[\"localhost:2379\"]"`
 	Username            string        `json:"username" default:"root"`
 	Password            string        `json:"password"`
 	DialTimeout         time.Duration `json:"dialTimeout" default:"5s"`
