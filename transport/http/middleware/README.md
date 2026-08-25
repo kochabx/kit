@@ -22,7 +22,7 @@ r.GET("/path", func(c *gin.Context) {
 |--------|------|------|
 | 认证 | `Auth[T]()` | JWT / API Key 等多种认证方式 |
 | CORS | `Cors()` | 跨域资源共享 |
-| 加解密 | `Crypto()` | 请求体解密（ECIES / 自定义） |
+| 加解密 | `Crypto()` | 请求体解密（HPKE / 自定义） |
 | 日志 | `Logger()` | 请求日志，支持 Body / Header 记录 |
 | 权限 | `Permission()` | 角色 / 所有权权限检查 |
 | Recovery | `Recovery()` | Panic 恢复，返回 500 |
@@ -146,13 +146,16 @@ cors := middleware.Cors(middleware.CorsConfig{
 
 ## Crypto 请求体解密中间件
 
-对加密请求体进行 Base64 解码 + 解密，透明地替换 `r.Body`，后续 Handler 无感知。
+对加密请求体进行解密，透明地替换 `r.Body`，后续 Handler 无感知。
 
 ```go
-// 方式一：ECIES 私钥文件
-decryptor, err := middleware.ECIESDecryptor("/path/to/private.pem")
-// 或
-decryptor := middleware.MustECIESDecryptor("/path/to/private.pem")
+// 方式一：RFC 9180 HPKE；请求体是 ecies.Message 的 JSON 编码
+suite := ecies.X25519ChaCha20()
+decryptor := middleware.HPKEDecryptor(
+    suite,
+    privateKey,
+    []byte("my-service/http-body/v1"),
+)
 
 // 方式二：自定义解密器
 decryptor := middleware.DecryptorFunc(func(ciphertext []byte) ([]byte, error) {
@@ -160,9 +163,8 @@ decryptor := middleware.DecryptorFunc(func(ciphertext []byte) ([]byte, error) {
 })
 
 mw := middleware.Crypto(middleware.CryptoConfig{
-    Decryptor:    decryptor,
-    Base64Decode: true, // 默认 true，先 Base64 解码再解密
-    SkipPaths:    []string{"/health"},
+	Decryptor: decryptor,
+	Skip: middleware.SkipConfig{Paths: []string{"/health"}},
 })
 ```
 
@@ -171,8 +173,7 @@ mw := middleware.Crypto(middleware.CryptoConfig{
 | 字段 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `Decryptor` | `Decryptor` | — | 解密器（必需） |
-| `Base64Decode` | `bool` | `true` | 解密前先进行 Base64 解码 |
-| `SkipPaths` | `[]string` | `nil` | 跳过的路径 |
+| `Skip` | `SkipConfig` | 零值 | 跳过路径或按请求动态跳过 |
 | `SkipFunc` | `func(*http.Request) bool` | `nil` | 动态跳过判断 |
 | `ErrorHandler` | `func(http.ResponseWriter, *http.Request, error)` | 返回 400 | 解密失败处理 |
 
@@ -300,57 +301,41 @@ mw := middleware.Recovery(middleware.RecoveryConfig{
 
 ## Signature 请求签名验证中间件
 
-验证请求签名，支持将 Query 参数、请求体、路径、方法组合签名。
+使用短时效 HMAC-SHA256 签名验证完整 HTTP 请求，并通过 nonce 阻止重放。
+签名固定覆盖 Method、Host、转义后的 Path、完整 Query、Content-Type 和 Body
+的 SHA-256 摘要。
 
 ```go
-// HMAC-SHA256（内置）
-signer := middleware.HMACSHA256Signer("my-secret")
+signer, err := hmac.New(secretKey) // 至少 32 字节
+if err != nil {
+    return err
+}
 
-mw := middleware.Signature(middleware.SignatureConfig{
-    Signer:        signer,
-    HeaderName:    "X-Signature", // 默认
-    ParamsEnabled: true,          // 签名包含 Query 参数
-    BodyEnabled:   true,          // 签名包含请求体
-    PathEnabled:   false,         // 是否包含请求路径
-    MethodEnabled: false,         // 是否包含请求方法
-    SkipPaths:     []string{"/health"},
-})
+mw := middleware.Signature(signer)
 ```
 
-客户端签名示例（HMAC-SHA256 + Base64）：
+客户端使用相同的 HMAC 密钥签名请求：
 
 ```go
-// 签名内容 = sorted(query_params) + body（按 ParamsEnabled/BodyEnabled 组合）
-h := hmac.New(sha256.New, []byte("my-secret"))
-h.Write(signingData)
-signature := base64.StdEncoding.EncodeToString(h.Sum(nil))
-req.Header.Set("X-Signature", signature)
+if err := middleware.SignRequest(req, signer); err != nil {
+    return err
+}
 ```
 
-自定义签名验证器：
-
-```go
-signer := middleware.SignerFunc(func(data []byte, signature string) error {
-    if !myVerify(data, signature) {
-        return middleware.ErrSignatureFailed
-    }
-    return nil
-})
-```
+`SignRequest` 会恢复请求体，签名后仍可正常发送。多副本服务不能使用
+`MemoryReplayStore`，应实现 `ReplayStore` 并使用 Redis 等共享存储原子写入。
 
 ### 配置选项
 
-| 字段 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `Signer` | `Signer` | — | 签名验证器（必需） |
-| `HeaderName` | `string` | `"X-Signature"` | 签名 Header 名称 |
-| `ParamsEnabled` | `bool` | `true` | 是否将 Query 参数纳入签名 |
-| `BodyEnabled` | `bool` | `true` | 是否将请求体纳入签名 |
-| `PathEnabled` | `bool` | `false` | 是否将请求路径纳入签名 |
-| `MethodEnabled` | `bool` | `false` | 是否将请求方法纳入签名 |
-| `SkipPaths` | `[]string` | `nil` | 跳过的路径 |
-| `SkipFunc` | `func(*http.Request) bool` | `nil` | 动态跳过判断 |
-| `ErrorHandler` | `func(http.ResponseWriter, *http.Request, error)` | 返回 400 | 验证失败处理 |
+| 选项 | 说明 |
+|------|------|
+| `WithSignatureReplayStore` | 共享防重放存储；默认使用单进程内存存储 |
+| `WithSignatureHeader` | 修改签名 Header；默认 `X-Signature` |
+| `WithSignatureMaxBodyBytes` | 修改请求体上限；默认 `1 MiB` |
+| `WithSignatureSkip` | 配置跳过路径或动态跳过函数 |
+| `WithSignatureErrorHandler` | 自定义验证失败处理 |
+| `WithSignatureSuccessHandler` | 自定义验证成功回调 |
+| `WithSignatureLogger` | 自定义日志器 |
 
 ---
 
@@ -608,4 +593,3 @@ app.Get("/users/:id", func(c *fiber.Ctx) error {
 | **Echo** | `net/http` | `echo.WrapMiddleware` 或手动适配 | `c.SetRequest(r)` 同步 |
 | **Gorilla Mux** | `net/http` | 原生，无需适配 | 完整支持 |
 | **Fiber** | `fasthttp` | `adaptor.HTTPMiddleware` | 需通过 adaptor 转换，有开销 |
-

@@ -2,177 +2,283 @@ package middleware
 
 import (
 	"bytes"
-	"crypto/hmac"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
-	"sort"
-	"strings"
+	"net/url"
+	"sync"
+	"time"
 
+	corehmac "github.com/kochabx/kit/core/crypto/hmac"
 	"github.com/kochabx/kit/errors"
 	"github.com/kochabx/kit/log"
 	kithttp "github.com/kochabx/kit/transport/http"
 )
 
-var (
-	ErrSignatureFailed = errors.BadRequest("verify signature failed")
+const (
+	DefaultSignatureHeader = "X-Signature"
+	DefaultMaxSignedBody   = 1 << 20
 )
 
-// Signer 签名验证器接口
-type Signer interface {
-	Verify(data []byte, signature string) error
+var (
+	ErrSignatureFailed = errors.BadRequest("verify signature failed")
+	ErrSignatureReplay = errors.BadRequest("signature replay detected")
+)
+
+// ReplayStore atomically records a nonce for ttl. used is true when the nonce
+// was already recorded. Distributed deployments should use a shared store.
+type ReplayStore interface {
+	Use(ctx context.Context, key string, ttl time.Duration) (used bool, err error)
 }
 
-// SignerFunc 签名验证器函数适配器
-type SignerFunc func(data []byte, signature string) error
-
-func (f SignerFunc) Verify(data []byte, signature string) error {
-	return f(data, signature)
+// MemoryReplayStore is suitable for one process and tests. It is not shared
+// across replicas; distributed services should provide a Redis-backed store.
+type MemoryReplayStore struct {
+	mu      sync.Mutex
+	entries map[string]time.Time
+	clock   func() time.Time
 }
 
-// HMACSHA256Signer 创建 HMAC-SHA256 签名验证器
-func HMACSHA256Signer(secret string) Signer {
-	return SignerFunc(func(data []byte, signature string) error {
-		h := hmac.New(sha256.New, []byte(secret))
-		h.Write(data)
-		expected := base64.StdEncoding.EncodeToString(h.Sum(nil))
-		if expected != signature {
-			return ErrSignatureFailed
+func NewMemoryReplayStore() *MemoryReplayStore {
+	return &MemoryReplayStore{entries: make(map[string]time.Time), clock: time.Now}
+}
+
+func (store *MemoryReplayStore) Use(_ context.Context, key string, ttl time.Duration) (bool, error) {
+	if store == nil || key == "" || ttl <= 0 {
+		return false, fmt.Errorf("signature: invalid replay store input")
+	}
+	now := store.clock()
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if expiresAt, ok := store.entries[key]; ok && now.Before(expiresAt) {
+		return true, nil
+	}
+	store.entries[key] = now.Add(ttl)
+	for existingKey, expiresAt := range store.entries {
+		if !now.Before(expiresAt) {
+			delete(store.entries, existingKey)
 		}
-		return nil
-	})
+	}
+	return false, nil
 }
 
-// SignatureParts 控制签名数据中包含的请求组成部分
-type SignatureParts struct {
-	Params bool // 是否包含 Query 参数
-	Body   bool // 是否包含请求体
-	Path   bool // 是否包含请求路径
-	Method bool // 是否包含请求方法
+type signatureConfig struct {
+	Skip           SkipConfig
+	Signer         *corehmac.Signer
+	ReplayStore    ReplayStore
+	HeaderName     string
+	MaxBodyBytes   int64
+	SuccessHandler func(http.ResponseWriter, *http.Request)
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error)
+	Logger         *log.Logger
 }
 
-// SignatureConfig 签名验证中间件配置
-type SignatureConfig struct {
-	Skip           SkipConfig                                      // 跳过配置
-	Parts          SignatureParts                                  // 签名数据组成部分
-	Signer         Signer                                          // 签名验证器（必需）
-	HeaderName     string                                          // 签名头名称，默认 "X-Signature"
-	SuccessHandler func(http.ResponseWriter, *http.Request)        // 成功回调
-	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理函数
-	Logger         *log.Logger                                     // 自定义日志记录器
+type SignatureOption func(*signatureConfig)
+
+func WithSignatureReplayStore(store ReplayStore) SignatureOption {
+	return func(config *signatureConfig) { config.ReplayStore = store }
 }
 
-// DefaultSignatureConfig 返回默认签名配置
-func DefaultSignatureConfig() SignatureConfig {
-	return SignatureConfig{
-		HeaderName: "X-Signature",
-		Parts: SignatureParts{
-			Params: true,
-			Body:   true,
-		},
-	}
+func WithSignatureHeader(name string) SignatureOption {
+	return func(config *signatureConfig) { config.HeaderName = name }
 }
 
-// Signature 创建请求签名验证中间件
-func Signature(cfgs ...SignatureConfig) func(http.Handler) http.Handler {
-	cfg := SignatureConfig{}
-	if len(cfgs) > 0 {
-		cfg = cfgs[0]
-	}
+func WithSignatureMaxBodyBytes(size int64) SignatureOption {
+	return func(config *signatureConfig) { config.MaxBodyBytes = size }
+}
 
-	if cfg.Logger == nil {
-		cfg.Logger = log.Global()
-	}
+func WithSignatureSkip(skip SkipConfig) SignatureOption {
+	return func(config *signatureConfig) { config.Skip = skip }
+}
 
-	if cfg.Signer == nil {
-		panic("middleware: Signer is required")
-	}
+func WithSignatureErrorHandler(handler func(http.ResponseWriter, *http.Request, error)) SignatureOption {
+	return func(config *signatureConfig) { config.ErrorHandler = handler }
+}
 
-	if cfg.HeaderName == "" {
-		cfg.HeaderName = "X-Signature"
-	}
+func WithSignatureSuccessHandler(handler func(http.ResponseWriter, *http.Request)) SignatureOption {
+	return func(config *signatureConfig) { config.SuccessHandler = handler }
+}
 
-	if cfg.ErrorHandler == nil {
-		cfg.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+func WithSignatureLogger(logger *log.Logger) SignatureOption {
+	return func(config *signatureConfig) { config.Logger = logger }
+}
+
+// SignRequest signs request's canonical method, host, escaped path, complete
+// query, content type and body digest, then writes the signature header. The
+// request body remains readable.
+func SignRequest(request *http.Request, signer *corehmac.Signer, headerNames ...string) error {
+	if request == nil || signer == nil {
+		return fmt.Errorf("signature: request and signer are required")
+	}
+	payload, err := canonicalRequest(request, 0)
+	if err != nil {
+		return err
+	}
+	signature, err := signer.Sign(payload)
+	if err != nil {
+		return err
+	}
+	encoded, err := encodeSignature(signature)
+	if err != nil {
+		return err
+	}
+	headerName := DefaultSignatureHeader
+	if len(headerNames) > 0 && headerNames[0] != "" {
+		headerName = headerNames[0]
+	}
+	request.Header.Set(headerName, encoded)
+	return nil
+}
+
+// Signature verifies a signed request and rejects a nonce reused within the
+// signature validity window.
+func Signature(signer *corehmac.Signer, options ...SignatureOption) func(http.Handler) http.Handler {
+	if signer == nil {
+		panic("middleware: signature signer is required")
+	}
+	config := signatureConfig{Signer: signer, ReplayStore: NewMemoryReplayStore()}
+	for _, option := range options {
+		if option != nil {
+			option(&config)
+		}
+	}
+	if config.ReplayStore == nil {
+		panic("middleware: signature replay store is required")
+	}
+	if config.HeaderName == "" {
+		config.HeaderName = DefaultSignatureHeader
+	}
+	if config.MaxBodyBytes <= 0 {
+		config.MaxBodyBytes = DefaultMaxSignedBody
+	}
+	if config.Logger == nil {
+		config.Logger = log.Global()
+	}
+	if config.ErrorHandler == nil {
+		config.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 			kithttp.Fail(w, http.StatusBadRequest, http.StatusBadRequest, ErrSignatureFailed)
 		}
 	}
-
-	matcher := NewPathMatcher(cfg.Skip.Paths)
+	matcher := NewPathMatcher(config.Skip.Paths)
 
 	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if shouldSkip(r, matcher, cfg.Skip.Func) {
-				next.ServeHTTP(w, r)
+		return http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+			if shouldSkip(request, matcher, config.Skip.Func) {
+				next.ServeHTTP(w, request)
 				return
 			}
-
-			signature := r.Header.Get(cfg.HeaderName)
-			if signature == "" {
-				cfg.Logger.Error().Str("header", cfg.HeaderName).Msg("signature: header missing")
-				cfg.ErrorHandler(w, r, ErrSignatureFailed)
-				return
-			}
-
-			data, err := buildSignatureData(r, cfg)
+			encoded := request.Header.Get(config.HeaderName)
+			signature, err := decodeSignature(encoded)
 			if err != nil {
-				cfg.Logger.Error().Err(err).Msg("signature: build data failed")
-				cfg.ErrorHandler(w, r, err)
+				config.Logger.Error().Err(err).Msg("signature: invalid header")
+				config.ErrorHandler(w, request, err)
 				return
 			}
-
-			if err := cfg.Signer.Verify(data, signature); err != nil {
-				cfg.Logger.Error().Err(err).Msg("signature: verify failed")
-				cfg.ErrorHandler(w, r, err)
+			payload, err := canonicalRequest(request, config.MaxBodyBytes)
+			if err != nil {
+				config.Logger.Error().Err(err).Msg("signature: canonicalize request failed")
+				config.ErrorHandler(w, request, err)
 				return
 			}
-
-			if cfg.SuccessHandler != nil {
-				cfg.SuccessHandler(w, r)
+			if err := config.Signer.Verify(signature, payload); err != nil {
+				config.Logger.Error().Err(err).Msg("signature: verification failed")
+				config.ErrorHandler(w, request, err)
+				return
 			}
-			next.ServeHTTP(w, r)
+			used, err := config.ReplayStore.Use(request.Context(), signature.ReplayKey(), config.Signer.Expiration())
+			if err != nil || used {
+				if used {
+					err = ErrSignatureReplay
+				}
+				config.Logger.Error().Err(err).Msg("signature: replay check failed")
+				config.ErrorHandler(w, request, err)
+				return
+			}
+			if config.SuccessHandler != nil {
+				config.SuccessHandler(w, request)
+			}
+			next.ServeHTTP(w, request)
 		})
 	}
 }
 
-// buildSignatureData 构建待签名数据
-func buildSignatureData(r *http.Request, cfg SignatureConfig) ([]byte, error) {
-	var builder strings.Builder
-
-	if cfg.Parts.Method {
-		builder.WriteString(r.Method)
+func encodeSignature(signature corehmac.Signature) (string, error) {
+	encoded, err := json.Marshal(signature)
+	if err != nil {
+		return "", fmt.Errorf("signature: encode: %w", err)
 	}
+	return base64.RawURLEncoding.EncodeToString(encoded), nil
+}
 
-	if cfg.Parts.Path {
-		builder.WriteString(r.URL.Path)
+func decodeSignature(encoded string) (corehmac.Signature, error) {
+	if encoded == "" {
+		return corehmac.Signature{}, fmt.Errorf("signature: header is empty")
 	}
-
-	if cfg.Parts.Params {
-		params := r.URL.Query()
-		if len(params) > 0 {
-			keys := make([]string, 0, len(params))
-			for k := range params {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-
-			pairs := make([]string, 0, len(keys))
-			for _, k := range keys {
-				pairs = append(pairs, k+"="+params.Get(k))
-			}
-			builder.WriteString(strings.Join(pairs, "&"))
-		}
+	data, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return corehmac.Signature{}, fmt.Errorf("signature: decode header: %w", err)
 	}
-
-	if cfg.Parts.Body {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			return nil, err
-		}
-		r.Body = io.NopCloser(bytes.NewBuffer(body))
-		builder.Write(body)
+	var signature corehmac.Signature
+	if err := json.Unmarshal(data, &signature); err != nil {
+		return corehmac.Signature{}, fmt.Errorf("signature: decode JSON: %w", err)
 	}
+	return signature, nil
+}
 
-	return []byte(builder.String()), nil
+func canonicalRequest(request *http.Request, maxBodyBytes int64) ([]byte, error) {
+	body, err := readAndRestoreBody(request, maxBodyBytes)
+	if err != nil {
+		return nil, err
+	}
+	bodyDigest := sha256.Sum256(body)
+	query := canonicalQuery(request.URL.Query())
+	fields := [][]byte{
+		[]byte(request.Method),
+		[]byte(request.Host),
+		[]byte(request.URL.EscapedPath()),
+		[]byte(query),
+		[]byte(request.Header.Get("Content-Type")),
+		bodyDigest[:],
+	}
+	var output bytes.Buffer
+	output.WriteByte(1)
+	var length [8]byte
+	for _, field := range fields {
+		binary.BigEndian.PutUint64(length[:], uint64(len(field)))
+		output.Write(length[:])
+		output.Write(field)
+	}
+	return output.Bytes(), nil
+}
+
+func canonicalQuery(values url.Values) string {
+	cloned := make(url.Values, len(values))
+	for key, entries := range values {
+		cloned[key] = append([]string(nil), entries...)
+	}
+	return cloned.Encode()
+}
+
+func readAndRestoreBody(request *http.Request, maxBodyBytes int64) ([]byte, error) {
+	if request.Body == nil {
+		return nil, nil
+	}
+	reader := io.Reader(request.Body)
+	if maxBodyBytes > 0 {
+		reader = io.LimitReader(request.Body, maxBodyBytes+1)
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("signature: read body: %w", err)
+	}
+	request.Body = io.NopCloser(bytes.NewReader(body))
+	if maxBodyBytes > 0 && int64(len(body)) > maxBodyBytes {
+		return nil, fmt.Errorf("signature: body exceeds %d bytes", maxBodyBytes)
+	}
+	return body, nil
 }

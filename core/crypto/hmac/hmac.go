@@ -1,241 +1,245 @@
-// Package hmac provides time-bounded HMAC signatures for API requests and
-// other integrity-protected payloads.
-//
-// The package signs a tuple (timestamp, payload) with HMAC, returning the
-// hex/base64 encoded MAC together with the timestamp used. Verification
-// recomputes the MAC, performs a constant-time comparison and enforces a
-// configurable expiration window.
-//
-// Canonical message layout (length-prefixed, collision-free):
-//
-//	uint64-be(timestamp) || uint64-be(len(payload)) || payload
-//
-// The secret is used only as the HMAC key; it is never mixed into the message.
-//
-// Example:
-//
-//	signer, _ := hmac.NewSigner("super-secret")
-//	sig, _ := signer.SignString("GET /v1/users")
-//	if err := signer.VerifyString(sig, "GET /v1/users"); err != nil {
-//	    // handle err: errors.Is(err, hmac.ErrSignatureExpired) ...
-//	}
+// Package hmac implements short-lived HMAC-SHA256 message signatures with
+// random nonces and key rotation support. Callers use Signature.ReplayKey with
+// shared state when replay prevention is required.
 package hmac
 
 import (
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/hex"
-	"hash"
+	"errors"
+	"fmt"
+	"io"
+	"sync"
 	"time"
 )
 
-// Encoding controls how the raw MAC bytes are textualised.
-type Encoding uint8
-
 const (
-	// EncodingHex encodes the MAC as lowercase hexadecimal (default).
-	EncodingHex Encoding = iota
-	// EncodingBase64Std encodes the MAC using standard base64 (RFC 4648 §4).
-	EncodingBase64Std
-	// EncodingBase64URL encodes the MAC using URL-safe base64 (RFC 4648 §5),
-	// without padding.
-	EncodingBase64URL
+	MinKeySize        = 32
+	NonceSize         = 16
+	DefaultExpiration = 5 * time.Minute
+	DefaultKeyID      = "default"
+	formatVersion     = 1
 )
 
-// DefaultExpiration is the default validity window for a signature.
-const DefaultExpiration = 5 * time.Minute
+var (
+	ErrInvalidKey        = errors.New("hmac: invalid key")
+	ErrUnknownKey        = errors.New("hmac: unknown key")
+	ErrInvalidSignature  = errors.New("hmac: invalid signature")
+	ErrSignatureMismatch = errors.New("hmac: signature mismatch")
+	ErrSignatureExpired  = errors.New("hmac: signature expired")
+	ErrFutureTimestamp   = errors.New("hmac: timestamp is in the future")
+	ErrNonceGeneration   = errors.New("hmac: nonce generation failed")
+	ErrInvalidOption     = errors.New("hmac: invalid option")
+)
 
-// Signature is the result of a Sign call.
+// Signature is safe to serialize as JSON. Value and Nonce use unpadded
+// base64url encoding. KeyID selects the verification key during rotation.
 type Signature struct {
-	// Value is the encoded MAC string (encoding is determined by the Signer).
-	Value string
-	// Timestamp is the Unix timestamp (seconds) used when computing the MAC.
-	Timestamp int64
+	KeyID     string `json:"kid"`
+	Timestamp int64  `json:"ts"`
+	Nonce     string `json:"nonce"`
+	Value     string `json:"sig"`
 }
 
-// Signer signs and verifies payloads with a fixed secret and configuration.
-// A Signer is safe for concurrent use.
+type config struct {
+	currentKeyID     string
+	verificationKeys map[string][]byte
+	expiration       time.Duration
+	skew             time.Duration
+	clock            func() time.Time
+	random           io.Reader
+}
+
+type Option func(*config) error
+
+// WithKeyID sets the public identifier placed in new signatures.
+func WithKeyID(keyID string) Option {
+	return func(config *config) error {
+		if keyID == "" || len(keyID) > 255 {
+			return fmt.Errorf("%w: invalid key ID", ErrInvalidOption)
+		}
+		config.currentKeyID = keyID
+		return nil
+	}
+}
+
+// WithVerificationKey adds an old key that remains valid during rotation.
+// New signatures always use the key passed to New.
+func WithVerificationKey(keyID string, key []byte) Option {
+	return func(config *config) error {
+		if keyID == "" || len(keyID) > 255 || len(key) < MinKeySize {
+			return fmt.Errorf("%w: invalid verification key", ErrInvalidOption)
+		}
+		if config.verificationKeys == nil {
+			config.verificationKeys = make(map[string][]byte)
+		}
+		config.verificationKeys[keyID] = append([]byte(nil), key...)
+		return nil
+	}
+}
+
+func WithExpiration(expiration time.Duration) Option {
+	return func(config *config) error {
+		if expiration <= 0 {
+			return fmt.Errorf("%w: expiration must be positive", ErrInvalidOption)
+		}
+		config.expiration = expiration
+		return nil
+	}
+}
+
+func WithClockSkew(skew time.Duration) Option {
+	return func(config *config) error {
+		if skew < 0 {
+			return fmt.Errorf("%w: clock skew must not be negative", ErrInvalidOption)
+		}
+		config.skew = skew
+		return nil
+	}
+}
+
+// WithClock is intended for deterministic tests.
+func WithClock(clock func() time.Time) Option {
+	return func(config *config) error {
+		if clock == nil {
+			return fmt.Errorf("%w: clock is nil", ErrInvalidOption)
+		}
+		config.clock = clock
+		return nil
+	}
+}
+
+// WithRandomReader is intended for deterministic tests.
+func WithRandomReader(random io.Reader) Option {
+	return func(config *config) error {
+		if random == nil {
+			return fmt.Errorf("%w: random reader is nil", ErrInvalidOption)
+		}
+		config.random = random
+		return nil
+	}
+}
+
+// Signer signs with the current key and verifies with every configured key.
+// It is immutable after construction and safe for concurrent use.
 type Signer struct {
-	secret     []byte
-	hashFn     func() hash.Hash
-	expiration time.Duration
-	skew       time.Duration
-	encoding   Encoding
-	clock      func() time.Time
+	currentKeyID string
+	keys         map[string][]byte
+	expiration   time.Duration
+	skew         time.Duration
+	clock        func() time.Time
+	random       io.Reader
+	randomMu     sync.Mutex
 }
 
-// Option configures a Signer.
-type Option func(*Signer)
-
-// WithHash sets the underlying hash constructor. Defaults to sha256.New.
-func WithHash(fn func() hash.Hash) Option {
-	return func(s *Signer) {
-		if fn != nil {
-			s.hashFn = fn
+// New creates a signer from a key containing at least 256 bits of entropy.
+// With no options it uses safe defaults and is ready for normal use.
+func New(key []byte, options ...Option) (*Signer, error) {
+	if len(key) < MinKeySize {
+		return nil, ErrInvalidKey
+	}
+	config := config{
+		currentKeyID: DefaultKeyID,
+		expiration:   DefaultExpiration,
+		clock:        time.Now,
+		random:       rand.Reader,
+	}
+	for _, option := range options {
+		if option == nil {
+			return nil, fmt.Errorf("%w: option is nil", ErrInvalidOption)
+		}
+		if err := option(&config); err != nil {
+			return nil, err
 		}
 	}
-}
-
-// WithExpiration sets the validity window enforced by Verify. Defaults to
-// DefaultExpiration. A non-positive value disables expiration checking.
-func WithExpiration(d time.Duration) Option {
-	return func(s *Signer) { s.expiration = d }
-}
-
-// WithClockSkew permits the verifier to accept timestamps up to d in the
-// future, compensating for clock drift. Defaults to 0.
-func WithClockSkew(d time.Duration) Option {
-	return func(s *Signer) {
-		if d >= 0 {
-			s.skew = d
-		}
+	keys := make(map[string][]byte, len(config.verificationKeys)+1)
+	for keyID, verificationKey := range config.verificationKeys {
+		keys[keyID] = append([]byte(nil), verificationKey...)
 	}
+	keys[config.currentKeyID] = append([]byte(nil), key...)
+	return &Signer{
+		currentKeyID: config.currentKeyID,
+		keys:         keys,
+		expiration:   config.expiration,
+		skew:         config.skew,
+		clock:        config.clock,
+		random:       config.random,
+	}, nil
 }
 
-// WithEncoding selects how the MAC is encoded as text. Defaults to EncodingHex.
-func WithEncoding(e Encoding) Option {
-	return func(s *Signer) { s.encoding = e }
+// Sign creates a new signature with a cryptographically random nonce.
+func (signer *Signer) Sign(payload []byte) (Signature, error) {
+	nonce := make([]byte, NonceSize)
+	signer.randomMu.Lock()
+	_, err := io.ReadFull(signer.random, nonce)
+	signer.randomMu.Unlock()
+	if err != nil {
+		return Signature{}, fmt.Errorf("%w: %w", ErrNonceGeneration, err)
+	}
+	timestamp := signer.clock().Unix()
+	mac := signer.compute(signer.currentKeyID, signer.keys[signer.currentKeyID], timestamp, nonce, payload)
+	return Signature{
+		KeyID:     signer.currentKeyID,
+		Timestamp: timestamp,
+		Nonce:     base64.RawURLEncoding.EncodeToString(nonce),
+		Value:     base64.RawURLEncoding.EncodeToString(mac),
+	}, nil
 }
 
-// WithClock injects a clock function, primarily for testing.
-func WithClock(fn func() time.Time) Option {
-	return func(s *Signer) {
-		if fn != nil {
-			s.clock = fn
-		}
+// Verify authenticates signature and enforces its validity window. Replay
+// detection is deliberately handled by the caller because it requires shared
+// state across service instances.
+func (signer *Signer) Verify(signature Signature, payload []byte) error {
+	if signature.KeyID == "" || signature.Timestamp <= 0 || signature.Nonce == "" || signature.Value == "" {
+		return ErrInvalidSignature
 	}
-}
-
-// NewSigner creates a Signer with the given secret and options.
-// It returns ErrEmptySecret if secret is empty.
-func NewSigner(secret string, opts ...Option) (*Signer, error) {
-	if secret == "" {
-		return nil, ErrEmptySecret
+	key, ok := signer.keys[signature.KeyID]
+	if !ok {
+		return ErrUnknownKey
 	}
-	s := &Signer{
-		secret:     []byte(secret),
-		hashFn:     sha256.New,
-		expiration: DefaultExpiration,
-		encoding:   EncodingHex,
-		clock:      time.Now,
-	}
-	for _, opt := range opts {
-		opt(s)
-	}
-	return s, nil
-}
-
-// Sign computes a signature for payload using the current clock timestamp.
-func (s *Signer) Sign(payload []byte) (Signature, error) {
-	ts := s.clock().Unix()
-	mac := s.compute(ts, payload)
-	return Signature{Value: s.encode(mac), Timestamp: ts}, nil
-}
-
-// SignString is a convenience wrapper around Sign for string payloads.
-func (s *Signer) SignString(payload string) (Signature, error) {
-	return s.Sign([]byte(payload))
-}
-
-// Verify validates sig against payload, checking both authenticity and the
-// expiration window.
-func (s *Signer) Verify(sig Signature, payload []byte) error {
-	if sig.Value == "" {
-		return ErrEmptySignature
-	}
-	if sig.Timestamp <= 0 {
-		return ErrInvalidTimestamp
-	}
-
-	now := s.clock().Unix()
-	skew := int64(s.skew.Seconds())
-	if sig.Timestamp-now > skew {
+	now := signer.clock().Unix()
+	if signature.Timestamp-now > int64(signer.skew/time.Second) {
 		return ErrFutureTimestamp
 	}
-	if s.expiration > 0 {
-		if now-sig.Timestamp > int64(s.expiration.Seconds()) {
-			return ErrSignatureExpired
-		}
+	if now-signature.Timestamp > int64(signer.expiration/time.Second) {
+		return ErrSignatureExpired
 	}
-
-	got, err := s.decode(sig.Value)
-	if err != nil {
-		return err
+	nonce, err := base64.RawURLEncoding.DecodeString(signature.Nonce)
+	if err != nil || len(nonce) != NonceSize {
+		return ErrInvalidSignature
 	}
-	want := s.compute(sig.Timestamp, payload)
-	if subtle.ConstantTimeCompare(got, want) != 1 {
+	provided, err := base64.RawURLEncoding.DecodeString(signature.Value)
+	if err != nil || len(provided) != sha256.Size {
+		return ErrInvalidSignature
+	}
+	expected := signer.compute(signature.KeyID, key, signature.Timestamp, nonce, payload)
+	if !hmac.Equal(provided, expected) {
 		return ErrSignatureMismatch
 	}
 	return nil
 }
 
-// VerifyString is a convenience wrapper around Verify for string payloads.
-func (s *Signer) VerifyString(sig Signature, payload string) error {
-	return s.Verify(sig, []byte(payload))
+// ReplayKey returns a stable, non-secret key suitable for a replay store.
+func (signature Signature) ReplayKey() string {
+	return signature.KeyID + ":" + signature.Nonce
 }
 
-// compute returns the raw MAC bytes for (timestamp, payload).
-func (s *Signer) compute(timestamp int64, payload []byte) []byte {
-	h := hmac.New(s.hashFn, s.secret)
-	var hdr [16]byte
-	binary.BigEndian.PutUint64(hdr[0:8], uint64(timestamp))
-	binary.BigEndian.PutUint64(hdr[8:16], uint64(len(payload)))
-	h.Write(hdr[:])
-	if len(payload) > 0 {
-		h.Write(payload)
-	}
-	return h.Sum(nil)
-}
+// Expiration returns the configured signature validity window.
+func (signer *Signer) Expiration() time.Duration { return signer.expiration }
 
-func (s *Signer) encode(b []byte) string {
-	switch s.encoding {
-	case EncodingBase64Std:
-		return base64.StdEncoding.EncodeToString(b)
-	case EncodingBase64URL:
-		return base64.RawURLEncoding.EncodeToString(b)
-	default:
-		return hex.EncodeToString(b)
-	}
-}
-
-func (s *Signer) decode(v string) ([]byte, error) {
-	var (
-		out []byte
-		err error
-	)
-	switch s.encoding {
-	case EncodingHex:
-		out, err = hex.DecodeString(v)
-	case EncodingBase64Std:
-		out, err = base64.StdEncoding.DecodeString(v)
-	case EncodingBase64URL:
-		out, err = base64.RawURLEncoding.DecodeString(v)
-	default:
-		return nil, ErrUnsupportedEncoding
-	}
-	if err != nil {
-		return nil, ErrInvalidSignatureEncoding
-	}
-	return out, nil
-}
-
-// Sign is a package-level convenience that signs payload using a transient Signer.
-func Sign(secret string, payload []byte, opts ...Option) (Signature, error) {
-	s, err := NewSigner(secret, opts...)
-	if err != nil {
-		return Signature{}, err
-	}
-	return s.Sign(payload)
-}
-
-// Verify is a package-level convenience that verifies sig with a transient Signer.
-func Verify(secret string, sig Signature, payload []byte, opts ...Option) error {
-	s, err := NewSigner(secret, opts...)
-	if err != nil {
-		return err
-	}
-	return s.Verify(sig, payload)
+func (signer *Signer) compute(keyID string, key []byte, timestamp int64, nonce, payload []byte) []byte {
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte{formatVersion, byte(len(keyID))})
+	mac.Write([]byte(keyID))
+	var header [20]byte
+	binary.BigEndian.PutUint64(header[0:8], uint64(timestamp))
+	binary.BigEndian.PutUint32(header[8:12], uint32(len(nonce)))
+	binary.BigEndian.PutUint64(header[12:20], uint64(len(payload)))
+	mac.Write(header[:])
+	mac.Write(nonce)
+	mac.Write(payload)
+	return mac.Sum(nil)
 }

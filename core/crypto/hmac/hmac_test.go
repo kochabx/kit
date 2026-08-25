@@ -1,213 +1,123 @@
 package hmac
 
 import (
-	"crypto/sha512"
+	"bytes"
 	"errors"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
-func fixedClock(t time.Time) func() time.Time {
-	return func() time.Time { return t }
-}
+var testKey = bytes.Repeat([]byte{0x42}, MinKeySize)
 
-func TestSignVerify_RoundTrip(t *testing.T) {
-	signer, err := NewSigner("super-secret")
-	if err != nil {
-		t.Fatalf("NewSigner: %v", err)
+func newTestSigner(t *testing.T, now time.Time, current string, keys map[string][]byte) *Signer {
+	t.Helper()
+	options := []Option{
+		WithKeyID(current),
+		WithClock(func() time.Time { return now }),
+		WithRandomReader(bytes.NewReader(bytes.Repeat([]byte{1}, 4096))),
 	}
-	sig, err := signer.SignString("hello")
-	if err != nil {
-		t.Fatalf("Sign: %v", err)
+	for keyID, key := range keys {
+		if keyID != current {
+			options = append(options, WithVerificationKey(keyID, key))
+		}
 	}
-	if sig.Value == "" || sig.Timestamp == 0 {
-		t.Fatalf("empty signature: %+v", sig)
-	}
-	if err := signer.VerifyString(sig, "hello"); err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-}
-
-func TestSign_NoPayload(t *testing.T) {
-	signer, _ := NewSigner("k")
-	sig, err := signer.Sign(nil)
+	signer, err := New(keys[current], options...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := signer.Verify(sig, nil); err != nil {
-		t.Fatal(err)
-	}
+	return signer
 }
 
-func TestNewSigner_EmptySecret(t *testing.T) {
-	if _, err := NewSigner(""); !errors.Is(err, ErrEmptySecret) {
-		t.Fatalf("want ErrEmptySecret, got %v", err)
-	}
-}
-
-func TestVerify_Expired(t *testing.T) {
+func TestRoundTrip(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	signer, _ := NewSigner("k", WithClock(fixedClock(now)))
-	sig, _ := signer.SignString("body")
-
-	verifier, _ := NewSigner("k", WithClock(fixedClock(now.Add(6*time.Minute))))
-	if err := verifier.VerifyString(sig, "body"); !errors.Is(err, ErrSignatureExpired) {
-		t.Fatalf("want ErrSignatureExpired, got %v", err)
-	}
-}
-
-func TestVerify_CustomExpiration(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	signer, _ := NewSigner("k",
-		WithExpiration(10*time.Minute),
-		WithClock(fixedClock(now)),
-	)
-	sig, _ := signer.SignString("body")
-
-	verifier, _ := NewSigner("k",
-		WithExpiration(10*time.Minute),
-		WithClock(fixedClock(now.Add(8*time.Minute))),
-	)
-	if err := verifier.VerifyString(sig, "body"); err != nil {
-		t.Fatalf("expected valid, got %v", err)
-	}
-}
-
-func TestVerify_DisabledExpiration(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	signer, _ := NewSigner("k", WithClock(fixedClock(now)))
-	sig, _ := signer.SignString("body")
-
-	verifier, _ := NewSigner("k",
-		WithExpiration(0),
-		WithClock(fixedClock(now.Add(24*time.Hour))),
-	)
-	if err := verifier.VerifyString(sig, "body"); err != nil {
-		t.Fatalf("expected valid with disabled expiration, got %v", err)
-	}
-}
-
-func TestVerify_FutureTimestamp(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	signer, _ := NewSigner("k", WithClock(fixedClock(now.Add(time.Hour))))
-	sig, _ := signer.SignString("body")
-
-	verifier, _ := NewSigner("k", WithClock(fixedClock(now)))
-	if err := verifier.VerifyString(sig, "body"); !errors.Is(err, ErrFutureTimestamp) {
-		t.Fatalf("want ErrFutureTimestamp, got %v", err)
-	}
-}
-
-func TestVerify_ClockSkew(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	signer, _ := NewSigner("k", WithClock(fixedClock(now.Add(30*time.Second))))
-	sig, _ := signer.SignString("body")
-
-	verifier, _ := NewSigner("k",
-		WithClockSkew(time.Minute),
-		WithClock(fixedClock(now)),
-	)
-	if err := verifier.VerifyString(sig, "body"); err != nil {
-		t.Fatalf("skew should allow it, got %v", err)
-	}
-}
-
-func TestVerify_PayloadMismatch(t *testing.T) {
-	signer, _ := NewSigner("k")
-	sig, _ := signer.SignString("data1")
-	if err := signer.VerifyString(sig, "data2"); !errors.Is(err, ErrSignatureMismatch) {
-		t.Fatalf("want ErrSignatureMismatch, got %v", err)
-	}
-}
-
-func TestVerify_SecretMismatch(t *testing.T) {
-	a, _ := NewSigner("a")
-	b, _ := NewSigner("b")
-	sig, _ := a.SignString("payload")
-	if err := b.VerifyString(sig, "payload"); !errors.Is(err, ErrSignatureMismatch) {
-		t.Fatalf("want ErrSignatureMismatch, got %v", err)
-	}
-}
-
-func TestVerify_Empty(t *testing.T) {
-	signer, _ := NewSigner("k")
-	if err := signer.VerifyString(Signature{Value: "", Timestamp: 1}, "x"); !errors.Is(err, ErrEmptySignature) {
-		t.Fatalf("want ErrEmptySignature, got %v", err)
-	}
-	if err := signer.VerifyString(Signature{Value: "abcd", Timestamp: 0}, "x"); !errors.Is(err, ErrInvalidTimestamp) {
-		t.Fatalf("want ErrInvalidTimestamp, got %v", err)
-	}
-}
-
-func TestVerify_InvalidEncoding(t *testing.T) {
-	signer, _ := NewSigner("k")
-	sig := Signature{Value: "not-hex!!", Timestamp: time.Now().Unix()}
-	if err := signer.VerifyString(sig, "x"); !errors.Is(err, ErrInvalidSignatureEncoding) {
-		t.Fatalf("want ErrInvalidSignatureEncoding, got %v", err)
-	}
-}
-
-func TestEncoding_Base64URL(t *testing.T) {
-	signer, _ := NewSigner("k", WithEncoding(EncodingBase64URL))
-	sig, err := signer.SignString("payload")
+	signer := newTestSigner(t, now, "v2", map[string][]byte{"v2": testKey})
+	signature, err := signer.Sign([]byte("payload"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.ContainsAny(sig.Value, "+/=") {
-		t.Fatalf("URL encoding should not contain +/=, got %q", sig.Value)
-	}
-	if err := signer.VerifyString(sig, "payload"); err != nil {
+	if err := signer.Verify(signature, []byte("payload")); err != nil {
 		t.Fatal(err)
+	}
+	if signature.KeyID != "v2" || signature.ReplayKey() == "" {
+		t.Fatalf("signature = %+v", signature)
 	}
 }
 
-func TestEncoding_Base64Std(t *testing.T) {
-	signer, _ := NewSigner("k", WithEncoding(EncodingBase64Std))
-	sig, err := signer.SignString("payload")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := signer.VerifyString(sig, "payload"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestWithHash_SHA512(t *testing.T) {
-	signer, _ := NewSigner("k", WithHash(sha512.New))
-	sig, err := signer.SignString("hello")
-	if err != nil {
-		t.Fatal(err)
-	}
-	// SHA-512 produces 64 bytes => 128 hex chars.
-	if len(sig.Value) != 128 {
-		t.Fatalf("expected 128 hex chars, got %d", len(sig.Value))
-	}
-	if err := signer.VerifyString(sig, "hello"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestPackageLevel_SignVerify(t *testing.T) {
-	sig, err := Sign("k", []byte("body"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Verify("k", sig, []byte("body")); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// TestCanonicalMessage_LengthPrefixCollision proves the length-prefixed
-// canonical form prevents trivial concatenation collisions.
-func TestCanonicalMessage_LengthPrefixCollision(t *testing.T) {
+func TestAuthenticationAndTime(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	signer, _ := NewSigner("k", WithClock(fixedClock(now)))
-
-	sigA, _ := signer.SignString("ab")
-	sigB, _ := signer.SignString("a")
-	// Same timestamp, different payloads must yield different MACs.
-	if sigA.Value == sigB.Value {
-		t.Fatalf("payload boundary collision: %q == %q", sigA.Value, sigB.Value)
+	signer := newTestSigner(t, now, "v1", map[string][]byte{"v1": testKey})
+	signature, err := signer.Sign([]byte("payload"))
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	tampered := signature
+	tampered.Nonce = "AAAAAAAAAAAAAAAAAAAAAA"
+	if err := signer.Verify(tampered, []byte("payload")); !errors.Is(err, ErrSignatureMismatch) {
+		t.Fatalf("tamper: %v", err)
+	}
+	if err := signer.Verify(signature, []byte("other")); !errors.Is(err, ErrSignatureMismatch) {
+		t.Fatalf("payload: %v", err)
+	}
+
+	expired, _ := New(testKey, WithKeyID("v1"), WithClock(func() time.Time { return now.Add(6 * time.Minute) }))
+	if err := expired.Verify(signature, []byte("payload")); !errors.Is(err, ErrSignatureExpired) {
+		t.Fatalf("expired: %v", err)
+	}
+	future, _ := New(testKey, WithKeyID("v1"), WithClock(func() time.Time { return now.Add(-time.Minute) }))
+	if err := future.Verify(signature, []byte("payload")); !errors.Is(err, ErrFutureTimestamp) {
+		t.Fatalf("future: %v", err)
+	}
+}
+
+func TestKeyRotation(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	oldKey := bytes.Repeat([]byte{1}, MinKeySize)
+	newKey := bytes.Repeat([]byte{2}, MinKeySize)
+	oldSigner := newTestSigner(t, now, "old", map[string][]byte{"old": oldKey})
+	oldSignature, _ := oldSigner.Sign([]byte("payload"))
+	rotated := newTestSigner(t, now, "new", map[string][]byte{"old": oldKey, "new": newKey})
+	if err := rotated.Verify(oldSignature, []byte("payload")); err != nil {
+		t.Fatal(err)
+	}
+	newSignature, _ := rotated.Sign([]byte("payload"))
+	if newSignature.KeyID != "new" {
+		t.Fatalf("KeyID = %q", newSignature.KeyID)
+	}
+}
+
+func TestValidation(t *testing.T) {
+	if _, err := New([]byte("short")); !errors.Is(err, ErrInvalidKey) {
+		t.Fatalf("short key: %v", err)
+	}
+	if _, err := New(testKey, WithExpiration(0)); !errors.Is(err, ErrInvalidOption) {
+		t.Fatalf("expiration: %v", err)
+	}
+}
+
+func TestConcurrentUse(t *testing.T) {
+	signer, err := New(testKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	for range 16 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			for range 50 {
+				signature, err := signer.Sign([]byte("payload"))
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := signer.Verify(signature, []byte("payload")); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}()
+	}
+	wait.Wait()
 }

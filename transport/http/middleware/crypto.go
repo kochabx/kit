@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 
@@ -36,15 +37,18 @@ type CryptoConfig struct {
 	Logger         *log.Logger                                     // 自定义日志记录器
 }
 
-// ECIESDecryptor 创建基于 ECIES 的解密器
-func ECIESDecryptor(privateKeyPath string) (Decryptor, error) {
-	privateKey, err := ecies.LoadPrivateKey(privateKeyPath)
-	if err != nil {
-		return nil, err
-	}
+// HPKEDecryptor creates a decryptor for JSON-encoded HPKE messages. The info
+// value is protocol domain separation and must match the sender. Bind
+// request-specific metadata with a custom Decryptor when AAD is required.
+func HPKEDecryptor(suite ecies.Suite, privateKey *ecies.PrivateKey, info []byte) Decryptor {
+	info = bytes.Clone(info)
 	return DecryptorFunc(func(ciphertext []byte) ([]byte, error) {
-		return ecies.Decrypt(privateKey, ciphertext)
-	}), nil
+		var message ecies.Message
+		if err := json.Unmarshal(ciphertext, &message); err != nil {
+			return nil, err
+		}
+		return suite.Open(privateKey, info, nil, &message)
+	})
 }
 
 // Crypto 创建请求体解密中间件
