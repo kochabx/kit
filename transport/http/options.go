@@ -81,7 +81,7 @@ func WithSwagger(opt SwaggerOption) Option {
 	}
 }
 
-// WithOpenAPI enables a raw OpenAPI spec endpoint.
+// WithOpenAPI enables a Scalar OpenAPI reference endpoint and its raw spec.
 func WithOpenAPI(opt OpenAPIOption) Option {
 	return func(o *options) {
 		if err := defaults.Apply(&opt); err != nil {
@@ -129,10 +129,11 @@ type SwaggerOption struct {
 	Path string `default:"/swagger/"` // Path prefix defaults to "/swagger/".
 }
 
-// OpenAPIOption configures a raw OpenAPI spec endpoint.
+// OpenAPIOption configures the Scalar OpenAPI reference and raw spec endpoints.
 type OpenAPIOption struct {
-	Path string `default:"/openapi/"` // Path defaults to "/openapi/".
-	Spec []byte
+	Path     string `default:"/openapi/"`     // Scalar path defaults to "/openapi/".
+	SpecPath string `default:"/openapi.yaml"` // Spec path defaults to "/openapi.yaml".
+	Spec     []byte
 }
 
 // HealthOption configures the health-check endpoint.

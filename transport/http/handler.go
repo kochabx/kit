@@ -2,11 +2,11 @@ package http
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	httpSwagger "github.com/swaggo/http-swagger"
-	"github.com/swaggo/swag"
 
 	"github.com/kochabx/kit/log"
 )
@@ -41,9 +41,7 @@ func withBuiltinEndpoints(handler http.Handler, opts *options) http.Handler {
 		if len(opts.openAPI.Spec) == 0 {
 			log.Error().Msg("openapi: Spec is empty, skipping registration")
 		} else {
-			const instanceName = "openapi"
-			swag.Register(instanceName, openapiSpec(opts.openAPI.Spec))
-			mux.Handle(prefixPath(opts.openAPI.Path), httpSwagger.Handler(httpSwagger.InstanceName(instanceName)))
+			mountOpenAPI(mux, opts.openAPI.Path, opts.openAPI.SpecPath, opts.openAPI.Spec)
 		}
 	}
 
@@ -52,18 +50,47 @@ func withBuiltinEndpoints(handler http.Handler, opts *options) http.Handler {
 	return mux
 }
 
+func mountOpenAPI(mux *http.ServeMux, uiPath, specPath string, spec []byte) {
+	if len(spec) > 0 {
+		mux.Handle(specPath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(spec)
+		}))
+	}
+
+	mux.Handle(prefixPath(uiPath), newScalarHandler(specPath))
+}
+
+func newScalarHandler(specPath string) http.Handler {
+	quotedSpecPath := strconv.Quote(specPath)
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(`<!doctype html>
+<html>
+<head>
+  <title>OpenAPI Reference</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body>
+  <div id="app"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <script>
+    Scalar.createApiReference('#app', { url: ` + quotedSpecPath + ` });
+  </script>
+</body>
+</html>`))
+	})
+}
+
 // prefixPath converts a path to net/http.ServeMux prefix form.
 // It removes a framework-style wildcard suffix and appends a trailing slash.
 func prefixPath(path string) string {
-	if idx := strings.Index(path, "/*"); idx != -1 {
-		path = path[:idx]
+	if basePath, _, hasWildcard := strings.Cut(path, "/*"); hasWildcard {
+		path = basePath
 	}
 	if !strings.HasSuffix(path, "/") {
 		path += "/"
 	}
 	return path
 }
-
-type openapiSpec string
-
-func (o openapiSpec) ReadDoc() string { return string(o) }

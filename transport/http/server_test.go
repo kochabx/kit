@@ -104,6 +104,58 @@ func TestServer_MetricsEndpointUsesConfiguredRegistry(t *testing.T) {
 	assert.Contains(t, w.Body.String(), "kit_test_requests_total 1")
 }
 
+func TestServer_OpenAPIEndpointsUseScalar(t *testing.T) {
+	spec := []byte(`{"openapi":"3.1.0","info":{"title":"Kit API","version":"1.0.0"}}`)
+	s := NewServer(
+		http.NotFoundHandler(),
+		WithOpenAPI(OpenAPIOption{Path: "/docs/", SpecPath: "/openapi.yaml", Spec: spec}),
+	)
+
+	t.Run("raw spec", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/openapi.yaml", nil))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+		assert.JSONEq(t, string(spec), w.Body.String())
+	})
+
+	t.Run("Scalar reference", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/docs/", nil))
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+		assert.Contains(t, w.Body.String(), `Scalar.createApiReference`)
+		assert.Contains(t, w.Body.String(), `url: "/openapi.yaml"`)
+		assert.Contains(t, w.Body.String(), "@scalar/api-reference")
+	})
+}
+
+func TestNormalizePrefixPath(t *testing.T) {
+	tests := map[string]string{
+		"/openapi/":        "/openapi/",
+		"/openapi":         "/openapi/",
+		"/swagger/*any":    "/swagger/",
+		"/swagger/*path/*": "/swagger/",
+	}
+
+	for input, want := range tests {
+		assert.Equal(t, want, prefixPath(input))
+	}
+}
+
+func TestServer_SwaggerEndpointUsesSwaggerUI(t *testing.T) {
+	s := NewServer(http.NotFoundHandler(), WithSwagger(SwaggerOption{Path: "/swagger/"}))
+
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/swagger/index.html", nil))
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+	assert.Contains(t, w.Body.String(), "swagger-ui")
+}
+
 func TestServer_UserHandlerForwarded(t *testing.T) {
 	called := false
 	userHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
