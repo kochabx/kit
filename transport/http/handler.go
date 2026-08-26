@@ -1,15 +1,31 @@
 package http
 
 import (
+	"html/template"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	httpSwagger "github.com/swaggo/http-swagger"
+	"github.com/swaggo/http-swagger"
 
 	"github.com/kochabx/kit/log"
 )
+
+var scalarPage = template.Must(template.New("scalar").Parse(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OpenAPI Reference</title>
+</head>
+<body>
+  <div id="app"></div>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+  <script>
+    Scalar.createApiReference("#app", { url: {{.}} });
+  </script>
+</body>
+</html>`))
 
 // withBuiltinEndpoints mounts configured built-in endpoints in front of handler.
 // It returns handler unchanged when no built-in endpoint is configured.
@@ -51,35 +67,20 @@ func withBuiltinEndpoints(handler http.Handler, opts *options) http.Handler {
 }
 
 func mountOpenAPI(mux *http.ServeMux, uiPath, specPath string, spec []byte) {
-	if len(spec) > 0 {
-		mux.Handle(specPath, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write(spec)
-		}))
-	}
+	mux.HandleFunc(specPath, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_, _ = w.Write(spec)
+	})
 
 	mux.Handle(prefixPath(uiPath), newScalarHandler(specPath))
 }
 
 func newScalarHandler(specPath string) http.Handler {
-	quotedSpecPath := strconv.Quote(specPath)
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html>
-<html>
-<head>
-  <title>OpenAPI Reference</title>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-</head>
-<body>
-  <div id="app"></div>
-  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-  <script>
-    Scalar.createApiReference('#app', { url: ` + quotedSpecPath + ` });
-  </script>
-</body>
-</html>`))
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		_ = scalarPage.Execute(w, specPath)
 	})
 }
 

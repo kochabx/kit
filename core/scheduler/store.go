@@ -14,7 +14,7 @@ import (
 // All scheduler keys contain the same Redis Cluster hash tag.
 type keys struct{ prefix string }
 
-func newKeys(namespace string) keys      { return keys{prefix: "scheduler:{" + namespace + "}:v2:"} }
+func newKeys(namespace string) keys      { return keys{prefix: "scheduler:{" + namespace + "}:"} }
 func (k keys) job(id string) string      { return k.prefix + "job:" + id }
 func (k keys) scheduled() string         { return k.prefix + "scheduled" }
 func (k keys) ready() string             { return k.prefix + "ready" }

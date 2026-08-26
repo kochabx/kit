@@ -117,6 +117,7 @@ func TestServer_OpenAPIEndpointsUseScalar(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Equal(t, "application/json", w.Header().Get("Content-Type"))
+		assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 		assert.JSONEq(t, string(spec), w.Body.String())
 	})
 
@@ -126,10 +127,23 @@ func TestServer_OpenAPIEndpointsUseScalar(t *testing.T) {
 
 		assert.Equal(t, http.StatusOK, w.Code)
 		assert.Contains(t, w.Header().Get("Content-Type"), "text/html")
+		assert.Equal(t, "nosniff", w.Header().Get("X-Content-Type-Options"))
 		assert.Contains(t, w.Body.String(), `Scalar.createApiReference`)
 		assert.Contains(t, w.Body.String(), `url: "/openapi.yaml"`)
 		assert.Contains(t, w.Body.String(), "@scalar/api-reference")
 	})
+}
+
+func TestScalarHandlerEscapesSpecPath(t *testing.T) {
+	w := httptest.NewRecorder()
+	newScalarHandler(`</script><script>alert("xss")</script>`).ServeHTTP(
+		w,
+		httptest.NewRequest(http.MethodGet, "/docs/", nil),
+	)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.NotContains(t, w.Body.String(), `</script><script>alert("xss")</script>`)
+	assert.Contains(t, w.Body.String(), `\u003c/script\u003e`)
 }
 
 func TestNormalizePrefixPath(t *testing.T) {

@@ -34,6 +34,16 @@ func TestConfigDefaultsAndValidation(t *testing.T) {
 	}
 }
 
+func TestRedisKeyPrefix(t *testing.T) {
+	keys := newKeys("hermes")
+	if want := "scheduler:{hermes}:"; keys.prefix != want {
+		t.Fatalf("key prefix = %q, want %q", keys.prefix, want)
+	}
+	if want := "scheduler:{hermes}:ready"; keys.ready() != want {
+		t.Fatalf("ready key = %q, want %q", keys.ready(), want)
+	}
+}
+
 func TestConfigCanBeValidatedByDefaultValidator(t *testing.T) {
 	type applicationConfig struct {
 		Scheduler Config `json:"scheduler"`
