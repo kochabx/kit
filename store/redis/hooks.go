@@ -10,22 +10,19 @@ import (
 	"github.com/kochabx/kit/log"
 )
 
-// DebugHook 调试钩子（日志记录 + 慢查询检测）
-type DebugHook struct {
-	logger          *log.Logger
-	slowQueryThresh time.Duration // 0 表示不检测慢查询
+type debugHook struct {
+	logger             *log.Logger
+	slowQueryThreshold time.Duration
 }
 
-// NewDebugHook 创建调试 Hook
-// slowQueryThresh: 慢查询阈值，0 表示不检测慢查询
-func NewDebugHook(logger *log.Logger, slowQueryThresh time.Duration) *DebugHook {
-	return &DebugHook{
-		logger:          logger,
-		slowQueryThresh: slowQueryThresh,
+func newDebugHook(logger *log.Logger, slowQueryThreshold time.Duration) *debugHook {
+	return &debugHook{
+		logger:             logger,
+		slowQueryThreshold: slowQueryThreshold,
 	}
 }
 
-func (h *DebugHook) DialHook(next redis.DialHook) redis.DialHook {
+func (h *debugHook) DialHook(next redis.DialHook) redis.DialHook {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		start := time.Now()
 		conn, err := next(ctx, network, addr)
@@ -40,20 +37,19 @@ func (h *DebugHook) DialHook(next redis.DialHook) redis.DialHook {
 	}
 }
 
-func (h *DebugHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+func (h *debugHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		start := time.Now()
 		err := next(ctx, cmd)
 		duration := time.Since(start)
 
-		// 慢查询检测
-		if h.slowQueryThresh > 0 && duration > h.slowQueryThresh {
-			h.logger.Warn().Str("cmd", cmd.FullName()).Interface("args", cmd.Args()).Dur("duration", duration).Dur("threshold", h.slowQueryThresh).Msg("slow query detected")
+		if h.slowQueryThreshold > 0 && duration > h.slowQueryThreshold {
+			h.logger.Warn().Str("cmd", cmd.FullName()).Dur("duration", duration).Dur("threshold", h.slowQueryThreshold).Msg("slow redis command")
 			return err
 		}
 
 		if err != nil {
-			h.logger.Warn().Str("cmd", cmd.FullName()).Interface("args", cmd.Args()).Dur("duration", duration).Err(err).Msg("redis command failed")
+			h.logger.Warn().Str("cmd", cmd.FullName()).Dur("duration", duration).Err(err).Msg("redis command failed")
 		} else {
 			h.logger.Debug().Str("cmd", cmd.FullName()).Dur("duration", duration).Msg("redis command success")
 		}
@@ -61,19 +57,18 @@ func (h *DebugHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	}
 }
 
-func (h *DebugHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+func (h *debugHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
 		start := time.Now()
 		err := next(ctx, cmds)
 		duration := time.Since(start)
 
-		// 慢查询检测
-		if h.slowQueryThresh > 0 && duration > h.slowQueryThresh {
+		if h.slowQueryThreshold > 0 && duration > h.slowQueryThreshold {
 			cmdNames := make([]string, len(cmds))
 			for i, cmd := range cmds {
 				cmdNames[i] = cmd.FullName()
 			}
-			h.logger.Warn().Strs("commands", cmdNames).Int("count", len(cmds)).Dur("duration", duration).Dur("threshold", h.slowQueryThresh).Msg("slow pipeline detected")
+			h.logger.Warn().Strs("commands", cmdNames).Int("count", len(cmds)).Dur("duration", duration).Dur("threshold", h.slowQueryThreshold).Msg("slow redis pipeline")
 			return err
 		}
 

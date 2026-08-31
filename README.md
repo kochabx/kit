@@ -24,10 +24,12 @@ HTTP 服务封装只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi
 package main
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/kochabx/kit/app"
 	kithttp "github.com/kochabx/kit/transport/http"
+	"github.com/spf13/viper"
 )
 
 func main() {
@@ -80,6 +82,7 @@ func main() {
 package main
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
@@ -94,34 +97,41 @@ import (
 
 type AppConfig struct {
 	DB struct {
-		Host     string `yaml:"host"     default:"localhost"`
-		Port     int    `yaml:"port"     default:"3306"`
-		User     string `yaml:"user"     default:"root"`
-		Password string `yaml:"password"`
-		Database string `yaml:"database" default:"mydb"`
-	} `yaml:"db"`
+		Host     string `json:"host" default:"localhost"`
+		Port     int    `json:"port" default:"3306"`
+		User     string `json:"user" default:"root"`
+		Password string `json:"password"`
+		Database string `json:"database" default:"mydb"`
+	} `json:"db"`
 	Redis struct {
-		Host     string `yaml:"host"     default:"localhost"`
-		Port     int    `yaml:"port"     default:"6379"`
-		Password string `yaml:"password"`
-	} `yaml:"redis"`
+		Host     string `json:"host" default:"localhost"`
+		Port     int    `json:"port" default:"6379"`
+		Password string `json:"password"`
+	} `json:"redis"`
 }
 
 func main() {
-	cfg := &AppConfig{}
-	if err := config.New(cfg).Load(); err != nil {
+	ctx := context.Background()
+	configuration, err := config.New[AppConfig]()
+	if err != nil {
+		panic(err)
+	}
+	cfg, err := configuration.Load(ctx)
+	if err != nil {
 		panic(err)
 	}
 
 	logger := log.New()
 	log.SetGlobal(logger)
 
-	gormDB, err := db.New(&db.MySQLConfig{
-		Host:     cfg.DB.Host,
-		Port:     cfg.DB.Port,
-		User:     cfg.DB.User,
-		Password: cfg.DB.Password,
-		Database: cfg.DB.Database,
+	dbClient, err := db.New(db.Config{
+		Driver: db.MySQLConfig{
+			Host:     cfg.DB.Host,
+			Port:     cfg.DB.Port,
+			User:     cfg.DB.User,
+			Password: cfg.DB.Password,
+			Database: cfg.DB.Database,
+		},
 	})
 	if err != nil {
 		panic(err)
@@ -144,7 +154,7 @@ func main() {
 	// 由 app 统一管理启动（Ping 验证连通性）和关闭。
 	application := app.New(
 		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
-		app.WithComponent(cx.NewKey[*db.Client]("db"), gormDB),
+		app.WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
 		app.WithComponent(cx.NewKey[*redis.Client]("redis"), rdb),
 		app.WithShutdownTimeout(30*time.Second),
 	)

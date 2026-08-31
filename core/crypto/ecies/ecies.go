@@ -14,10 +14,10 @@ import (
 )
 
 var (
-	ErrInvalidKey       = errors.New("ecies: invalid key")
-	ErrInvalidMessage   = errors.New("ecies: invalid message")
-	ErrEncryptionFailed = errors.New("ecies: encryption failed")
-	ErrDecryptionFailed = errors.New("ecies: decryption failed")
+	ErrInvalidKey       = errors.New("invalid key")
+	ErrInvalidMessage   = errors.New("invalid message")
+	ErrEncryptionFailed = errors.New("encryption failed")
+	ErrDecryptionFailed = errors.New("decryption failed")
 )
 
 // Suite is an immutable HPKE cipher suite and is safe for concurrent use.

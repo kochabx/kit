@@ -1,6 +1,7 @@
 package redis
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
@@ -9,138 +10,98 @@ import (
 	"github.com/kochabx/kit/log"
 )
 
-// Option 客户端配置选项
-type Option func(*clientOptions)
+type options struct {
+	hooks  []redis.Hook
+	logger *log.Logger
+	debug  *debugOptions
 
-// clientOptions 客户端内部选项
-type clientOptions struct {
-	// 基础配置覆盖
-	password string
-	username string
-	db       int
-	poolSize int
-
-	// Hooks
-	hooks []redis.Hook
-
-	// 可观测性
-	enableMetrics bool
-	enableTracing bool
-	enableDebug   bool
-	tracingOpts   []redisotel.TracingOption
-	metricsOpts   []redisotel.MetricsOption
-
-	// 日志
-	logger          *log.Logger
-	slowQueryThresh time.Duration // 慢查询阈值，用于 DebugHook
+	tracingOptions []redisotel.TracingOption
+	metricsOptions []redisotel.MetricsOption
 }
 
-// ==================== 基础配置选项 ====================
-
-// WithPassword 设置密码
-func WithPassword(password string) Option {
-	return func(o *clientOptions) {
-		o.password = password
-	}
+type debugOptions struct {
+	slowQueryThreshold time.Duration
 }
 
-// WithUsername 设置用户名 (Redis 6.0+)
-func WithUsername(username string) Option {
-	return func(o *clientOptions) {
-		o.username = username
-	}
-}
+// Option configures runtime dependencies and instrumentation.
+type Option func(*options) error
 
-// WithDB 设置数据库索引（仅单机和哨兵模式有效）
-func WithDB(db int) Option {
-	return func(o *clientOptions) {
-		o.db = db
-	}
-}
-
-// WithPoolSize 设置连接池大小
-func WithPoolSize(size int) Option {
-	return func(o *clientOptions) {
-		o.poolSize = size
-	}
-}
-
-// ==================== Hooks 选项 ====================
-
-// WithHooks 添加自定义 Hooks
+// WithHooks installs custom go-redis hooks.
 func WithHooks(hooks ...redis.Hook) Option {
-	return func(o *clientOptions) {
-		o.hooks = append(o.hooks, hooks...)
+	return func(opts *options) error {
+		for index, hook := range hooks {
+			if hook == nil {
+				return fmt.Errorf("%w: nil hook at index %d", ErrInvalidOption, index)
+			}
+		}
+		opts.hooks = append(opts.hooks, hooks...)
+		return nil
 	}
 }
 
-// ==================== 可观测性选项 ====================
-
-// WithMetrics 启用 OpenTelemetry Metrics 收集
-// 使用 redisotel 官方实现，指标会通过 OpenTelemetry 导出
-func WithMetrics(opts ...redisotel.MetricsOption) Option {
-	return func(o *clientOptions) {
-		o.enableMetrics = true
-		o.metricsOpts = opts
+// WithMetrics enables the official go-redis OpenTelemetry metrics instrumentation.
+func WithMetrics(metricsOptions ...redisotel.MetricsOption) Option {
+	return func(opts *options) error {
+		if opts.metricsOptions == nil {
+			opts.metricsOptions = make([]redisotel.MetricsOption, 0, len(metricsOptions))
+		}
+		opts.metricsOptions = append(opts.metricsOptions, metricsOptions...)
+		return nil
 	}
 }
 
-// WithTracing 启用 OpenTelemetry 分布式追踪
-// 使用 redisotel 官方实现
-func WithTracing(opts ...redisotel.TracingOption) Option {
-	return func(o *clientOptions) {
-		o.enableTracing = true
-		o.tracingOpts = opts
+// WithTracing enables the official go-redis OpenTelemetry tracing instrumentation.
+func WithTracing(tracingOptions ...redisotel.TracingOption) Option {
+	return func(opts *options) error {
+		if opts.tracingOptions == nil {
+			opts.tracingOptions = make([]redisotel.TracingOption, 0, len(tracingOptions))
+		}
+		opts.tracingOptions = append(opts.tracingOptions, tracingOptions...)
+		return nil
 	}
 }
 
-// WithDebug 启用调试模式（日志记录 + 慢查询检测）
-// 注意：这会记录每个 Redis 命令的执行详情，可能产生大量日志
-// slowQueryThreshold: 慢查询阈值，超过此时间的查询会记录为警告，0 表示不检测慢查询
+// WithDebug logs command names and execution results without command arguments.
+// An optional threshold enables slow-command warnings. Without WithLogger,
+// debug output is sent to log.Global().
 func WithDebug(slowQueryThreshold ...time.Duration) Option {
-	return func(o *clientOptions) {
-		o.enableDebug = true
-		if len(slowQueryThreshold) > 0 {
-			o.slowQueryThresh = slowQueryThreshold[0]
+	return func(opts *options) error {
+		if len(slowQueryThreshold) > 1 {
+			return fmt.Errorf("%w: WithDebug accepts at most one slow query threshold", ErrInvalidOption)
 		}
+		if len(slowQueryThreshold) == 1 {
+			if slowQueryThreshold[0] < 0 {
+				return fmt.Errorf("%w: slow query threshold must not be negative", ErrInvalidOption)
+			}
+			opts.debug = &debugOptions{slowQueryThreshold: slowQueryThreshold[0]}
+		} else {
+			opts.debug = &debugOptions{}
+		}
+		return nil
 	}
 }
 
-// WithLogger 设置日志记录器
-// logger 用于记录客户端生命周期、健康检查、慢查询等信息
-// 如果需要记录每个命令的详细日志，请同时使用 WithLogging()
+// WithLogger sets the destination for lifecycle and debug logs. It does not
+// enable per-command logging; use WithDebug for that.
 func WithLogger(logger *log.Logger) Option {
-	return func(o *clientOptions) {
-		o.logger = logger
+	return func(opts *options) error {
+		if logger == nil {
+			return fmt.Errorf("%w: nil logger", ErrInvalidOption)
+		}
+		opts.logger = logger
+		return nil
 	}
 }
 
-// ==================== 内部辅助函数 ====================
-
-// applyOptions 应用所有选项到配置
-func applyOptions(cfg *Config, opts []Option) *clientOptions {
-	clientOpts := &clientOptions{}
-
-	// 应用所有选项
-	for _, opt := range opts {
-		if opt != nil {
-			opt(clientOpts)
+func resolveOptions(optionList []Option) (options, error) {
+	var opts options
+	for index, option := range optionList {
+		if option == nil {
+			return options{}, fmt.Errorf("%w: nil option at index %d", ErrInvalidOption, index)
+		}
+		if err := option(&opts); err != nil {
+			return options{}, err
 		}
 	}
-
-	// 将选项值应用到配置
-	if clientOpts.password != "" {
-		cfg.Password = clientOpts.password
-	}
-	if clientOpts.username != "" {
-		cfg.Username = clientOpts.username
-	}
-	if clientOpts.db > 0 {
-		cfg.DB = clientOpts.db
-	}
-	if clientOpts.poolSize > 0 {
-		cfg.PoolSize = clientOpts.poolSize
-	}
-
-	return clientOpts
+	return opts, nil
 }

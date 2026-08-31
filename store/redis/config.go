@@ -1,130 +1,111 @@
 package redis
 
 import (
+	"context"
 	"crypto/tls"
+	"fmt"
 	"time"
+
+	"github.com/kochabx/kit/core/defaults"
+	"github.com/kochabx/kit/core/validator"
 )
 
-// Config Redis 统一配置（支持单机/集群/哨兵模式）
+// Mode identifies the Redis deployment topology.
+type Mode string
+
+const (
+	// ModeSingle creates a standalone client and requires exactly one address.
+	ModeSingle Mode = "single"
+	// ModeCluster creates a cluster client, including for a single configuration endpoint.
+	ModeCluster Mode = "cluster"
+	// ModeSentinel creates a failover client and requires MasterName.
+	ModeSentinel Mode = "sentinel"
+)
+
+// Config contains connection settings shared by standalone, cluster, and
+// Sentinel clients. New resolves defaults on a copy and never mutates it.
 type Config struct {
-	// ==================== 连接配置 ====================
-	// Addrs Redis 地址列表
-	// 单机模式: ["localhost:6379"]
-	// 集群模式: ["node1:6379", "node2:6379", "node3:6379"]
-	// 哨兵模式: ["sentinel1:26379", "sentinel2:26379"]
-	Addrs []string `default:"[\"localhost:6379\"]"`
+	// Mode determines the concrete client type; it is not inferred from Addrs.
+	Mode Mode `json:"mode" default:"single" validate:"oneof=single cluster sentinel"`
+	// Addrs contains a standalone address or cluster/Sentinel seed addresses.
+	Addrs []string `json:"addrs" default:"[\"localhost:6379\"]" validate:"required,min=1,dive,required"`
+	// MasterName is required only in Sentinel mode.
+	MasterName string `json:"masterName"`
+	Username   string `json:"username"`
+	Password   string `json:"password"`
+	DB         int    `json:"db" validate:"gte=0"`
+	Protocol   int    `json:"protocol" default:"3" validate:"oneof=2 3"`
 
-	// MasterName 哨兵模式的主节点名称
-	// 仅在哨兵模式下需要设置
-	MasterName string
+	DialTimeout  time.Duration `json:"dialTimeout" default:"5s" validate:"gte=0"`
+	ReadTimeout  time.Duration `json:"readTimeout" default:"3s"`
+	WriteTimeout time.Duration `json:"writeTimeout" default:"3s"`
 
-	// ==================== 认证配置 ====================
-	// Username Redis 用户名 (Redis 6.0+)
-	Username string
+	// PoolSize delegates to the go-redis default when zero.
+	PoolSize     int           `json:"poolSize" validate:"gte=0"`
+	MinIdleConns int           `json:"minIdleConns" validate:"gte=0"`
+	MaxIdleTime  time.Duration `json:"maxIdleTime" default:"5m" validate:"gte=0"`
+	MaxLifetime  time.Duration `json:"maxLifetime" validate:"gte=0"`
+	PoolTimeout  time.Duration `json:"poolTimeout" default:"4s" validate:"gte=0"`
 
-	// Password Redis 密码
-	Password string
+	// MaxRetries delegates to the go-redis default when zero; -1 disables retries.
+	MaxRetries      int           `json:"maxRetries" validate:"gte=-1"`
+	MinRetryBackoff time.Duration `json:"minRetryBackoff" default:"8ms" validate:"gte=-1"`
+	MaxRetryBackoff time.Duration `json:"maxRetryBackoff" default:"512ms" validate:"gte=-1"`
 
-	// DB 数据库索引（0-15）
-	// 仅在单机和哨兵模式下有效，集群模式忽略此字段
-	DB int
+	// TLSConfig enables TLS and is intentionally excluded from JSON configuration.
+	TLSConfig *tls.Config `json:"-" validate:"-"`
 
-	// ==================== 协议配置 ====================
-	// Protocol Redis 协议版本
-	// 2: RESP2 (默认)
-	// 3: RESP3 (Redis 6.0+)
-	Protocol int `default:"3"`
-
-	// ==================== 超时配置 ====================
-	// DialTimeout 连接超时时间
-	DialTimeout time.Duration `default:"5s"`
-
-	// ReadTimeout 读操作超时时间
-	ReadTimeout time.Duration `default:"3s"`
-
-	// WriteTimeout 写操作超时时间
-	WriteTimeout time.Duration `default:"3s"`
-
-	// ==================== 连接池配置 ====================
-	// PoolSize 连接池最大连接数
-	// 0 表示使用默认值: 10 * runtime.GOMAXPROCS
-	PoolSize int
-
-	// MinIdleConns 最小空闲连接数
-	MinIdleConns int
-
-	// MaxIdleTime 空闲连接最大存活时间
-	// 超过此时间的空闲连接将被关闭
-	MaxIdleTime time.Duration `default:"5m"`
-
-	// MaxLifetime 连接最大生存时间
-	// 0 表示连接可以永久重用
-	MaxLifetime time.Duration
-
-	// PoolTimeout 从连接池获取连接的超时时间
-	PoolTimeout time.Duration `default:"4s"`
-
-	// ==================== 重试配置 ====================
-	// MaxRetries 命令失败后的最大重试次数
-	// -1: 禁用重试
-	//  0: 默认重试 3 次
-	// >0: 指定重试次数
-	MaxRetries int
-
-	// MinRetryBackoff 最小重试退避时间
-	MinRetryBackoff time.Duration `default:"8ms"`
-
-	// MaxRetryBackoff 最大重试退避时间
-	MaxRetryBackoff time.Duration `default:"512ms"`
-
-	// ==================== TLS 配置 ====================
-	// TLSConfig TLS 配置
-	// 设置此字段后将使用 TLS 加密连接
-	TLSConfig *tls.Config
-
-	// ==================== 集群特有配置 ====================
-	// MaxRedirects 集群模式下的最大重定向次数
-	MaxRedirects int `default:"3"`
-
-	// ReadOnly 是否启用只读模式
-	// 启用后读操作会路由到从节点
-	ReadOnly bool
-
-	// RouteByLatency 是否按延迟路由
-	// 启用后会选择延迟最低的节点
-	RouteByLatency bool
-
-	// RouteRandomly 是否随机路由
-	// 启用后会随机选择节点
-	RouteRandomly bool
+	MaxRedirects   int  `json:"maxRedirects" default:"3" validate:"gte=0"`
+	ReadOnly       bool `json:"readOnly"`
+	RouteByLatency bool `json:"routeByLatency"`
+	RouteRandomly  bool `json:"routeRandomly"`
 }
 
-// Single 创建单机模式配置
+// Single returns a standalone Redis configuration.
 func Single(addr string) *Config {
-	return &Config{Addrs: []string{addr}}
+	return &Config{Mode: ModeSingle, Addrs: []string{addr}}
 }
 
-// Cluster 创建集群模式配置
+// Cluster returns a Redis Cluster configuration. A single address is valid for
+// managed services that expose one cluster configuration endpoint.
 func Cluster(addrs ...string) *Config {
-	return &Config{Addrs: addrs}
+	return &Config{Mode: ModeCluster, Addrs: addrs}
 }
 
-// Sentinel 创建哨兵模式配置
+// Sentinel returns a Redis Sentinel configuration for masterName.
 func Sentinel(masterName string, addrs ...string) *Config {
-	return &Config{Addrs: addrs, MasterName: masterName}
+	return &Config{Mode: ModeSentinel, Addrs: addrs, MasterName: masterName}
 }
 
-// IsSentinel 判断是否为哨兵模式
-func (c *Config) IsSentinel() bool {
-	return c.MasterName != ""
-}
-
-// IsCluster 判断是否为集群模式
-func (c *Config) IsCluster() bool {
-	return len(c.Addrs) > 1 && c.MasterName == ""
-}
-
-// IsSingle 判断是否为单机模式
-func (c *Config) IsSingle() bool {
-	return len(c.Addrs) == 1 && c.MasterName == ""
+func resolveConfig(cfg Config) (Config, error) {
+	if (cfg.Mode == ModeCluster || cfg.Mode == ModeSentinel) && len(cfg.Addrs) == 0 {
+		return Config{}, fmt.Errorf("%w: %s addresses are required", ErrInvalidConfig, cfg.Mode)
+	}
+	if err := defaults.Apply(&cfg); err != nil {
+		return Config{}, fmt.Errorf("%w: apply defaults: %w", ErrInvalidConfig, err)
+	}
+	if err := validator.Validate.Struct(context.Background(), &cfg); err != nil {
+		return Config{}, fmt.Errorf("%w: validate config: %w", ErrInvalidConfig, err)
+	}
+	if cfg.PoolSize > 0 && cfg.MinIdleConns > cfg.PoolSize {
+		return Config{}, fmt.Errorf("%w: minimum idle connections exceed pool size", ErrInvalidConfig)
+	}
+	if cfg.MaxRetryBackoff >= 0 && cfg.MinRetryBackoff > cfg.MaxRetryBackoff {
+		return Config{}, fmt.Errorf("%w: minimum retry backoff exceeds maximum retry backoff", ErrInvalidConfig)
+	}
+	switch cfg.Mode {
+	case ModeSingle:
+		if len(cfg.Addrs) != 1 || cfg.MasterName != "" {
+			return Config{}, fmt.Errorf("%w: single mode requires exactly one address and no master name", ErrInvalidConfig)
+		}
+	case ModeCluster:
+		if cfg.MasterName != "" {
+			return Config{}, fmt.Errorf("%w: cluster mode does not use a master name", ErrInvalidConfig)
+		}
+	case ModeSentinel:
+		if cfg.MasterName == "" {
+			return Config{}, fmt.Errorf("%w: sentinel master name is required", ErrInvalidConfig)
+		}
+	}
+	return cfg, nil
 }

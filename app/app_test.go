@@ -229,7 +229,7 @@ func TestRun_LifecycleHooks(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRun_WithContainer(t *testing.T) {
-	dbClient, err := db.New(&db.SQLiteConfig{FilePath: t.TempDir() + "/test.db"})
+	dbClient, err := db.New(db.Config{Driver: db.SQLiteConfig{Path: t.TempDir() + "/test.db"}})
 	if err != nil {
 		t.Fatalf("failed to create db client: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestRun_WithContainer(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHealthCheck(t *testing.T) {
-	dbClient, err := db.New(&db.SQLiteConfig{FilePath: t.TempDir() + "/test.db"})
+	dbClient, err := db.New(db.Config{Driver: db.SQLiteConfig{Path: t.TempDir() + "/test.db"}})
 	if err != nil {
 		t.Fatalf("failed to create db client: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestRun_ShutdownOrder(t *testing.T) {
 
 	srv := http.NewServer(gin.New(), http.WithAddr(":18999"))
 
-	dbClient, err := db.New(&db.SQLiteConfig{FilePath: t.TempDir() + "/test.db"})
+	dbClient, err := db.New(db.Config{Driver: db.SQLiteConfig{Path: t.TempDir() + "/test.db"}})
 	if err != nil {
 		t.Fatalf("failed to create db client: %v", err)
 	}

@@ -2,7 +2,9 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
@@ -21,10 +23,9 @@ func TestSingleMode(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
 
-	client, err := New(Single("localhost:6379"),
-		WithPassword("12345678"),
-		WithDB(0),
-	)
+	cfg := Single("localhost:6379")
+	cfg.Password = "12345678"
+	client, err := New(cfg)
 	if err != nil {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 		return
@@ -62,9 +63,9 @@ func TestClusterMode(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
 
-	client, err := New(Cluster("localhost:7000", "localhost:7001", "localhost:7002"),
-		WithPassword("12345678"),
-	)
+	cfg := Cluster("localhost:7000", "localhost:7001", "localhost:7002")
+	cfg.Password = "12345678"
+	client, err := New(cfg)
 	if err != nil {
 		t.Skipf("Skipping test (Redis cluster not available): %v", err)
 		return
@@ -88,10 +89,9 @@ func TestSentinelMode(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
 
-	client, err := New(Sentinel("mymaster", "localhost:26379", "localhost:26380"),
-		WithPassword("12345678"),
-		WithDB(0),
-	)
+	cfg := Sentinel("mymaster", "localhost:26379", "localhost:26380")
+	cfg.Password = "12345678"
+	client, err := New(cfg)
 	if err != nil {
 		t.Skipf("Skipping test (Redis sentinel not available): %v", err)
 		return
@@ -109,10 +109,9 @@ func TestWithMetrics(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
 
-	client, err := New(Single("localhost:6379"),
-		WithPassword("12345678"),
-		WithMetrics(),
-	)
+	cfg := Single("localhost:6379")
+	cfg.Password = "12345678"
+	client, err := New(cfg, WithMetrics())
 	if err != nil {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 		return
@@ -139,8 +138,9 @@ func TestWithSlowQuery(t *testing.T) {
 
 	logger := log.New()
 
-	client, err := New(Single("localhost:6379"),
-		WithPassword("12345678"),
+	cfg := Single("localhost:6379")
+	cfg.Password = "12345678"
+	client, err := New(cfg,
 		WithDebug(1*time.Microsecond), // 设置极小的阈值
 		WithLogger(logger),
 	)
@@ -160,9 +160,9 @@ func TestWithSlowQuery(t *testing.T) {
 
 // TestClose 测试关闭客户端
 func TestClose(t *testing.T) {
-	client, err := New(Single("localhost:6379"),
-		WithPassword("12345678"),
-	)
+	cfg := Single("localhost:6379")
+	cfg.Password = "12345678"
+	client, err := New(cfg)
 	if err != nil {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 		return
@@ -184,10 +184,10 @@ func TestConcurrentAccess(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
 
-	client, err := New(Single("localhost:6379"),
-		WithPassword("12345678"),
-		WithPoolSize(20),
-	)
+	cfg := Single("localhost:6379")
+	cfg.Password = "12345678"
+	cfg.PoolSize = 20
+	client, err := New(cfg)
 	if err != nil {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 		return
@@ -234,32 +234,95 @@ func TestConcurrentAccess(t *testing.T) {
 	client.UniversalClient().Del(ctx, "test:concurrent")
 }
 
-// TestConfigHelpers 测试配置辅助函数
-func TestConfigHelpers(t *testing.T) {
-	// 测试 Single
+func TestConfigConstructors(t *testing.T) {
+	if got := Single("localhost:6379").Mode; got != ModeSingle {
+		t.Fatalf("mode = %q, want single", got)
+	}
+	if got := Cluster("h1:6379").Mode; got != ModeCluster {
+		t.Fatalf("mode = %q, want cluster", got)
+	}
+	if got := Sentinel("mymaster", "s1:26379").Mode; got != ModeSentinel {
+		t.Fatalf("mode = %q, want sentinel", got)
+	}
+}
+
+func TestNewDoesNotMutateConfig(t *testing.T) {
 	cfg := Single("localhost:6379")
-	if !cfg.IsSingle() {
-		t.Error("Should be single mode")
-	}
-	if cfg.IsCluster() || cfg.IsSentinel() {
-		t.Error("Should not be cluster or sentinel mode")
-	}
+	original := *cfg
+	original.Addrs = append([]string(nil), cfg.Addrs...)
 
-	// 测试 Cluster
-	cfg = Cluster("h1:6379", "h2:6379")
-	if !cfg.IsCluster() {
-		t.Error("Should be cluster mode")
+	client, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if cfg.IsSingle() || cfg.IsSentinel() {
-		t.Error("Should not be single or sentinel mode")
+	t.Cleanup(func() { _ = client.Close() })
+	if !reflect.DeepEqual(original, *cfg) {
+		t.Fatalf("New mutated config: got %#v, want %#v", *cfg, original)
 	}
+}
 
-	// 测试 Sentinel
-	cfg = Sentinel("mymaster", "s1:26379", "s2:26379")
-	if !cfg.IsSentinel() {
-		t.Error("Should be sentinel mode")
+func TestConfigValidation(t *testing.T) {
+	tests := []*Config{
+		{Addrs: []string{""}},
+		{Addrs: []string{"localhost:6379"}, Protocol: 4},
+		{Addrs: []string{"localhost:6379"}, PoolSize: 1, MinIdleConns: 2},
+		{Addrs: []string{"localhost:6379"}, MinRetryBackoff: time.Second, MaxRetryBackoff: time.Millisecond},
+		Cluster(),
+		Sentinel(""),
+		{Mode: ModeSingle, Addrs: []string{"one:6379", "two:6379"}},
 	}
-	if cfg.IsSingle() || cfg.IsCluster() {
-		t.Error("Should not be single or cluster mode")
+	for _, cfg := range tests {
+		client, err := New(cfg)
+		if client != nil || !errors.Is(err, ErrInvalidConfig) {
+			t.Fatalf("New(%#v) = (%v, %v), want ErrInvalidConfig", cfg, client, err)
+		}
+	}
+}
+
+func TestOptionValidation(t *testing.T) {
+	cfg := Single("localhost:6379")
+	tests := []Option{
+		nil,
+		WithLogger(nil),
+		WithHooks(nil),
+		WithDebug(-time.Second),
+		WithDebug(time.Second, 2*time.Second),
+	}
+	for _, option := range tests {
+		client, err := New(cfg, option)
+		if client != nil || !errors.Is(err, ErrInvalidOption) {
+			t.Fatalf("New option = (%v, %v), want ErrInvalidOption", client, err)
+		}
+	}
+}
+
+func TestInstrumentationOptionsWithoutArgumentsAreEnabled(t *testing.T) {
+	opts, err := resolveOptions([]Option{WithDebug(), WithTracing(), WithMetrics()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.debug == nil || opts.tracingOptions == nil || opts.metricsOptions == nil {
+		t.Fatalf("instrumentation options were not enabled: %#v", opts)
+	}
+}
+
+func TestUniversalOptions(t *testing.T) {
+	cfg, err := resolveConfig(Config{
+		Addrs:    []string{"redis.internal:6379"},
+		Username: "app",
+		Password: "secret",
+		DB:       2,
+		PoolSize: 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts := universalOptions(cfg)
+	if opts.Addrs[0] != "redis.internal:6379" || opts.Username != "app" || opts.Password != "secret" || opts.DB != 2 || opts.PoolSize != 20 {
+		t.Fatalf("unexpected universal options: %#v", opts)
+	}
+	clusterOptions := universalOptions(*Cluster("cluster.internal:6379"))
+	if !clusterOptions.IsClusterMode {
+		t.Fatal("Cluster must enable IsClusterMode")
 	}
 }

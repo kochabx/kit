@@ -1,48 +1,43 @@
 package mongo
 
 import (
-	"strconv"
-	"strings"
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/kochabx/kit/core/defaults"
+	"github.com/kochabx/kit/core/validator"
 )
 
-// Config MongoDB 配置结构体
+// Config contains structured MongoDB connection and pool settings.
 type Config struct {
-	Host        string        `json:"host" default:"localhost"`
-	Port        int           `json:"port" default:"27017"`
-	User        string        `json:"user" default:"root"`
-	Password    string        `json:"password"`
-	MaxPoolSize int           `json:"maxPoolSize" default:"10"`
-	Timeout     time.Duration `json:"timeout" default:"3s"`
+	Hosts      []string `json:"hosts" default:"[\"localhost:27017\"]" validate:"required,min=1,dive,required"`
+	Username   string   `json:"username"`
+	Password   string   `json:"password"`
+	AuthSource string   `json:"authSource"`
+
+	ReplicaSet string `json:"replicaSet"`
+	Direct     bool   `json:"direct"`
+
+	MaxPoolSize uint64 `json:"maxPoolSize" default:"10" validate:"gte=1"`
+	MinPoolSize uint64 `json:"minPoolSize"`
+
+	ConnectTimeout         time.Duration `json:"connectTimeout" default:"3s" validate:"gt=0"`
+	ServerSelectionTimeout time.Duration `json:"serverSelectionTimeout" default:"3s" validate:"gt=0"`
 }
 
-// uri 构建 MongoDB 连接字符串
-func (c *Config) uri() string {
-	var builder strings.Builder
-	builder.Grow(128)
-
-	builder.WriteString("mongodb://")
-	if c.User != "" && c.Password != "" {
-		builder.WriteString(c.User)
-		builder.WriteString(":")
-		builder.WriteString(c.Password)
-		builder.WriteString("@")
+func resolveConfig(cfg Config) (Config, error) {
+	if err := defaults.Apply(&cfg); err != nil {
+		return Config{}, fmt.Errorf("%w: apply defaults: %w", ErrInvalidConfig, err)
 	}
-
-	builder.WriteString(c.Host)
-	builder.WriteString(":")
-	builder.WriteString(strconv.Itoa(c.Port))
-	builder.WriteString("/")
-
-	builder.WriteString("?maxPoolSize=")
-	builder.WriteString(strconv.Itoa(c.MaxPoolSize))
-
-	return builder.String()
-}
-
-// init 初始化配置，设置默认值
-func (c *Config) Init() error {
-	return defaults.Apply(c)
+	if err := validator.Validate.Struct(context.Background(), &cfg); err != nil {
+		return Config{}, fmt.Errorf("%w: validate config: %w", ErrInvalidConfig, err)
+	}
+	if cfg.MinPoolSize > cfg.MaxPoolSize {
+		return Config{}, fmt.Errorf("%w: minimum pool size exceeds maximum pool size", ErrInvalidConfig)
+	}
+	if cfg.Direct && len(cfg.Hosts) != 1 {
+		return Config{}, fmt.Errorf("%w: direct connections require exactly one host", ErrInvalidConfig)
+	}
+	return cfg, nil
 }

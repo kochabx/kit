@@ -2,7 +2,5 @@ package mongo
 
 import "errors"
 
-var (
-	ErrNotInitialized   = errors.New("mongo: not initialized")
-	ErrConnectionFailed = errors.New("failed to connect to mongodb")
-)
+// ErrInvalidConfig reports invalid or inconsistent Config values.
+var ErrInvalidConfig = errors.New("invalid config")

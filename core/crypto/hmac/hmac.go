@@ -25,14 +25,14 @@ const (
 )
 
 var (
-	ErrInvalidKey        = errors.New("hmac: invalid key")
-	ErrUnknownKey        = errors.New("hmac: unknown key")
-	ErrInvalidSignature  = errors.New("hmac: invalid signature")
-	ErrSignatureMismatch = errors.New("hmac: signature mismatch")
-	ErrSignatureExpired  = errors.New("hmac: signature expired")
-	ErrFutureTimestamp   = errors.New("hmac: timestamp is in the future")
-	ErrNonceGeneration   = errors.New("hmac: nonce generation failed")
-	ErrInvalidOption     = errors.New("hmac: invalid option")
+	ErrInvalidKey        = errors.New("invalid key")
+	ErrUnknownKey        = errors.New("unknown key")
+	ErrInvalidSignature  = errors.New("invalid signature")
+	ErrSignatureMismatch = errors.New("signature mismatch")
+	ErrSignatureExpired  = errors.New("signature expired")
+	ErrFutureTimestamp   = errors.New("timestamp is in the future")
+	ErrNonceGeneration   = errors.New("nonce generation failed")
+	ErrInvalidOption     = errors.New("invalid option")
 )
 
 // Signature is safe to serialize as JSON. Value and Nonce use unpadded

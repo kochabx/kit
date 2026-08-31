@@ -2,120 +2,95 @@ package mongo
 
 import (
 	"context"
+	"fmt"
 
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 	"go.mongodb.org/mongo-driver/v2/mongo/readpref"
-
-	"github.com/kochabx/kit/log"
 )
 
-// Client MongoDB 客户端包装器
+// Client owns a MongoDB client and its connection pools.
 type Client struct {
 	client *mongo.Client
-	config *Config
-	logger *log.Logger
 }
 
-// New 创建新的 Mongo 客户端
-func New(config *Config, opts ...Option) (*Client, error) {
-	// 初始化配置
-	if err := config.Init(); err != nil {
-		return nil, err
+// New creates a lazy MongoDB client without modifying cfg. It validates driver
+// options but does not verify that the deployment is reachable; call Ping or
+// Start when a connection check is required.
+func New(cfg *Config) (*Client, error) {
+	if cfg == nil {
+		return nil, fmt.Errorf("%w: config is required", ErrInvalidConfig)
 	}
-
-	options := &clientOptions{
-		logger: log.Global(),
-	}
-
-	for _, opt := range opts {
-		opt(options)
-	}
-
-	m := &Client{
-		config: config,
-		logger: options.logger,
-	}
-
-	// 创建客户端连接
-	if err := m.connect(); err != nil {
-		return nil, err
-	}
-
-	return m, nil
-}
-
-// connect 创建 MongoDB 连接
-func (m *Client) connect() error {
-	serverApi := options.ServerAPI(options.ServerAPIVersion1)
-	bsonOpts := &options.BSONOptions{
-		UseJSONStructTags: true,
-		NilSliceAsEmpty:   true,
-	}
-
-	opts := options.Client().
-		ApplyURI(m.config.uri()).
-		SetServerAPIOptions(serverApi).
-		SetBSONOptions(bsonOpts).
-		SetMaxPoolSize(uint64(m.config.MaxPoolSize)).
-		SetConnectTimeout(m.config.Timeout).
-		SetServerSelectionTimeout(m.config.Timeout)
-
-	client, err := mongo.Connect(opts)
+	resolved, err := resolveConfig(*cfg)
 	if err != nil {
-		return ErrConnectionFailed
+		return nil, err
 	}
 
-	m.client = client
+	underlying, err := mongo.Connect(clientOptions(resolved))
+	if err != nil {
+		return nil, fmt.Errorf("mongo: create client: %w", err)
+	}
+	return &Client{client: underlying}, nil
+}
+
+func clientOptions(cfg Config) *options.ClientOptions {
+	result := options.Client().
+		SetHosts(append([]string(nil), cfg.Hosts...)).
+		SetServerAPIOptions(options.ServerAPI(options.ServerAPIVersion1)).
+		SetBSONOptions(&options.BSONOptions{
+			UseJSONStructTags: true,
+			NilSliceAsEmpty:   true,
+		}).
+		SetMaxPoolSize(cfg.MaxPoolSize).
+		SetMinPoolSize(cfg.MinPoolSize).
+		SetConnectTimeout(cfg.ConnectTimeout).
+		SetServerSelectionTimeout(cfg.ServerSelectionTimeout).
+		SetDirect(cfg.Direct)
+
+	if cfg.Username != "" || cfg.Password != "" || cfg.AuthSource != "" {
+		result.SetAuth(options.Credential{
+			Username:    cfg.Username,
+			Password:    cfg.Password,
+			PasswordSet: cfg.Password != "",
+			AuthSource:  cfg.AuthSource,
+		})
+	}
+	if cfg.ReplicaSet != "" {
+		result.SetReplicaSet(cfg.ReplicaSet)
+	}
+	return result
+}
+
+// Database returns a handle for name. Creating a handle does not perform I/O.
+func (c *Client) Database(name string) *mongo.Database {
+	return c.client.Database(name)
+}
+
+// Ping verifies that the primary MongoDB server is reachable using ctx.
+func (c *Client) Ping(ctx context.Context) error {
+	if err := c.client.Ping(ctx, readpref.Primary()); err != nil {
+		return fmt.Errorf("mongo: ping: %w", err)
+	}
 	return nil
 }
 
-// Ping 测试 MongoDB 连接是否正常
-func (m *Client) Ping(ctx context.Context) error {
-	if m.client == nil {
-		return ErrNotInitialized
-	}
-	return m.client.Ping(ctx, readpref.Primary())
+// Close disconnects the client and releases its connection pools.
+func (c *Client) Close() error {
+	return c.disconnect(context.Background())
 }
 
-// Close 关闭客户端
-func (m *Client) Close() error {
-	if m.client == nil {
-		return nil
+func (c *Client) disconnect(ctx context.Context) error {
+	if err := c.client.Disconnect(ctx); err != nil {
+		return fmt.Errorf("mongo: disconnect: %w", err)
 	}
-
-	if err := m.client.Disconnect(context.Background()); err != nil {
-		return err
-	}
-
-	m.client = nil
 	return nil
 }
 
-// Start 实现 cx.Starter，验证 MongoDB 连接可用。
-func (m *Client) Start(ctx context.Context) error {
-	return m.Ping(ctx)
-}
+// Start verifies the connection when Client is used as an application component.
+func (c *Client) Start(ctx context.Context) error { return c.Ping(ctx) }
 
-// Stop 实现 cx.Stopper，关闭 MongoDB 连接。
-func (m *Client) Stop(_ context.Context) error {
-	return m.Close()
-}
+// Stop disconnects the client using the application shutdown context.
+func (c *Client) Stop(ctx context.Context) error { return c.disconnect(ctx) }
 
-// HealthCheck 实现 cx.HealthChecker，检查 MongoDB 健康状态。
-func (m *Client) HealthCheck(ctx context.Context) error {
-	return m.Ping(ctx)
-}
-
-// GetClient 获取 MongoDB 客户端
-func (m *Client) GetClient() *mongo.Client {
-	return m.client
-}
-
-// Database 获取指定名称的数据库
-func (m *Client) Database(name string) *mongo.Database {
-	if m.client == nil {
-		return nil
-	}
-	return m.client.Database(name)
-}
+// HealthCheck reports whether the primary MongoDB server is reachable.
+func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }

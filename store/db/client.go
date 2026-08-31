@@ -3,231 +3,132 @@ package db
 import (
 	"context"
 	"database/sql"
-	"errors"
-	"time"
+	"fmt"
+	stdlog "log"
+	"reflect"
 
-	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
-	"github.com/kochabx/kit/log"
+	kitlog "github.com/kochabx/kit/log"
 )
 
-// Client 数据库客户端
+// Client owns a GORM database and its underlying connection pool.
 type Client struct {
-	config  DriverConfig
-	db      *gorm.DB
-	sqlDB   *sql.DB
-	options *clientOptions
-	logger  *log.Logger
+	db    *gorm.DB
+	sqlDB *sql.DB
 }
 
-// New 创建新的数据库客户端
-func New(cfg DriverConfig, opts ...Option) (*Client, error) {
-	if cfg == nil {
-		return nil, ErrInvalidConfig
+// New creates a database client.
+func New(cfg Config, opts ...Option) (*Client, error) {
+	if isNilDriver(cfg.Driver) {
+		return nil, fmt.Errorf("%w: driver is required", ErrInvalidConfig)
 	}
 
-	// 初始化配置
-	if err := cfg.Init(); err != nil {
+	driverName, dialector, err := cfg.Driver.dialector()
+	if err != nil {
+		return nil, err
+	}
+	cfg, err = resolveConfig(cfg, driverName)
+	if err != nil {
 		return nil, err
 	}
 
-	// 应用选项
-	options := defaultOptions()
-	for _, opt := range opts {
-		if opt != nil {
-			opt(options)
+	settings := openOptions{}
+	for index, option := range opts {
+		if option == nil {
+			return nil, fmt.Errorf("%w: nil option at index %d", ErrInvalidOption, index)
+		}
+		if err := option(&settings); err != nil {
+			return nil, err
 		}
 	}
 
-	c := &Client{
-		config:  cfg,
-		options: options,
-		logger:  options.logger,
-	}
-
-	// 使用默认全局日志
-	if c.logger == nil {
-		c.logger = log.Global()
-	}
-
-	// 创建数据库连接
-	if err := c.connect(); err != nil {
-		return nil, err
-	}
-
-	c.logger.Debug().
-		Str("driver", cfg.Driver().String()).
-		Msg("database client created")
-
-	return c, nil
-}
-
-// connect 创建数据库连接
-func (c *Client) connect() error {
-	// 构建 GORM 配置
-	gormConfig := c.buildGormConfig()
-
-	// 获取 Dialector
-	dialector, err := c.getDialector()
+	gormDB, err := gorm.Open(dialector, newGORMConfig(cfg, settings.logger))
 	if err != nil {
-		return err
+		closeGORMDB(gormDB)
+		return nil, fmt.Errorf("db: open %s: %w", driverName, err)
 	}
-
-	// 打开连接
-	db, err := gorm.Open(dialector, gormConfig)
+	sqlDB, err := gormDB.DB()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("db: get %s connection pool: %w", driverName, err)
 	}
+	applyPoolConfig(sqlDB, *cfg.Pool)
 
-	// 获取底层 sql.DB
-	sqlDB, err := db.DB()
-	if err != nil {
-		return err
-	}
-
-	// 配置连接池
-	c.configurePool(sqlDB)
-
-	// 应用插件
-	if err := c.usePlugins(db); err != nil {
-		return err
-	}
-
-	c.db = db
-	c.sqlDB = sqlDB
-	return nil
-}
-
-// getDialector 获取 GORM Dialector
-func (c *Client) getDialector() (gorm.Dialector, error) {
-	dsn := c.config.DSN()
-
-	switch c.config.Driver() {
-	case DriverMySQL:
-		return mysql.Open(dsn), nil
-	case DriverPostgres:
-		return postgres.Open(dsn), nil
-	case DriverSQLite:
-		return sqlite.Open(dsn), nil
-	default:
-		return nil, ErrUnsupportedDriver
-	}
-}
-
-// buildGormConfig 构建 GORM 配置
-func (c *Client) buildGormConfig() *gorm.Config {
-	if c.options.gormConfig != nil {
-		return c.options.gormConfig
-	}
-
-	cfg := &gorm.Config{}
-
-	// 使用 GORM 原生 logger
-	loggerConfig := logger.Config{
-		LogLevel:                  logger.LogLevel(c.config.LogLevel()),
-		IgnoreRecordNotFoundError: true,
-		Colorful:                  false,
-	}
-	// 慢查询阈值大于 0 时启用
-	if c.options.slowQueryThresh > 0 {
-		loggerConfig.SlowThreshold = c.options.slowQueryThresh
-	}
-	cfg.Logger = logger.New(newGormLogWriter(c.logger), loggerConfig)
-
-	return cfg
-}
-
-// configurePool 配置连接池
-func (c *Client) configurePool(sqlDB *sql.DB) {
-	pool := c.config.Pool()
-	sqlDB.SetMaxIdleConns(pool.MaxIdleConns)
-	sqlDB.SetMaxOpenConns(pool.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(pool.ConnMaxLifetime)
-	sqlDB.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
-}
-
-// usePlugins 应用插件
-func (c *Client) usePlugins(db *gorm.DB) error {
-	for _, plugin := range c.options.plugins {
-		if err := db.Use(plugin); err != nil {
-			return err
+	for _, plugin := range settings.plugins {
+		if err := gormDB.Use(plugin); err != nil {
+			_ = sqlDB.Close()
+			return nil, fmt.Errorf("db: install %s plugin %q: %w", driverName, plugin.Name(), err)
 		}
 	}
-	return nil
+	return &Client{db: gormDB, sqlDB: sqlDB}, nil
 }
 
-// DB 获取 GORM 数据库实例
-func (c *Client) DB() *gorm.DB {
-	return c.db
+func isNilDriver(driver DriverConfig) bool {
+	if driver == nil {
+		return true
+	}
+	value := reflect.ValueOf(driver)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
-// Ping 测试数据库连接
+func closeGORMDB(db *gorm.DB) {
+	if db == nil {
+		return
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
+}
+
+func newGORMConfig(cfg Config, output *kitlog.Logger) *gorm.Config {
+	result := &gorm.Config{}
+	if cfg.GORMConfig != nil {
+		*result = *cfg.GORMConfig
+	}
+	if result.Logger != nil {
+		return result
+	}
+	if output == nil {
+		result.Logger = logger.Discard
+	} else {
+		result.Logger = logger.New(
+			stdlog.New(output, "", 0),
+			logger.Config{
+				SlowThreshold:             cfg.SlowQueryThreshold,
+				LogLevel:                  cfg.LogLevel,
+				IgnoreRecordNotFoundError: true,
+				Colorful:                  false,
+			},
+		)
+	}
+	return result
+}
+
+func applyPoolConfig(db *sql.DB, pool PoolConfig) {
+	db.SetMaxIdleConns(pool.MaxIdleConns)
+	db.SetMaxOpenConns(pool.MaxOpenConns)
+	db.SetConnMaxLifetime(pool.ConnMaxLifetime)
+	db.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
+}
+
+func (c *Client) DB() *gorm.DB       { return c.db }
+func (c *Client) Stats() sql.DBStats { return c.sqlDB.Stats() }
+
 func (c *Client) Ping(ctx context.Context) error {
-	if c.sqlDB == nil {
-		return ErrNotInitialized
-	}
-
-	return c.sqlDB.PingContext(ctx)
-}
-
-// Close 关闭数据库连接
-func (c *Client) Close() error {
-	if c.sqlDB != nil {
-		if err := c.sqlDB.Close(); err != nil {
-			if errors.Is(err, sql.ErrConnDone) {
-				return nil
-			}
-			return err
-		}
+	if err := c.sqlDB.PingContext(ctx); err != nil {
+		return fmt.Errorf("db: ping: %w", err)
 	}
 	return nil
 }
 
-// Stats 获取连接池统计信息
-func (c *Client) Stats() sql.DBStats {
-	if c.sqlDB == nil {
-		return sql.DBStats{}
+func (c *Client) Close() error {
+	if err := c.sqlDB.Close(); err != nil {
+		return fmt.Errorf("db: close: %w", err)
 	}
-	return c.sqlDB.Stats()
+	return nil
 }
 
-// IsHealthy 返回健康状态
-func (c *Client) IsHealthy() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	return c.Ping(ctx) == nil
-}
-
-// Start 实现 cx.Starter，验证数据库连接可用。
-func (c *Client) Start(ctx context.Context) error {
-	return c.Ping(ctx)
-}
-
-// Stop 实现 cx.Stopper，关闭数据库连接。
-func (c *Client) Stop(_ context.Context) error {
-	return c.Close()
-}
-
-// HealthCheck 实现 cx.HealthChecker，检查数据库健康状态。
-func (c *Client) HealthCheck(ctx context.Context) error {
-	return c.Ping(ctx)
-}
-
-// gormLogWriter 适配 kit/log 到 GORM logger.Writer
-type gormLogWriter struct {
-	logger *log.Logger
-}
-
-func newGormLogWriter(l *log.Logger) *gormLogWriter {
-	return &gormLogWriter{logger: l}
-}
-
-func (w *gormLogWriter) Printf(format string, args ...any) {
-	if w.logger != nil {
-		w.logger.Info().Msgf(format, args...)
-	}
-}
+func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }
+func (c *Client) Stop(context.Context) error            { return c.Close() }
+func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }

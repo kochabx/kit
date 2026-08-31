@@ -24,13 +24,13 @@ const (
 
 var (
 	magic                = [4]byte{'K', 'E', 'N', 'V'}
-	ErrInvalidKey        = errors.New("envelope: invalid key")
-	ErrUnknownKey        = errors.New("envelope: unknown key")
-	ErrInvalidCiphertext = errors.New("envelope: invalid ciphertext")
-	ErrEncryptionFailed  = errors.New("envelope: encryption failed")
-	ErrDecryptionFailed  = errors.New("envelope: decryption failed")
-	ErrPlaintextTooLarge = errors.New("envelope: plaintext too large")
-	ErrInvalidOption     = errors.New("envelope: invalid option")
+	ErrInvalidKey        = errors.New("invalid key")
+	ErrUnknownKey        = errors.New("unknown key")
+	ErrInvalidCiphertext = errors.New("invalid ciphertext")
+	ErrEncryptionFailed  = errors.New("encryption failed")
+	ErrDecryptionFailed  = errors.New("decryption failed")
+	ErrPlaintextTooLarge = errors.New("plaintext too large")
+	ErrInvalidOption     = errors.New("invalid option")
 )
 
 type config struct {

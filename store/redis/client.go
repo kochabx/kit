@@ -2,63 +2,48 @@ package redis
 
 import (
 	"context"
-	"runtime"
+	"fmt"
 
 	"github.com/redis/go-redis/extra/redisotel/v9"
 	"github.com/redis/go-redis/v9"
 
-	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/log"
 )
 
-// Client Redis 统一客户端（支持单机/集群/哨兵模式）
+// Client owns the underlying go-redis client and its connection pools.
 type Client struct {
 	client redis.UniversalClient
-	config *Config
-	logger *log.Logger
 }
 
-// New 创建新的 Redis 客户端
-// 根据配置自动选择单机/集群/哨兵模式
+// New creates a lazy Redis client without modifying cfg. It does not establish
+// a connection; call Ping or Start when the connection must be verified.
 func New(cfg *Config, opts ...Option) (*Client, error) {
 	if cfg == nil {
-		return nil, ErrInvalidConfig
+		return nil, fmt.Errorf("%w: config is required", ErrInvalidConfig)
 	}
-
-	if err := defaults.Apply(cfg); err != nil {
+	resolved, err := resolveConfig(*cfg)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := resolveOptions(opts)
+	if err != nil {
 		return nil, err
 	}
 
-	clientOpts := applyOptions(cfg, opts)
-	logger := clientOpts.logger
-	if logger == nil {
-		logger = log.Global()
-	}
-
-	client := &Client{
-		config: cfg,
-		logger: logger,
-		client: redis.NewUniversalClient(buildUniversalOptions(cfg)),
-	}
-
-	if err := client.setupHooks(clientOpts); err != nil {
-		_ = client.Close()
+	underlying := redis.NewUniversalClient(universalOptions(resolved))
+	if err := installHooks(underlying, settings); err != nil {
+		_ = underlying.Close()
 		return nil, err
 	}
-
-	client.logger.Debug().Str("mode", client.getMode()).Interface("addrs", cfg.Addrs).Msg("redis client created")
-	return client, nil
+	if settings.logger != nil {
+		settings.logger.Debug().Str("mode", string(resolved.Mode)).Strs("addrs", resolved.Addrs).Msg("redis client created")
+	}
+	return &Client{client: underlying}, nil
 }
 
-// buildUniversalOptions 构建 redis.UniversalOptions
-func buildUniversalOptions(cfg *Config) *redis.UniversalOptions {
-	poolSize := cfg.PoolSize
-	if poolSize == 0 {
-		poolSize = 10 * runtime.GOMAXPROCS(0)
-	}
-
+func universalOptions(cfg Config) *redis.UniversalOptions {
 	return &redis.UniversalOptions{
-		Addrs:      cfg.Addrs,
+		Addrs:      append([]string(nil), cfg.Addrs...),
 		MasterName: cfg.MasterName,
 		Username:   cfg.Username,
 		Password:   cfg.Password,
@@ -69,7 +54,7 @@ func buildUniversalOptions(cfg *Config) *redis.UniversalOptions {
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
 
-		PoolSize:        poolSize,
+		PoolSize:        cfg.PoolSize,
 		MinIdleConns:    cfg.MinIdleConns,
 		ConnMaxIdleTime: cfg.MaxIdleTime,
 		ConnMaxLifetime: cfg.MaxLifetime,
@@ -80,6 +65,7 @@ func buildUniversalOptions(cfg *Config) *redis.UniversalOptions {
 		MaxRetryBackoff: cfg.MaxRetryBackoff,
 
 		TLSConfig:      cfg.TLSConfig,
+		IsClusterMode:  cfg.Mode == ModeCluster,
 		MaxRedirects:   cfg.MaxRedirects,
 		ReadOnly:       cfg.ReadOnly,
 		RouteByLatency: cfg.RouteByLatency,
@@ -87,93 +73,58 @@ func buildUniversalOptions(cfg *Config) *redis.UniversalOptions {
 	}
 }
 
-// setupHooks 设置 Hooks
-func (c *Client) setupHooks(opts *clientOptions) error {
-	// 添加自定义 Hooks
+func installHooks(client redis.UniversalClient, opts options) error {
 	for _, hook := range opts.hooks {
-		c.client.AddHook(hook)
+		client.AddHook(hook)
 	}
-
-	// OpenTelemetry Tracing Hook
-	if opts.enableTracing {
-		if err := redisotel.InstrumentTracing(c.client, opts.tracingOpts...); err != nil {
-			return err
+	if opts.tracingOptions != nil {
+		if err := redisotel.InstrumentTracing(client, opts.tracingOptions...); err != nil {
+			return fmt.Errorf("redis: install tracing: %w", err)
 		}
 	}
-
-	// OpenTelemetry Metrics Hook
-	if opts.enableMetrics {
-		if err := redisotel.InstrumentMetrics(c.client, opts.metricsOpts...); err != nil {
-			return err
+	if opts.metricsOptions != nil {
+		if err := redisotel.InstrumentMetrics(client, opts.metricsOptions...); err != nil {
+			return fmt.Errorf("redis: install metrics: %w", err)
 		}
 	}
-
-	// Debug Hook
-	if opts.enableDebug {
-		debugHook := NewDebugHook(c.logger, opts.slowQueryThresh)
-		c.client.AddHook(debugHook)
+	if opts.debug != nil {
+		logger := opts.logger
+		if logger == nil {
+			logger = log.Global()
+		}
+		client.AddHook(newDebugHook(logger, opts.debug.slowQueryThreshold))
 	}
-
 	return nil
 }
 
-// UniversalClient 获取底层 redis.UniversalClient
-// 用于执行所有 Redis 命令
-func (c *Client) UniversalClient() redis.UniversalClient {
-	return c.client
-}
+// UniversalClient returns the underlying go-redis client for Redis commands,
+// pipelines, transactions, and scripts.
+func (c *Client) UniversalClient() redis.UniversalClient { return c.client }
 
-// Ping 测试连接
+// Ping verifies that Redis is reachable using ctx.
 func (c *Client) Ping(ctx context.Context) error {
-	if c.client == nil {
-		return ErrNotInitialized
+	if err := c.client.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("redis: ping: %w", err)
 	}
-	return c.client.Ping(ctx).Err()
-}
-
-// Close 关闭客户端
-func (c *Client) Close() error {
-	if c.client == nil {
-		return nil
-	}
-	if err := c.client.Close(); err != nil {
-		return err
-	}
-	c.client = nil
 	return nil
 }
 
-// Stats 获取连接池统计信息
-func (c *Client) Stats() *redis.PoolStats {
-	if c.client == nil {
-		return nil
+// Close releases all connections owned by the client.
+func (c *Client) Close() error {
+	if err := c.client.Close(); err != nil {
+		return fmt.Errorf("redis: close: %w", err)
 	}
-	return c.client.PoolStats()
+	return nil
 }
 
-// Start 实现 cx.Starter，验证 Redis 连接可用。
-func (c *Client) Start(ctx context.Context) error {
-	return c.Ping(ctx)
-}
+// Stats returns a snapshot of connection pool statistics.
+func (c *Client) Stats() *redis.PoolStats { return c.client.PoolStats() }
 
-// Stop 实现 cx.Stopper，关闭 Redis 连接。
-func (c *Client) Stop(_ context.Context) error {
-	return c.Close()
-}
+// Start verifies the connection when Client is used as an application component.
+func (c *Client) Start(ctx context.Context) error { return c.Ping(ctx) }
 
-// HealthCheck 实现 cx.HealthChecker，检查 Redis 健康状态。
-func (c *Client) HealthCheck(ctx context.Context) error {
-	return c.Ping(ctx)
-}
+// Stop closes the client when it is used as an application component.
+func (c *Client) Stop(context.Context) error { return c.Close() }
 
-// getMode 获取客户端模式
-func (c *Client) getMode() string {
-	switch {
-	case c.config.IsSentinel():
-		return "sentinel"
-	case c.config.IsCluster():
-		return "cluster"
-	default:
-		return "single"
-	}
-}
+// HealthCheck reports whether Redis is reachable.
+func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }

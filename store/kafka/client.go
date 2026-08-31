@@ -2,263 +2,253 @@ package kafka
 
 import (
 	"context"
-	"strings"
+	"errors"
+	"fmt"
 	"sync"
 
-	"github.com/kochabx/kit/core/defaults"
-	"github.com/kochabx/kit/log"
-	"github.com/segmentio/kafka-go"
+	segmentio "github.com/segmentio/kafka-go"
+	"github.com/segmentio/kafka-go/sasl"
 	"github.com/segmentio/kafka-go/sasl/plain"
-	"golang.org/x/sync/errgroup"
 )
 
-// Client Kafka 客户端封装，提供生产者和消费者的管理
-type Client struct {
-	config    *Config
-	dialer    *kafka.Dialer
-	transport *kafka.Transport
-	logger    *log.Logger
-
-	syncProducers  map[string]*kafka.Writer
-	asyncProducers map[string]*kafka.Writer
-	consumers      map[string]*kafka.Reader
-	mu             sync.RWMutex
+type consumerKey struct {
+	topic     string
+	groupID   string
+	partition int
 }
 
-// New 创建新的 Kafka 客户端实例
+// Client owns cached Kafka producers and consumers.
+type Client struct {
+	config          Config
+	dialer          *segmentio.Dialer
+	transport       segmentio.RoundTripper
+	ownedTransport  *segmentio.Transport
+	asyncCompletion func([]segmentio.Message, error)
+
+	mu             sync.Mutex
+	closed         bool
+	producers      map[string]*segmentio.Writer
+	asyncProducers map[string]*segmentio.Writer
+	consumers      map[consumerKey]*segmentio.Reader
+	closeOnce      sync.Once
+	closeErr       error
+}
+
+// New creates a lazy Kafka client without modifying cfg. Call Ping or Start
+// when broker availability must be verified before use.
 func New(cfg *Config, opts ...Option) (*Client, error) {
 	if cfg == nil {
-		return nil, ErrInvalidConfig
+		return nil, fmt.Errorf("%w: config is required", ErrInvalidConfig)
 	}
-
-	if err := defaults.Apply(cfg); err != nil {
+	resolved, err := resolveConfig(*cfg)
+	if err != nil {
 		return nil, err
 	}
 
-	clientOpts := applyOptions(opts)
-
-	c := &Client{
-		config:         cfg,
-		logger:         clientOpts.logger,
-		syncProducers:  make(map[string]*kafka.Writer),
-		asyncProducers: make(map[string]*kafka.Writer),
-		consumers:      make(map[string]*kafka.Reader),
+	settings := clientOptions{}
+	for index, option := range opts {
+		if option == nil {
+			return nil, fmt.Errorf("%w: nil option at index %d", ErrInvalidOption, index)
+		}
+		if err := option(&settings); err != nil {
+			return nil, err
+		}
 	}
 
-	// 使用默认全局日志
-	if c.logger == nil {
-		c.logger = log.Global()
+	mechanism := saslMechanism(resolved.SASL)
+	dialer := settings.dialer
+	if dialer == nil {
+		dialer = &segmentio.Dialer{
+			Timeout:       resolved.DialTimeout,
+			DualStack:     true,
+			TLS:           resolved.TLS,
+			SASLMechanism: mechanism,
+		}
+	}
+	transport := settings.transport
+	var owned *segmentio.Transport
+	if transport == nil {
+		owned = &segmentio.Transport{
+			DialTimeout: resolved.DialTimeout,
+			TLS:         resolved.TLS,
+			SASL:        mechanism,
+		}
+		transport = owned
 	}
 
-	if clientOpts.dialer != nil {
-		c.dialer = clientOpts.dialer
-	} else {
-		c.dialer = c.createDialer()
-	}
-	c.transport = c.createTransport()
-
-	return c, nil
+	return &Client{
+		config:          resolved,
+		dialer:          dialer,
+		transport:       transport,
+		ownedTransport:  owned,
+		asyncCompletion: settings.asyncCompletion,
+		producers:       make(map[string]*segmentio.Writer),
+		asyncProducers:  make(map[string]*segmentio.Writer),
+		consumers:       make(map[consumerKey]*segmentio.Reader),
+	}, nil
 }
 
-// mechanism 创建 SASL 认证机制
-func (c *Client) mechanism() plain.Mechanism {
-	return plain.Mechanism{
-		Username: c.config.Username,
-		Password: c.config.Password,
+func saslMechanism(cfg *SASLPlainConfig) sasl.Mechanism {
+	if cfg == nil {
+		return nil
 	}
+	return plain.Mechanism{Username: cfg.Username, Password: cfg.Password}
 }
 
-// createDialer 创建 Kafka 连接拨号器
-func (c *Client) createDialer() *kafka.Dialer {
-	dialer := &kafka.Dialer{
-		Timeout:   c.config.Timeout,
-		DualStack: true,
-	}
-
-	if c.config.Username != "" && c.config.Password != "" {
-		dialer.SASLMechanism = c.mechanism()
-	}
-
-	return dialer
+// Producer returns a cached synchronous writer for topic.
+func (c *Client) Producer(topic string) (*segmentio.Writer, error) {
+	return c.producer(topic, false)
 }
 
-// createTransport 创建 Kafka 传输配置
-func (c *Client) createTransport() *kafka.Transport {
-	transport := &kafka.Transport{}
-
-	if c.config.Username != "" && c.config.Password != "" {
-		transport.SASL = c.mechanism()
-	}
-
-	return transport
+// AsyncProducer returns a cached asynchronous writer for topic. WriteMessages
+// only queues messages; delivery errors are not returned to the caller.
+func (c *Client) AsyncProducer(topic string) (*segmentio.Writer, error) {
+	return c.producer(topic, true)
 }
 
-// createWriter 创建 kafka writer 的通用方法
-func (c *Client) createWriter(topic string, async bool) *kafka.Writer {
-	return &kafka.Writer{
-		Addr:                   kafka.TCP(c.config.Brokers...),
+func (c *Client) producer(topic string, async bool) (*segmentio.Writer, error) {
+	if topic == "" {
+		return nil, fmt.Errorf("%w: topic is required", ErrInvalidConfig)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil, ErrClosed
+	}
+	producers := c.producers
+	if async {
+		producers = c.asyncProducers
+	}
+	if producer := producers[topic]; producer != nil {
+		return producer, nil
+	}
+	producer := &segmentio.Writer{
+		Addr:                   segmentio.TCP(c.config.Brokers...),
 		Topic:                  topic,
-		Balancer:               c.config.balancer(),
+		Balancer:               c.config.newBalancer(),
 		Transport:              c.transport,
 		AllowAutoTopicCreation: c.config.AllowAutoTopicCreation,
+		RequiredAcks:           c.config.RequiredAcks,
 		Async:                  async,
 	}
+	if async {
+		producer.Completion = c.asyncCompletion
+	}
+	producers[topic] = producer
+	return producer, nil
 }
 
-// Producer 获取指定主题的同步生产者，如果不存在则创建
-func (c *Client) Producer(topic string) *kafka.Writer {
-	c.mu.RLock()
-	if w, ok := c.syncProducers[topic]; ok {
-		c.mu.RUnlock()
-		return w
+// Consumer returns a cached reader for partition of topic.
+func (c *Client) Consumer(topic string, partition int) (*segmentio.Reader, error) {
+	if partition < 0 {
+		return nil, fmt.Errorf("%w: partition must not be negative", ErrInvalidConfig)
 	}
-	c.mu.RUnlock()
+	return c.consumer(consumerKey{topic: topic, partition: partition})
+}
 
+// ConsumerGroup returns a cached group reader for topic and groupID.
+func (c *Client) ConsumerGroup(topic, groupID string) (*segmentio.Reader, error) {
+	if groupID == "" {
+		return nil, fmt.Errorf("%w: consumer group ID is required", ErrInvalidConfig)
+	}
+	return c.consumer(consumerKey{topic: topic, groupID: groupID})
+}
+
+func (c *Client) consumer(key consumerKey) (*segmentio.Reader, error) {
+	if key.topic == "" {
+		return nil, fmt.Errorf("%w: topic is required", ErrInvalidConfig)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-
-	if w, ok := c.syncProducers[topic]; ok {
-		return w
+	if c.closed {
+		return nil, ErrClosed
 	}
-
-	w := c.createWriter(topic, false)
-	c.syncProducers[topic] = w
-	return w
+	if consumer := c.consumers[key]; consumer != nil {
+		return consumer, nil
+	}
+	config := segmentio.ReaderConfig{
+		Brokers:   append([]string(nil), c.config.Brokers...),
+		Topic:     key.topic,
+		GroupID:   key.groupID,
+		Partition: key.partition,
+		MinBytes:  c.config.MinBytes,
+		MaxBytes:  c.config.MaxBytes,
+		Dialer:    c.dialer,
+	}
+	if err := config.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: validate consumer: %w", ErrInvalidConfig, err)
+	}
+	consumer := segmentio.NewReader(config)
+	c.consumers[key] = consumer
+	return consumer, nil
 }
 
-// AsyncProducer 获取指定主题的异步生产者，如果不存在则创建
-func (c *Client) AsyncProducer(topic string) *kafka.Writer {
-	c.mu.RLock()
-	if w, ok := c.asyncProducers[topic]; ok {
-		c.mu.RUnlock()
-		return w
-	}
-	c.mu.RUnlock()
-
+// Ping verifies that at least one configured broker accepts a Kafka connection.
+func (c *Client) Ping(ctx context.Context) error {
 	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if w, ok := c.asyncProducers[topic]; ok {
-		return w
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ErrClosed
 	}
-
-	w := c.createWriter(topic, true)
-	c.asyncProducers[topic] = w
-	return w
+	var pingErrors []error
+	for _, broker := range c.config.Brokers {
+		connection, err := c.dialer.DialContext(ctx, "tcp", broker)
+		if err != nil {
+			pingErrors = append(pingErrors, fmt.Errorf("broker %q: %w", broker, err))
+			continue
+		}
+		if err := connection.Close(); err != nil {
+			return fmt.Errorf("kafka: close ping connection: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("kafka: ping: %w", errors.Join(pingErrors...))
 }
 
-// createReader 创建 kafka reader 的通用方法
-func (c *Client) createReader(topic string, groupId string, partition int) *kafka.Reader {
-	config := kafka.ReaderConfig{
-		Brokers:  c.config.Brokers,
-		Topic:    topic,
-		MinBytes: c.config.MinBytes,
-		MaxBytes: c.config.MaxBytes,
-		Dialer:   c.dialer,
-	}
-
-	if groupId != "" {
-		config.GroupID = groupId
-	} else {
-		config.Partition = partition
-	}
-
-	return kafka.NewReader(config)
-}
-
-// Consumer 获取指定主题的消费者，如果不存在则创建
-func (c *Client) Consumer(topic string) *kafka.Reader {
-	c.mu.RLock()
-	if r, ok := c.consumers[topic]; ok {
-		c.mu.RUnlock()
-		return r
-	}
-	c.mu.RUnlock()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if r, ok := c.consumers[topic]; ok {
-		return r
-	}
-
-	r := c.createReader(topic, "", c.config.Partition)
-	c.consumers[topic] = r
-	return r
-}
-
-// buildConsumerGroupKey 构建消费者组的 key
-func (c *Client) buildConsumerGroupKey(topic string, groupId string) string {
-	var builder strings.Builder
-	builder.WriteString(topic)
-	builder.WriteString("-")
-	builder.WriteString(groupId)
-	return builder.String()
-}
-
-// ConsumerGroup 获取指定主题和消费者组的消费者，如果不存在则创建
-func (c *Client) ConsumerGroup(topic string, groupId string) *kafka.Reader {
-	key := c.buildConsumerGroupKey(topic, groupId)
-
-	c.mu.RLock()
-	if r, ok := c.consumers[key]; ok {
-		c.mu.RUnlock()
-		return r
-	}
-	c.mu.RUnlock()
-
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if r, ok := c.consumers[key]; ok {
-		return r
-	}
-
-	r := c.createReader(topic, groupId, 0)
-	c.consumers[key] = r
-	return r
-}
-
-// Close 关闭所有的生产者和消费者连接
+// Close flushes and closes all producers and consumers. It is safe to call
+// more than once.
 func (c *Client) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		closers := make([]func() error, 0, len(c.producers)+len(c.asyncProducers)+len(c.consumers))
+		for _, producer := range c.producers {
+			closers = append(closers, producer.Close)
+		}
+		for _, producer := range c.asyncProducers {
+			closers = append(closers, producer.Close)
+		}
+		for _, consumer := range c.consumers {
+			closers = append(closers, consumer.Close)
+		}
+		c.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(context.Background(), c.config.CloseTimeout)
-	defer cancel()
-
-	eg, _ := errgroup.WithContext(ctx)
-
-	// 关闭同步生产者
-	for _, w := range c.syncProducers {
-		eg.Go(func() error {
-			return w.Close()
-		})
-	}
-
-	// 关闭异步生产者
-	for _, w := range c.asyncProducers {
-		eg.Go(func() error {
-			return w.Close()
-		})
-	}
-
-	// 关闭消费者
-	for _, r := range c.consumers {
-		eg.Go(func() error {
-			return r.Close()
-		})
-	}
-
-	return eg.Wait()
+		errCh := make(chan error, len(closers))
+		var group sync.WaitGroup
+		for _, closeResource := range closers {
+			group.Go(func() {
+				if err := closeResource(); err != nil {
+					errCh <- err
+				}
+			})
+		}
+		group.Wait()
+		close(errCh)
+		var closeErrors []error
+		for err := range errCh {
+			closeErrors = append(closeErrors, err)
+		}
+		if c.ownedTransport != nil {
+			c.ownedTransport.CloseIdleConnections()
+		}
+		if err := errors.Join(closeErrors...); err != nil {
+			c.closeErr = fmt.Errorf("kafka: close: %w", err)
+		}
+	})
+	return c.closeErr
 }
 
-// Start 实现 cx.Starter（Kafka 连接在使用时按需创建，无需预连接）。
-func (c *Client) Start(_ context.Context) error {
-	return nil
-}
-
-// Stop 实现 cx.Stopper，关闭所有生产者和消费者。
-func (c *Client) Stop(_ context.Context) error {
-	return c.Close()
-}
+func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }
+func (c *Client) Stop(context.Context) error            { return c.Close() }
+func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }

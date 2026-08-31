@@ -10,25 +10,27 @@ package main
 import (
 	"github.com/kochabx/kit/app"
 	"github.com/kochabx/kit/cx"
-    "github.com/kochabx/kit/store/db"
-    "github.com/kochabx/kit/transport/http"
+	"github.com/kochabx/kit/store/db"
+	"github.com/kochabx/kit/transport/http"
 
-    "github.com/gin-gonic/gin"
+	"github.com/gin-gonic/gin"
 )
 
 func main() {
-    r := gin.Default()
-    r.GET("/ping", func(c *gin.Context) { c.String(200, "pong") })
+	r := gin.Default()
+	r.GET("/ping", func(c *gin.Context) { c.String(200, "pong") })
 
-    dbClient, _ := db.New(&db.PostgresConfig{DSN: "postgres://..."})
+	dbClient, _ := db.New(db.Config{
+		Driver: db.PostgresConfig{Database: "app"},
+	})
 
-    a := app.New(
-        app.WithServer(http.NewServer(r, http.WithAddr(":8080"))),
+	a := app.New(
+		app.WithServer(http.NewServer(r, http.WithAddr(":8080"))),
 		app.WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
-    )
-    if err := a.Run(); err != nil {
-        panic(err)
-    }
+	)
+	if err := a.Run(); err != nil {
+		panic(err)
+	}
 }
 ```
 

@@ -152,7 +152,7 @@ func defaultRetryOn(resp *http.Response, err error) bool {
 // body 为 nil 表示无请求体；否则使用 Body 构造器 (JSON/Form/Raw 等)。
 func (c *Client) Do(ctx context.Context, method, target string, body Body, opts ...RequestOption) (*http.Response, error) {
 	if ctx == nil {
-		return nil, errors.New("httpx: nil Context")
+		return nil, errors.New("nil Context")
 	}
 
 	cfg := &requestConfig{

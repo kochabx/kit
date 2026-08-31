@@ -2,5 +2,8 @@ package kafka
 
 import "errors"
 
-// ErrInvalidConfig 配置无效
-var ErrInvalidConfig = errors.New("kafka: invalid config")
+var (
+	ErrInvalidConfig = errors.New("invalid config")
+	ErrInvalidOption = errors.New("invalid option")
+	ErrClosed        = errors.New("client closed")
+)

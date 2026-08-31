@@ -1,40 +1,50 @@
 package kafka
 
 import (
-	"github.com/kochabx/kit/log"
-	"github.com/segmentio/kafka-go"
+	"fmt"
+
+	segmentio "github.com/segmentio/kafka-go"
 )
 
-// Option 客户端配置选项
-type Option func(*clientOptions)
+// Option customizes advanced Kafka dependencies.
+type Option func(*clientOptions) error
 
-// clientOptions 客户端内部选项
 type clientOptions struct {
-	logger *log.Logger
-	dialer *kafka.Dialer
+	dialer          *segmentio.Dialer
+	transport       segmentio.RoundTripper
+	asyncCompletion func([]segmentio.Message, error)
 }
 
-// WithLogger 设置日志实例
-func WithLogger(logger *log.Logger) Option {
-	return func(o *clientOptions) {
-		o.logger = logger
-	}
-}
-
-// WithDialer 设置自定义 Dialer
-func WithDialer(dialer *kafka.Dialer) Option {
-	return func(o *clientOptions) {
-		o.dialer = dialer
-	}
-}
-
-// applyOptions 应用所有选项
-func applyOptions(opts []Option) *clientOptions {
-	clientOpts := &clientOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(clientOpts)
+// WithAsyncCompletion handles delivery results from every asynchronous
+// producer owned by the Client.
+func WithAsyncCompletion(completion func([]segmentio.Message, error)) Option {
+	return func(options *clientOptions) error {
+		if completion == nil {
+			return fmt.Errorf("%w: async completion is nil", ErrInvalidOption)
 		}
+		options.asyncCompletion = completion
+		return nil
 	}
-	return clientOpts
+}
+
+// WithDialer replaces the dialer used by consumers and health checks.
+func WithDialer(dialer *segmentio.Dialer) Option {
+	return func(options *clientOptions) error {
+		if dialer == nil {
+			return fmt.Errorf("%w: dialer is nil", ErrInvalidOption)
+		}
+		options.dialer = dialer
+		return nil
+	}
+}
+
+// WithTransport replaces the transport used by producers.
+func WithTransport(transport segmentio.RoundTripper) Option {
+	return func(options *clientOptions) error {
+		if transport == nil {
+			return fmt.Errorf("%w: transport is nil", ErrInvalidOption)
+		}
+		options.transport = transport
+		return nil
+	}
 }
