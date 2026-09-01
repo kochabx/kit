@@ -3,16 +3,18 @@ package scheduler
 import "errors"
 
 var (
-	ErrClosed             = errors.New("scheduler is closed")
-	ErrAlreadyRun         = errors.New("scheduler is already running")
-	ErrNotFound           = errors.New("job not found")
-	ErrDuplicate          = errors.New("unique job already exists")
-	ErrInvalidState       = errors.New("job state does not allow this operation")
-	ErrLeaseLost          = errors.New("job execution lease lost")
-	ErrNoHandler          = errors.New("job handler is not registered")
-	ErrShutdownTimeout    = errors.New("scheduler shutdown timed out")
-	ErrJobCancelled       = errors.New("job cancellation requested")
-	ErrDefinitionMismatch = errors.New("job definition does not match registered handler")
+	ErrClosed               = errors.New("scheduler is closed")
+	ErrAlreadyRun           = errors.New("scheduler is already running")
+	ErrNotFound             = errors.New("job not found")
+	ErrDuplicate            = errors.New("unique job already exists")
+	ErrInvalidState         = errors.New("job state does not allow this operation")
+	ErrInvalidArgument      = errors.New("invalid scheduler argument")
+	ErrLeaseLost            = errors.New("job execution lease lost")
+	ErrMaintenanceLeaseLost = errors.New("scheduler maintenance lease lost")
+	ErrNoHandler            = errors.New("job handler is not registered")
+	ErrShutdownTimeout      = errors.New("scheduler shutdown timed out")
+	ErrJobCancelled         = errors.New("job cancellation requested")
+	ErrDefinitionMismatch   = errors.New("job definition does not match registered handler")
 )
 
 // Permanent marks an error as non-retryable.

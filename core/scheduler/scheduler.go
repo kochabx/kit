@@ -22,9 +22,9 @@ type handler struct {
 }
 
 type Scheduler struct {
-	store    store
-	config   Config
-	consumer string
+	store      store
+	config     Config
+	consumerID string
 
 	mu              sync.RWMutex
 	handlers        map[string]handler
@@ -62,6 +62,9 @@ const (
 	eventEnqueued uint8 = iota + 1
 	eventStarted
 	eventFinished
+
+	readerConsumerSuffix    = ":reader"
+	reclaimerConsumerSuffix = ":reclaimer"
 )
 
 func New(client redis.UniversalClient, config Config) (*Scheduler, error) {
@@ -75,7 +78,7 @@ func New(client redis.UniversalClient, config Config) (*Scheduler, error) {
 	s := &Scheduler{
 		store:          store{client: client, keys: newKeys(config.Namespace)},
 		config:         config,
-		consumer:       uuid.NewString(),
+		consumerID:     uuid.NewString(),
 		handlers:       make(map[string]handler),
 		observerEvents: make(chan observedEvent, config.ObserverBuffer),
 		leaseRequests:  make(chan leaseRequest, config.Concurrency*2),
@@ -83,6 +86,14 @@ func New(client redis.UniversalClient, config Config) (*Scheduler, error) {
 	s.observerWG.Add(1)
 	go s.observerLoop()
 	return s, nil
+}
+
+func (s *Scheduler) readerConsumerName() string {
+	return s.consumerID + readerConsumerSuffix
+}
+
+func (s *Scheduler) reclaimerConsumerName() string {
+	return s.consumerID + reclaimerConsumerSuffix
 }
 
 func (s *Scheduler) register(name string, h handler) error {
@@ -147,13 +158,16 @@ func prepareEnqueue[T any](s *Scheduler, d Definition[T], payload T, opts ...Enq
 	if len(o.uniqueKey) > 256 || (o.uniqueKey != "" && o.uniqueTTL <= 0) {
 		return enqueueRecord{}, fmt.Errorf("invalid unique job option")
 	}
+	if o.expiresAfter < 0 {
+		return enqueueRecord{}, fmt.Errorf("invalid job expiration option")
+	}
 	fingerprint, err := definitionFingerprint(d)
 	if err != nil {
 		return enqueueRecord{}, fmt.Errorf("fingerprint definition %q: %w", d.name, err)
 	}
 	id := uuid.NewString()
 	maxAttempts := retryLimit(d.retry)
-	return enqueueRecord{id: id, typ: d.name, payload: b, runAt: o.runAt, delay: o.delay, maxAttempts: maxAttempts, uniqueKey: o.uniqueKey, uniqueTTL: o.uniqueTTL, definition: fingerprint}, nil
+	return enqueueRecord{id: id, typ: d.name, payload: b, runAt: o.runAt, delay: o.delay, maxAttempts: maxAttempts, uniqueKey: o.uniqueKey, uniqueTTL: o.uniqueTTL, expiresAt: o.expiresAt, expiresAfter: o.expiresAfter, definition: fingerprint}, nil
 }
 
 func retryLimit(policy RetryPolicy) int {
@@ -194,12 +208,12 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			return err
 		}
 	}
-	s.config.Logger.Info().Str("consumer", s.consumer).Int("concurrency", s.config.Concurrency).Msg("scheduler started")
+	s.config.Logger.Info().Str("consumer_id", s.consumerID).Int("concurrency", s.config.Concurrency).Msg("scheduler started")
 
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	g, gctx := errgroup.WithContext(runCtx)
-	leaseCtx, stopLease := context.WithCancel(context.Background())
+	leaseCtx, stopLease := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopLease()
 	var leaseDone chan error
 	deliveries := make(chan delivery, s.config.Prefetch)
@@ -213,7 +227,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		g.Go(func() error { return s.fetchLoop(gctx, deliveries) })
 		g.Go(func() error { return s.recoveryLoop(gctx, deliveries) })
 		for i := range s.config.Concurrency {
-			slot := fmt.Sprintf("%s-%d", s.consumer, i)
+			slot := fmt.Sprintf("%s-%d", s.consumerID, i)
 			g.Go(func() error { return s.executorLoop(gctx, slot, deliveries) })
 		}
 	}
@@ -256,12 +270,6 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 	}
 	s.config.Logger.Info().Msg("scheduler stopped")
-	if s.config.Role&RoleWorker != 0 {
-		cleanupCtx, cleanupCancel := s.operationContext(context.Background())
-		defer cleanupCancel()
-		_ = s.store.cleanupConsumer(cleanupCtx, s.consumer+"-fetch")
-		_ = s.store.cleanupConsumer(cleanupCtx, s.consumer+"-recovery")
-	}
 	return err
 }
 
@@ -273,7 +281,7 @@ func (s *Scheduler) dispatchLoop(ctx context.Context) error {
 		var cycleErr error
 		for drained := int64(0); drained < s.config.DispatchDrainLimit; {
 			batch := min(s.config.DispatchBatch, s.config.DispatchDrainLimit-drained)
-			moved, err := s.store.dispatch(ctx, batch)
+			moved, err := s.store.dispatch(ctx, batch, s.config.Retention)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -310,7 +318,8 @@ func (s *Scheduler) maintenanceLoop(ctx context.Context) error {
 	backoff := newFailureBackoff(s.config.FailureBackoff, s.config.FailureBackoffMax)
 	var scheduledCursor, cronCursor uint64
 	for {
-		acquired, err := s.store.acquireMaintenance(ctx, s.consumer, s.config.MaintenanceLeaseDuration)
+		owner := s.consumerID + ":" + uuid.NewString()
+		acquired, err := s.store.acquireMaintenanceLease(ctx, owner, s.config.MaintenanceLeaseDuration)
 		if err == nil && !acquired {
 			if !waitContext(ctx, s.config.MaintenanceInterval) {
 				return nil
@@ -319,7 +328,7 @@ func (s *Scheduler) maintenanceLoop(ctx context.Context) error {
 		}
 		var nextScheduled, nextCron uint64
 		if err == nil {
-			nextScheduled, nextCron, err = s.runMaintenance(ctx, scheduledCursor, cronCursor)
+			nextScheduled, nextCron, err = s.runMaintenanceCycle(ctx, owner, scheduledCursor, cronCursor)
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -339,10 +348,65 @@ func (s *Scheduler) maintenanceLoop(ctx context.Context) error {
 	}
 }
 
-func (s *Scheduler) runMaintenance(ctx context.Context, scheduledCursor, cronCursor uint64) (uint64, uint64, error) {
+func (s *Scheduler) runMaintenanceCycle(ctx context.Context, owner string, scheduledCursor, cronCursor uint64) (uint64, uint64, error) {
+	leaseCtx, cancelLease := context.WithCancelCause(ctx)
+	renewDone := make(chan error, 1)
+	go func() {
+		renewInterval := s.config.MaintenanceLeaseDuration / 3
+		if renewInterval <= 0 {
+			renewInterval = s.config.MaintenanceLeaseDuration
+		}
+		ticker := time.NewTicker(renewInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-leaseCtx.Done():
+				renewDone <- nil
+				return
+			case <-ticker.C:
+				ok, err := s.store.renewMaintenanceLease(leaseCtx, owner, s.config.MaintenanceLeaseDuration)
+				if err == nil && !ok {
+					err = ErrMaintenanceLeaseLost
+				}
+				if err != nil {
+					cancelLease(err)
+					renewDone <- err
+					return
+				}
+			}
+		}
+	}()
+	nextScheduled, nextCron, err := s.performMaintenanceTasks(leaseCtx, scheduledCursor, cronCursor)
+	cancelLease(nil)
+	if renewErr := <-renewDone; err == nil && renewErr != nil {
+		err = renewErr
+	}
+	if ctx.Err() == nil {
+		releaseCtx, releaseCancel := s.operationContext(ctx)
+		releaseErr := s.store.releaseMaintenanceLease(releaseCtx, owner)
+		releaseCancel()
+		if releaseErr != nil {
+			s.config.Logger.Warn().Err(releaseErr).Msg("release scheduler maintenance lease failed")
+		}
+	}
+	return nextScheduled, nextCron, err
+}
+
+func (s *Scheduler) performMaintenanceTasks(ctx context.Context, scheduledCursor, cronCursor uint64) (uint64, uint64, error) {
 	for drained := int64(0); drained < s.config.MaintenanceDrainLimit; {
 		batch := min(s.config.MaintenanceBatch, s.config.MaintenanceDrainLimit-drained)
-		removed, err := s.store.cleanupExpiredDead(ctx, batch)
+		removed, err := s.store.pruneExpiredDeadIndex(ctx, batch)
+		if err != nil {
+			return scheduledCursor, cronCursor, err
+		}
+		drained += removed
+		if removed < batch {
+			break
+		}
+	}
+	for drained := int64(0); drained < s.config.MaintenanceDrainLimit; {
+		batch := min(s.config.MaintenanceBatch, s.config.MaintenanceDrainLimit-drained)
+		removed, err := s.store.purgeExpiredSchedules(ctx, batch)
 		if err != nil {
 			return scheduledCursor, cronCursor, err
 		}
@@ -352,15 +416,15 @@ func (s *Scheduler) runMaintenance(ctx context.Context, scheduledCursor, cronCur
 		}
 	}
 
-	nextScheduled, _, err := s.store.cleanupOrphanedJobs(ctx, scheduledCursor, s.config.MaintenanceBatch)
+	nextScheduled, _, err := s.store.pruneOrphanedJobIndex(ctx, scheduledCursor, s.config.MaintenanceBatch)
 	if err != nil {
 		return scheduledCursor, cronCursor, err
 	}
-	nextCron, _, err := s.store.cleanupOrphanedSchedules(ctx, cronCursor, s.config.MaintenanceBatch)
+	nextCron, _, err := s.store.pruneOrphanedScheduleIndex(ctx, cronCursor, s.config.MaintenanceBatch)
 	if err != nil {
 		return nextScheduled, cronCursor, err
 	}
-	if _, err := s.store.cleanupStaleConsumers(ctx, s.config.ConsumerIdleTimeout, s.config.MaintenanceBatch); err != nil {
+	if _, err := s.store.pruneStaleConsumers(ctx, s.config.ConsumerIdleTimeout, s.config.MaintenanceBatch); err != nil {
 		return nextScheduled, nextCron, err
 	}
 	return nextScheduled, nextCron, nil
@@ -379,7 +443,7 @@ func (s *Scheduler) dispatchSchedules(ctx context.Context) error {
 		}
 		for _, record := range records {
 			if record.State != ScheduleStateActive {
-				if disableErr := s.store.disableSchedule(ctx, record, "schedule is not active"); disableErr != nil {
+				if disableErr := s.store.disableSchedule(ctx, record, "schedule is not active", s.config.ScheduleRetention); disableErr != nil {
 					return disableErr
 				}
 				continue
@@ -387,7 +451,7 @@ func (s *Scheduler) dispatchSchedules(ctx context.Context) error {
 			next, nextErr := nextCronFrom(record, now)
 			if nextErr != nil {
 				s.config.Logger.Error().Err(nextErr).Str("schedule_id", record.ID).Msg("invalid persisted cron schedule disabled")
-				if disableErr := s.store.disableSchedule(ctx, record, nextErr.Error()); disableErr != nil {
+				if disableErr := s.store.disableSchedule(ctx, record, nextErr.Error(), s.config.ScheduleRetention); disableErr != nil {
 					return disableErr
 				}
 				continue
@@ -407,7 +471,7 @@ func (s *Scheduler) dispatchSchedules(ctx context.Context) error {
 func (s *Scheduler) fetchLoop(ctx context.Context, deliveries chan<- delivery) error {
 	backoff := newFailureBackoff(s.config.FailureBackoff, s.config.FailureBackoffMax)
 	for {
-		batch, err := s.store.receive(ctx, s.consumer+"-fetch", s.config.PollTimeout, s.config.FetchBatch)
+		batch, err := s.store.receive(ctx, s.readerConsumerName(), s.config.PollTimeout, s.config.FetchBatch)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -442,7 +506,7 @@ func (s *Scheduler) executorLoop(ctx context.Context, worker string, deliveries 
 
 func (s *Scheduler) execute(parent context.Context, worker string, d delivery) {
 	token := uuid.NewString()
-	j, err := s.store.start(parent, d, token, worker, s.config.LeaseDuration)
+	j, err := s.store.start(parent, d, token, worker, s.config.LeaseDuration, s.config.Retention)
 	if err != nil {
 		if !errors.Is(err, ErrInvalidState) && !errors.Is(err, ErrLeaseLost) && parent.Err() == nil {
 			s.config.Logger.Error().Err(err).Str("job_id", d.jobID).Msg("start job failed")
@@ -453,18 +517,22 @@ func (s *Scheduler) execute(parent context.Context, worker string, d delivery) {
 	if !ok {
 		opCtx, opCancel := s.operationContext(parent)
 		defer opCancel()
-		_ = s.store.fail(opCtx, d, token, ErrNoHandler.Error(), 0, false, s.config.DeadRetention)
+		if failErr := s.store.fail(opCtx, d, token, ErrNoHandler.Error(), 0, false, s.config.DeadRetention); failErr != nil {
+			s.config.Logger.Error().Err(failErr).Str("job_id", j.ID).Msg("mark job without handler as dead failed")
+		}
 		return
 	}
 	if h.fingerprint != j.Definition {
 		opCtx, opCancel := s.operationContext(parent)
 		defer opCancel()
-		_ = s.store.fail(opCtx, d, token, ErrDefinitionMismatch.Error(), 0, false, s.config.DeadRetention)
+		if failErr := s.store.fail(opCtx, d, token, ErrDefinitionMismatch.Error(), 0, false, s.config.DeadRetention); failErr != nil {
+			s.config.Logger.Error().Err(failErr).Str("job_id", j.ID).Msg("mark job with mismatched definition as dead failed")
+		}
 		return
 	}
 	s.observe(eventStarted, parent, Event{JobID: j.ID, Type: j.Type, Attempt: j.Attempt})
 	started := time.Now()
-	executionCtx, stopExecution := context.WithCancelCause(context.Background())
+	executionCtx, stopExecution := context.WithCancelCause(context.WithoutCancel(parent))
 	timeoutCtx, timeoutCancel := context.WithTimeout(executionCtx, h.timeout)
 	execCtx, cancel := context.WithCancelCause(timeoutCtx)
 	defer stopExecution(nil)
@@ -571,7 +639,7 @@ func (s *Scheduler) recoveryLoop(ctx context.Context, deliveries chan<- delivery
 		start, recovered := "0-0", int64(0)
 		for recovered < s.config.RecoveryLimit {
 			count := min(s.config.RecoveryBatch, s.config.RecoveryLimit-recovered)
-			messages, next, err := s.store.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: s.store.keys.ready(), Group: s.store.keys.group(), Consumer: s.consumer + "-recovery", MinIdle: s.config.LeaseDuration, Start: start, Count: count}).Result()
+			messages, next, err := s.store.client.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: s.store.keys.ready(), Group: s.store.keys.group(), Consumer: s.reclaimerConsumerName(), MinIdle: s.config.LeaseDuration, Start: start, Count: count}).Result()
 			if err != nil && !errors.Is(err, redis.Nil) {
 				if ctx.Err() == nil {
 					s.config.Logger.Error().Err(err).Msg("recover jobs failed")
@@ -683,7 +751,11 @@ func (s *Scheduler) operationContext(parent context.Context) (context.Context, c
 	return context.WithTimeout(context.WithoutCancel(parent), s.config.OperationTimeout)
 }
 func (s *Scheduler) observe(kind uint8, ctx context.Context, event Event) {
-	defer func() { _ = recover() }()
+	defer func() {
+		if recover() != nil {
+			s.observerDropped.Add(1)
+		}
+	}()
 	select {
 	case s.observerEvents <- observedEvent{kind: kind, ctx: context.WithoutCancel(ctx), event: event}:
 	default:
@@ -694,7 +766,11 @@ func (s *Scheduler) observerLoop() {
 	defer s.observerWG.Done()
 	for item := range s.observerEvents {
 		func() {
-			defer func() { _ = recover() }()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					s.config.Logger.Error().Interface("panic", recovered).Int("event_kind", int(item.kind)).Str("job_id", item.event.JobID).Msg("scheduler observer panicked")
+				}
+			}()
 			switch item.kind {
 			case eventEnqueued:
 				s.config.Observer.Enqueued(item.ctx, item.event)

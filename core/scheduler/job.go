@@ -11,6 +11,7 @@ const (
 	StateSucceeded State = "succeeded"
 	StateDead      State = "dead"
 	StateCancelled State = "cancelled"
+	StateExpired   State = "expired"
 )
 
 type Job struct {
@@ -24,6 +25,7 @@ type Job struct {
 	CreatedAt   time.Time
 	StartedAt   time.Time
 	FinishedAt  time.Time
+	ExpiresAt   time.Time
 	LastError   string
 	UniqueKey   string
 	Definition  string
@@ -31,10 +33,12 @@ type Job struct {
 
 type EnqueueOption func(*enqueueOptions)
 type enqueueOptions struct {
-	runAt     time.Time
-	delay     time.Duration
-	uniqueKey string
-	uniqueTTL time.Duration
+	runAt        time.Time
+	delay        time.Duration
+	uniqueKey    string
+	uniqueTTL    time.Duration
+	expiresAt    time.Time
+	expiresAfter time.Duration
 }
 
 func At(t time.Time) EnqueueOption {
@@ -45,4 +49,12 @@ func Delay(d time.Duration) EnqueueOption {
 }
 func Unique(key string, ttl time.Duration) EnqueueOption {
 	return func(o *enqueueOptions) { o.uniqueKey, o.uniqueTTL = key, ttl }
+}
+
+func ExpiresAt(t time.Time) EnqueueOption {
+	return func(o *enqueueOptions) { o.expiresAt, o.expiresAfter = t, 0 }
+}
+
+func ExpiresAfter(d time.Duration) EnqueueOption {
+	return func(o *enqueueOptions) { o.expiresAt, o.expiresAfter = time.Time{}, d }
 }

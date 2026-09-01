@@ -71,7 +71,7 @@ func ScheduleCron[T any](s *Scheduler, ctx context.Context, d Definition[T], pay
 }
 
 func (s *Scheduler) CancelSchedule(ctx context.Context, id string) error {
-	return s.store.cancelSchedule(ctx, id)
+	return s.store.cancelSchedule(ctx, id, s.config.ScheduleRetention)
 }
 
 func (s *Scheduler) GetSchedule(ctx context.Context, id string) (*CronSchedule, error) {
@@ -79,7 +79,7 @@ func (s *Scheduler) GetSchedule(ctx context.Context, id string) (*CronSchedule, 
 }
 func (s *Scheduler) ListSchedules(ctx context.Context, query ScheduleQuery) ([]*CronSchedule, error) {
 	if query.Offset < 0 || query.Limit <= 0 || query.Limit > 1000 || (query.State != "" && query.State != ScheduleStateActive && query.State != ScheduleStatePaused && query.State != ScheduleStateCancelled && query.State != ScheduleStateInvalid) {
-		return nil, ErrInvalidState
+		return nil, ErrInvalidArgument
 	}
 	return s.store.listSchedules(ctx, query)
 }

@@ -1,6 +1,12 @@
 local state = redis.call('HGET', KEYS[1], 'state')
 local clock = redis.call('TIME')
 local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
+local expires_at = tonumber(redis.call('HGET',KEYS[1],'expires_at') or '0')
+if state == 'ready' and expires_at > 0 and expires_at <= now then
+  redis.call('HSET',KEYS[1],'state','expired','finished_at',now)
+  redis.call('PEXPIRE',KEYS[1],ARGV[4])
+  return -2
+end
 if state ~= 'ready' then
   if state ~= 'running' then return -1 end
   local lease_until = tonumber(redis.call('HGET', KEYS[1], 'lease_until') or '0')

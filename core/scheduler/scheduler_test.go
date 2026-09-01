@@ -288,7 +288,7 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 	if err := s.store.ensureGroups(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.dispatch(context.Background(), 10); err != nil {
+	if _, err := s.store.dispatch(context.Background(), 10, s.config.Retention); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := s.store.receive(context.Background(), "worker-a", 10*time.Millisecond, 1)
@@ -296,7 +296,7 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 		t.Fatalf("receive: %v, %v", deliveries, err)
 	}
 	delivery := deliveries[0]
-	if _, err := s.store.start(context.Background(), delivery, "token-a", "worker-a", 3*time.Second); err != nil {
+	if _, err := s.store.start(context.Background(), delivery, "token-a", "worker-a", 3*time.Second, s.config.Retention); err != nil {
 		t.Fatal(err)
 	}
 	messages, _, err := client.XAutoClaim(context.Background(), &redis.XAutoClaimArgs{Stream: s.store.keys.ready(), Group: s.store.keys.group(), Consumer: "worker-b", MinIdle: 0, Start: "0-0", Count: 1}).Result()
@@ -305,7 +305,7 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 	}
 	claimed := delivery
 	claimed.messageID = messages[0].ID
-	if _, err := s.store.start(context.Background(), claimed, "token-b", "worker-b", 3*time.Second); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.store.start(context.Background(), claimed, "token-b", "worker-b", 3*time.Second, s.config.Retention); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("start active lease: %v", err)
 	}
 	pending, err := client.XPending(context.Background(), s.store.keys.ready(), s.store.keys.group()).Result()
@@ -742,7 +742,7 @@ func TestJanitorCleansIndexesInBoundedBatches(t *testing.T) {
 
 	var scheduledCursor, cronCursor uint64
 	for range 10 {
-		scheduledCursor, cronCursor, err = s.runMaintenance(ctx, scheduledCursor, cronCursor)
+		scheduledCursor, cronCursor, err = s.performMaintenanceTasks(ctx, scheduledCursor, cronCursor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -783,7 +783,7 @@ func TestJanitorDeletesOnlyIdleConsumersWithoutPendingMessages(t *testing.T) {
 		t.Fatal(err)
 	}
 	time.Sleep(2 * time.Millisecond)
-	if _, err := s.store.cleanupStaleConsumers(ctx, time.Millisecond, 10); err != nil {
+	if _, err := s.store.pruneStaleConsumers(ctx, time.Millisecond, 10); err != nil {
 		t.Fatal(err)
 	}
 	consumers, err := client.XInfoConsumers(ctx, s.store.keys.ready(), s.store.keys.group()).Result()
@@ -889,13 +889,74 @@ func TestMaintenanceLeaseHasSingleOwner(t *testing.T) {
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
 	store := store{client: client, keys: newKeys(namespace)}
-	first, err := store.acquireMaintenance(context.Background(), "one", time.Second)
+	first, err := store.acquireMaintenanceLease(context.Background(), "one", time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := store.acquireMaintenance(context.Background(), "two", time.Second)
+	second, err := store.acquireMaintenanceLease(context.Background(), "two", time.Second)
 	if err != nil || !first || second {
 		t.Fatalf("first=%v second=%v err=%v", first, second, err)
+	}
+	if renewed, renewErr := store.renewMaintenanceLease(context.Background(), "two", time.Second); renewErr != nil || renewed {
+		t.Fatalf("wrong owner renewed=%v err=%v", renewed, renewErr)
+	}
+	if renewed, renewErr := store.renewMaintenanceLease(context.Background(), "one", time.Second); renewErr != nil || !renewed {
+		t.Fatalf("owner renewed=%v err=%v", renewed, renewErr)
+	}
+	if err := store.releaseMaintenanceLease(context.Background(), "two"); err != nil {
+		t.Fatal(err)
+	}
+	if value := client.Get(context.Background(), store.keys.maintenanceLease()).Val(); value != "one" {
+		t.Fatalf("lease owner=%q", value)
+	}
+	if err := store.releaseMaintenanceLease(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueuedJobExpiresBeforeDispatch(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := Enqueue(s, context.Background(), Define[string]("job.expires"), "payload", Delay(time.Hour), ExpiresAfter(5*time.Millisecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := s.store.dispatch(context.Background(), 10, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	current, err := s.Get(context.Background(), job.ID)
+	if err != nil || current.State != StateExpired {
+		t.Fatalf("job=%+v err=%v", current, err)
+	}
+}
+
+func TestCancelledScheduleExpiresFromCatalog(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, ScheduleRetention: 5 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule, err := ScheduleCron(s, context.Background(), Define[string]("cron.expires"), "payload", "@every 1h", time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.CancelSchedule(context.Background(), schedule.ID); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(10 * time.Millisecond)
+	if _, err := s.store.purgeExpiredSchedules(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.GetSchedule(context.Background(), schedule.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("get schedule err=%v", err)
 	}
 }
 

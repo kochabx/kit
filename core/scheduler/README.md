@@ -86,6 +86,16 @@ job, err := scheduler.Enqueue(s, ctx, email, payload,
 job, err = scheduler.Enqueue(s, ctx, email, payload,
 	scheduler.At(time.Date(2026, 8, 6, 9, 0, 0, 0, time.Local)),
 )
+
+// 可选：任务在队列中超过 30 分钟仍未开始执行时标记为 expired。
+job, err = scheduler.Enqueue(s, ctx, email, payload,
+	scheduler.ExpiresAfter(30*time.Minute),
+)
+
+// 也可以指定绝对过期时间。
+job, err = scheduler.Enqueue(s, ctx, email, payload,
+	scheduler.ExpiresAt(time.Now().Add(time.Hour)),
+)
 ```
 
 `Delay` 传递持续时间，由 Redis 计算绝对时间戳，避免节点时钟偏差。
@@ -99,6 +109,8 @@ job, err := scheduler.Enqueue(s, ctx, email, payload,
 ```
 
 同一 namespace 和唯一键在有效期内只会创建一个任务。重复提交会返回已有 Job 和 `ErrDuplicate`。
+
+Job 即使进入 `succeeded`、`dead`、`cancelled` 或 `expired`，唯一键仍按 `Unique` 调用时指定的 TTL 独立保留；任务终态不会提前解除去重窗口。
 
 ### 永久失败
 
@@ -141,6 +153,26 @@ scheduler.ScheduleStatePaused
 scheduler.ScheduleStateCancelled
 scheduler.ScheduleStateInvalid
 ```
+
+Cancelled 和 Invalid Schedule 默认保留 `ScheduleRetention`（30 天），之后由 Dispatcher maintenance 清理。Active 和 Paused Schedule 不会自动删除。
+
+## 生命周期
+
+`Scheduler` 实现阻塞式 `Run(context.Context) error`。在 kit 应用容器中使用 `cx.Runner` 托管，并确保 Runner 依赖 Redis、因此先于 Redis 停止：
+
+```go
+runner := cx.MustRunner(s)
+```
+
+不要同时对同一个 Scheduler 使用 `defer s.Close()` 和 Runner 生命周期管理。`Close()` 只用于不调用 `Run` 的 producer-only Scheduler。
+
+## 数据保留
+
+- succeeded、cancelled、expired Job 使用 `Retention`。
+- dead Job 使用 `DeadRetention`。
+- `Unique` key 使用调用者传入的 TTL。
+- 未配置 `ExpiresAt` 或 `ExpiresAfter` 的有效排队任务不会自动过期。
+- maintenance、Dead 索引、孤儿索引和 stale consumer 清理由 `RoleDispatcher` 或 `RoleCombined` 实例执行。
 
 可以按全局状态分页查询：
 
