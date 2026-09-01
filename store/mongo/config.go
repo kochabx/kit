@@ -12,9 +12,9 @@ import (
 // Config contains structured MongoDB connection and pool settings.
 type Config struct {
 	Hosts      []string `json:"hosts" default:"[\"localhost:27017\"]" validate:"required,min=1,dive,required"`
-	Username   string   `json:"username"`
+	Username   string   `json:"username" default:"root"`
 	Password   string   `json:"password"`
-	AuthSource string   `json:"authSource"`
+	AuthSource string   `json:"authSource" default:"admin"`
 
 	ReplicaSet string `json:"replicaSet"`
 	Direct     bool   `json:"direct"`
