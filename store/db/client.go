@@ -34,34 +34,53 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 		return nil, err
 	}
 
+	settings, err := resolveOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	return openDatabase(driverName, dialector, cfg, settings)
+}
+
+func resolveOptions(opts []Option) (openOptions, error) {
 	settings := openOptions{}
 	for index, option := range opts {
 		if option == nil {
-			return nil, fmt.Errorf("%w: nil option at index %d", ErrInvalidOption, index)
+			return openOptions{}, fmt.Errorf("%w: nil option at index %d", ErrInvalidOption, index)
 		}
 		if err := option(&settings); err != nil {
-			return nil, err
+			return openOptions{}, err
 		}
 	}
+	return settings, nil
+}
 
+func openDatabase(driver string, dialector gorm.Dialector, cfg Config, settings openOptions) (*Client, error) {
 	gormDB, err := gorm.Open(dialector, newGORMConfig(cfg, settings.logger))
 	if err != nil {
 		closeGORMDB(gormDB)
-		return nil, fmt.Errorf("db: open %s: %w", driverName, err)
+		return nil, fmt.Errorf("db: open %s: %w", driver, err)
 	}
 	sqlDB, err := gormDB.DB()
 	if err != nil {
-		return nil, fmt.Errorf("db: get %s connection pool: %w", driverName, err)
+		closeGORMDB(gormDB)
+		return nil, fmt.Errorf("db: get %s connection pool: %w", driver, err)
 	}
 	applyPoolConfig(sqlDB, *cfg.Pool)
 
-	for _, plugin := range settings.plugins {
-		if err := gormDB.Use(plugin); err != nil {
-			_ = sqlDB.Close()
-			return nil, fmt.Errorf("db: install %s plugin %q: %w", driverName, plugin.Name(), err)
-		}
+	if err := installPlugins(gormDB, settings.plugins); err != nil {
+		_ = sqlDB.Close()
+		return nil, fmt.Errorf("db: install %s plugin: %w", driver, err)
 	}
 	return &Client{db: gormDB, sqlDB: sqlDB}, nil
+}
+
+func installPlugins(db *gorm.DB, plugins []gorm.Plugin) error {
+	for _, plugin := range plugins {
+		if err := db.Use(plugin); err != nil {
+			return fmt.Errorf("%q: %w", plugin.Name(), err)
+		}
+	}
+	return nil
 }
 
 func isNilDriver(driver DriverConfig) bool {
@@ -83,8 +102,8 @@ func closeGORMDB(db *gorm.DB) {
 
 func newGORMConfig(cfg Config, output *kitlog.Logger) *gorm.Config {
 	result := &gorm.Config{}
-	if cfg.GORMConfig != nil {
-		*result = *cfg.GORMConfig
+	if cfg.GORM != nil {
+		*result = *cfg.GORM
 	}
 	if result.Logger != nil {
 		return result
@@ -95,8 +114,8 @@ func newGORMConfig(cfg Config, output *kitlog.Logger) *gorm.Config {
 		result.Logger = logger.New(
 			stdlog.New(output, "", 0),
 			logger.Config{
-				SlowThreshold:             cfg.SlowQueryThreshold,
-				LogLevel:                  cfg.LogLevel,
+				SlowThreshold:             cfg.Log.SlowQueryThreshold,
+				LogLevel:                  cfg.Log.Level,
 				IgnoreRecordNotFoundError: true,
 				Colorful:                  false,
 			},

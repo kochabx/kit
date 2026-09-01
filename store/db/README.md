@@ -166,15 +166,17 @@ import (
 )
 
 client, err := db.New(db.Config{
-	Driver:             db.PostgresConfig{Database: "app"},
-	LogLevel:           logger.Warn,
-	SlowQueryThreshold: 200 * time.Millisecond,
+	Driver: db.PostgresConfig{Database: "app"},
+	Log: &db.LogConfig{
+		Level:              logger.Warn,
+		SlowQueryThreshold: 200 * time.Millisecond,
+	},
 }, db.WithLogger(kitlog.Global()))
 ```
 
-传入 `WithLogger` 但未设置 `LogLevel` 时，默认使用 `logger.Info`。可用级别为 `logger.Silent`、`logger.Error`、`logger.Warn` 和 `logger.Info`。
+传入 `WithLogger` 但未设置 `Log.Level` 时，默认使用 `logger.Info`。可用级别为 `logger.Silent`、`logger.Error`、`logger.Warn` 和 `logger.Info`。
 
-如果 `GORMConfig.Logger` 已设置，它的优先级高于 `WithLogger`、`LogLevel` 和 `SlowQueryThreshold`。
+如果 `GORM.Logger` 已设置，它的优先级高于 `WithLogger` 和 `Log` 配置。
 
 ## GORM 高级配置
 
@@ -183,14 +185,14 @@ client, err := db.New(db.Config{
 ```go
 client, err := db.New(db.Config{
 	Driver: db.SQLiteConfig{Path: "app.db"},
-	GORMConfig: &gorm.Config{
+	GORM: &gorm.Config{
 		SkipDefaultTransaction: true,
 		PrepareStmt:             true,
 	},
 })
 ```
 
-模块保留 GORM 的 Automatic Ping。若在 `GORMConfig` 中设置 `DisableAutomaticPing: true`，则由调用方负责在合适的时机检查连接。
+模块保留 GORM 的 Automatic Ping。若在 `GORM` 中设置 `DisableAutomaticPing: true`，则由调用方负责在合适的时机检查连接。
 
 ## GORM 插件
 
@@ -200,7 +202,7 @@ client, err := db.New(cfg,
 )
 ```
 
-插件会在初次 Ping 前安装。nil Option 或 nil 插件会返回 `db.ErrInvalidOption`。
+插件会安装到已打开的 GORM 数据库。nil Option 或 nil 插件会返回 `db.ErrInvalidOption`。
 
 ## Client API
 
@@ -263,7 +265,7 @@ cfg := db.Config{
 }
 ```
 
-`logger.LogLevel` 在 JSON 中使用 GORM 的数字值：
+`Log.Level` 在 JSON 中使用 GORM 的数字值：
 
 | 值 | 级别 |
 | ---: | --- |

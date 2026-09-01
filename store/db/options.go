@@ -27,7 +27,7 @@ func WithLogger(logger *log.Logger) Option {
 	}
 }
 
-// WithPlugins installs GORM plugins before the initial connection check.
+// WithPlugins installs GORM plugins on the opened database.
 func WithPlugins(plugins ...gorm.Plugin) Option {
 	return func(opts *openOptions) error {
 		for index, plugin := range plugins {

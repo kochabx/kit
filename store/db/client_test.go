@@ -33,8 +33,8 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{name: "invalid mysql port", cfg: Config{Driver: MySQLConfig{Database: "app", Port: 70000}}, err: ErrInvalidConfig},
 		{name: "missing postgres database", cfg: Config{Driver: PostgresConfig{}}, err: ErrInvalidConfig},
 		{name: "missing sqlite path", cfg: Config{Driver: SQLiteConfig{}}, err: ErrInvalidConfig},
-		{name: "invalid log level", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, LogLevel: logger.LogLevel(99)}, err: ErrInvalidConfig},
-		{name: "negative slow threshold", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, SlowQueryThreshold: -1}, err: ErrInvalidConfig},
+		{name: "invalid log level", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Log: &LogConfig{Level: logger.LogLevel(99)}}, err: ErrInvalidConfig},
+		{name: "negative slow threshold", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Log: &LogConfig{SlowQueryThreshold: -1}}, err: ErrInvalidConfig},
 		{name: "negative pool", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Pool: &PoolConfig{MaxOpenConns: -1}}, err: ErrInvalidConfig},
 		{name: "idle exceeds open", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Pool: &PoolConfig{MaxIdleConns: 2, MaxOpenConns: 1}}, err: ErrInvalidConfig},
 	}
@@ -152,26 +152,30 @@ func TestExplicitZeroPoolValues(t *testing.T) {
 }
 
 func TestDefaultPoolReturnsIndependentValues(t *testing.T) {
-	first := defaultPool("mysql")
+	first, err := defaultPool("mysql")
+	require.NoError(t, err)
 	first.MaxOpenConns = 1
-	second := defaultPool("mysql")
+	second, err := defaultPool("mysql")
+	require.NoError(t, err)
 	assert.Equal(t, 100, second.MaxOpenConns)
-	assert.Equal(t, 1, defaultPool("sqlite").MaxOpenConns)
+	sqlitePool, err := defaultPool("sqlite")
+	require.NoError(t, err)
+	assert.Equal(t, 1, sqlitePool.MaxOpenConns)
 }
 
 func TestCustomGORMConfig(t *testing.T) {
 	naming := schema.NamingStrategy{TablePrefix: "custom_"}
 	gormConfig := &gorm.Config{SkipDefaultTransaction: true, NamingStrategy: naming}
 	client, err := New(Config{
-		Driver:     SQLiteConfig{Path: ":memory:"},
-		GORMConfig: gormConfig,
+		Driver: SQLiteConfig{Path: ":memory:"},
+		GORM:   gormConfig,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, client.Close()) })
 
 	assert.True(t, client.DB().Config.SkipDefaultTransaction)
 	assert.Equal(t, "custom_widgets", client.DB().NamingStrategy.TableName("widget"))
-	assert.False(t, gormConfig.DisableAutomaticPing, "New must not mutate GORMConfig")
+	assert.False(t, gormConfig.DisableAutomaticPing, "New must not mutate GORM config")
 }
 
 type testGORMLogger struct{ logger.Interface }
@@ -179,8 +183,8 @@ type testGORMLogger struct{ logger.Interface }
 func TestCustomGORMLoggerTakesPrecedence(t *testing.T) {
 	custom := testGORMLogger{Interface: logger.Discard}
 	client, err := New(Config{
-		Driver:     SQLiteConfig{Path: ":memory:"},
-		GORMConfig: &gorm.Config{Logger: custom},
+		Driver: SQLiteConfig{Path: ":memory:"},
+		GORM:   &gorm.Config{Logger: custom},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, client.Close()) })
@@ -189,8 +193,8 @@ func TestCustomGORMLoggerTakesPrecedence(t *testing.T) {
 
 func TestLoggingDisabledByDefault(t *testing.T) {
 	client, err := New(Config{
-		Driver:   SQLiteConfig{Path: ":memory:"},
-		LogLevel: logger.Info,
+		Driver: SQLiteConfig{Path: ":memory:"},
+		Log:    &LogConfig{Level: logger.Info},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { assert.NoError(t, client.Close()) })

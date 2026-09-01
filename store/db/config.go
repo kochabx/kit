@@ -26,31 +26,45 @@ type DriverConfig interface {
 // PoolConfig controls database/sql connection reuse. An omitted Pool uses
 // package defaults; values in a provided Pool are passed through unchanged.
 type PoolConfig struct {
-	MaxIdleConns    int           `json:"maxIdleConns" validate:"gte=0"`
-	MaxOpenConns    int           `json:"maxOpenConns" validate:"gte=0"`
-	ConnMaxLifetime time.Duration `json:"connMaxLifetime" validate:"gte=0"`
-	ConnMaxIdleTime time.Duration `json:"connMaxIdleTime" validate:"gte=0"`
+	MaxIdleConns    int           `json:"maxIdleConns" default:"10" validate:"gte=0"`
+	MaxOpenConns    int           `json:"maxOpenConns" default:"100" validate:"gte=0"`
+	ConnMaxLifetime time.Duration `json:"connMaxLifetime" default:"1h" validate:"gte=0"`
+	ConnMaxIdleTime time.Duration `json:"connMaxIdleTime" default:"10m" validate:"gte=0"`
+}
+
+// LogConfig controls GORM log filtering and slow-query reporting.
+type LogConfig struct {
+	Level              logger.LogLevel `json:"level" default:"4" validate:"oneof=1 2 3 4"`
+	SlowQueryThreshold time.Duration   `json:"slowQueryThreshold" validate:"gte=0"`
 }
 
 // Config contains settings shared by every database driver.
 type Config struct {
-	Driver             DriverConfig    `json:"-" validate:"-"`
-	Pool               *PoolConfig     `json:"pool,omitempty"`
-	LogLevel           logger.LogLevel `json:"logLevel" validate:"oneof=1 2 3 4"`
-	SlowQueryThreshold time.Duration   `json:"slowQueryThreshold" validate:"gte=0"`
-	GORMConfig         *gorm.Config    `json:"-" validate:"-"`
+	Driver DriverConfig `json:"-" validate:"-"`
+	GORM   *gorm.Config `json:"-" validate:"-"`
+	Pool   *PoolConfig  `json:"pool,omitempty"`
+	Log    *LogConfig   `json:"log,omitempty"`
 }
 
 func resolveConfig(cfg Config, driver string) (Config, error) {
-	if cfg.LogLevel == 0 {
-		cfg.LogLevel = logger.Info
+	pool, err := defaultPool(driver)
+	if err != nil {
+		return Config{}, err
 	}
-
-	pool := defaultPool(driver)
 	if cfg.Pool != nil {
 		pool = *cfg.Pool
 	}
 	cfg.Pool = &pool
+
+	logConfig := LogConfig{}
+	if cfg.Log != nil {
+		logConfig = *cfg.Log
+	}
+	if err := defaults.Apply(&logConfig); err != nil {
+		return Config{}, fmt.Errorf("%w: apply log defaults: %w", ErrInvalidConfig, err)
+	}
+	cfg.Log = &logConfig
+
 	if err := validator.Validate.Struct(context.Background(), &cfg); err != nil {
 		return Config{}, fmt.Errorf("%w: validate config: %w", ErrInvalidConfig, err)
 	}
@@ -72,14 +86,14 @@ func resolveDriverConfig[T any](driver string, cfg T) (T, error) {
 	return cfg, nil
 }
 
-func defaultPool(driver string) PoolConfig {
+func defaultPool(driver string) (PoolConfig, error) {
 	if driver == driverSQLite {
-		return PoolConfig{MaxIdleConns: 1, MaxOpenConns: 1}
+		return PoolConfig{MaxIdleConns: 1, MaxOpenConns: 1}, nil
 	}
-	return PoolConfig{
-		MaxIdleConns:    10,
-		MaxOpenConns:    100,
-		ConnMaxLifetime: time.Hour,
-		ConnMaxIdleTime: 10 * time.Minute,
+
+	var pool PoolConfig
+	if err := defaults.Apply(&pool); err != nil {
+		return PoolConfig{}, fmt.Errorf("%w: apply pool defaults: %w", ErrInvalidConfig, err)
 	}
+	return pool, nil
 }
