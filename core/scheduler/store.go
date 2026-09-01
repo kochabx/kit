@@ -182,6 +182,9 @@ func (s *store) enqueue(ctx context.Context, r enqueueRecord) (*Job, error) {
 	id, _ := values[1].(string)
 	if code == 0 {
 		job, getErr := s.get(ctx, id)
+		if errors.Is(getErr, ErrNotFound) {
+			return nil, ErrDuplicate
+		}
 		if getErr != nil {
 			return nil, errors.Join(ErrDuplicate, getErr)
 		}
@@ -458,8 +461,8 @@ func (s *store) renewBatch(ctx context.Context, requests []leaseRequest) []lease
 	return out
 }
 
-func (s *store) complete(ctx context.Context, d delivery, token string, retention time.Duration) error {
-	result, err := completeRedisScript.Run(ctx, s.client, []string{s.keys.job(d.jobID), s.keys.ready(), s.keys.running()}, token, s.keys.group(), d.messageID, retention.Milliseconds()).Int64()
+func (s *store) complete(ctx context.Context, d delivery, token string, succeededRetention, cancelledRetention time.Duration) error {
+	result, err := completeRedisScript.Run(ctx, s.client, []string{s.keys.job(d.jobID), s.keys.ready(), s.keys.running()}, token, s.keys.group(), d.messageID, succeededRetention.Milliseconds(), cancelledRetention.Milliseconds()).Int64()
 	if err != nil {
 		return err
 	}

@@ -101,8 +101,9 @@ func BatchEnqueue[T any](s *Scheduler, ctx context.Context, d Definition[T], pay
 			s.observe(eventEnqueued, ctx, Event{JobID: r.id, Type: r.typ})
 		} else if errors.Is(errs[i], ErrDuplicate) {
 			job, getErr := s.store.get(ctx, ids[i])
-			results[index].Job = job
-			if getErr != nil {
+			if getErr == nil {
+				results[index].Job = job
+			} else if !errors.Is(getErr, ErrNotFound) {
 				results[index].Err = errors.Join(ErrDuplicate, getErr)
 			}
 		}

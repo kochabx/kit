@@ -3,10 +3,7 @@ local clock = redis.call('TIME')
 local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
 if ARGV[6] ~= '' then
   local existing = redis.call('GET', unique)
-  if existing then
-    if redis.call('EXISTS', ARGV[8] .. existing) == 1 then return {0, existing, redis.call('HGET',ARGV[8]..existing,'state')} end
-    redis.call('DEL', unique)
-  end
+  if existing then return {0, existing, redis.call('HGET',ARGV[8]..existing,'state') or ''} end
 end
 if redis.call('EXISTS', KEYS[1]) == 1 then return {0, ARGV[1], redis.call('HGET',KEYS[1],'state')} end
 local run_at = tonumber(ARGV[4])

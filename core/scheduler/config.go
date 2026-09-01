@@ -37,9 +37,11 @@ type Config struct {
 	LeaseRenewInterval        time.Duration `json:"lease_renew_interval" default:"1s" validate:"gt=0,ltfield=LeaseDuration"`
 	CancellationCheckInterval time.Duration `json:"cancellation_check_interval" default:"500ms" validate:"gt=0,ltfield=LeaseDuration"`
 	ShutdownTimeout           time.Duration `json:"shutdown_timeout" default:"30s" validate:"gt=0"`
-	Retention                 time.Duration `json:"retention" default:"24h" validate:"gt=0"`
-	DeadRetention             time.Duration `json:"dead_retention" default:"168h" validate:"gt=0"`
-	ScheduleRetention         time.Duration `json:"schedule_retention" default:"720h" validate:"gt=0"`
+	SucceededRetention        time.Duration `json:"succeeded_retention" validate:"gte=0"`
+	CancelledRetention        time.Duration `json:"cancelled_retention" default:"1h" validate:"gte=0"`
+	ExpiredRetention          time.Duration `json:"expired_retention" default:"1h" validate:"gte=0"`
+	DeadRetention             time.Duration `json:"dead_retention" default:"72h" validate:"gt=0"`
+	ScheduleRetention         time.Duration `json:"schedule_retention" default:"168h" validate:"gt=0"`
 	MaxPayloadBytes           int           `json:"max_payload_bytes" default:"1048576" validate:"gt=0"`
 	OperationTimeout          time.Duration `json:"operation_timeout" default:"5s" validate:"gt=0"`
 	FetchBatch                int64         `json:"fetch_batch" default:"16" validate:"gt=0"`

@@ -108,7 +108,7 @@ job, err := scheduler.Enqueue(s, ctx, email, payload,
 )
 ```
 
-同一 namespace 和唯一键在有效期内只会创建一个任务。重复提交会返回已有 Job 和 `ErrDuplicate`。
+同一 namespace 和唯一键在有效期内只会创建一个任务。重复提交返回 `ErrDuplicate`；如果原 Job 仍在保留期内，同时返回已有 Job，否则 Job 为 `nil`。
 
 Job 即使进入 `succeeded`、`dead`、`cancelled` 或 `expired`，唯一键仍按 `Unique` 调用时指定的 TTL 独立保留；任务终态不会提前解除去重窗口。
 
@@ -154,7 +154,7 @@ scheduler.ScheduleStateCancelled
 scheduler.ScheduleStateInvalid
 ```
 
-Cancelled 和 Invalid Schedule 默认保留 `ScheduleRetention`（30 天），之后由 Dispatcher maintenance 清理。Active 和 Paused Schedule 不会自动删除。
+Cancelled 和 Invalid Schedule 默认保留 `ScheduleRetention`（7 天），之后由 Dispatcher maintenance 清理。Active 和 Paused Schedule 不会自动删除。
 
 ## 生命周期
 
@@ -168,9 +168,10 @@ runner := cx.MustRunner(s)
 
 ## 数据保留
 
-- succeeded、cancelled、expired Job 使用 `Retention`。
+- succeeded Job 使用 `SucceededRetention`，默认为 `0`，完成后立即删除。
+- cancelled 和 expired Job 分别使用 `CancelledRetention` 和 `ExpiredRetention`，默认保留 1 小时。
 - dead Job 使用 `DeadRetention`。
-- `Unique` key 使用调用者传入的 TTL。
+- `Unique` key 使用调用者传入的 TTL，并且不依赖 Job Hash 是否仍然存在。
 - 未配置 `ExpiresAt` 或 `ExpiresAfter` 的有效排队任务不会自动过期。
 - maintenance、Dead 索引、孤儿索引和 stale consumer 清理由 `RoleDispatcher` 或 `RoleCombined` 实例执行。
 
@@ -263,7 +264,7 @@ Maintenance 与 Dispatcher 热路径独立运行，并通过 Redis 短租约保�
 - 增量修复 Scheduled Job 和 Cron Catalog 的孤儿索引。
 - 清理长时间空闲且 `Pending=0` 的 Consumer。
 
-实体 Hash 由 Redis TTL 过期，Maintenance 只负责二级索引和 Consumer 元数据。它不会使用 `KEYS`、全量扫描或 Keyspace Notification。
+实体 Hash 由 Redis TTL 过期或在成功后立即删除，Maintenance 只负责二级索引和 Consumer 元数据。它不会使用 `KEYS`、全量扫描或 Keyspace Notification。
 
 相关配置：
 
@@ -291,8 +292,11 @@ scheduler.Config{
 	LeaseRenewInterval:        time.Second,
 	CancellationCheckInterval: 500 * time.Millisecond,
 	ShutdownTimeout:           30 * time.Second,
-	Retention:                 24 * time.Hour,
-	DeadRetention:             7 * 24 * time.Hour,
+	SucceededRetention:        0,
+	CancelledRetention:        time.Hour,
+	ExpiredRetention:          time.Hour,
+	DeadRetention:             3 * 24 * time.Hour,
+	ScheduleRetention:         7 * 24 * time.Hour,
 	MaxPayloadBytes:           1 << 20,
 }
 ```

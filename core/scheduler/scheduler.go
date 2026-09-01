@@ -183,7 +183,7 @@ func retryLimit(policy RetryPolicy) int {
 
 func (s *Scheduler) Get(ctx context.Context, id string) (*Job, error) { return s.store.get(ctx, id) }
 func (s *Scheduler) Cancel(ctx context.Context, id string) error {
-	if err := s.store.cancel(ctx, id, s.config.Retention); err != nil {
+	if err := s.store.cancel(ctx, id, s.config.CancelledRetention); err != nil {
 		return err
 	}
 	if value, ok := s.active.Load(id); ok {
@@ -281,7 +281,7 @@ func (s *Scheduler) dispatchLoop(ctx context.Context) error {
 		var cycleErr error
 		for drained := int64(0); drained < s.config.DispatchDrainLimit; {
 			batch := min(s.config.DispatchBatch, s.config.DispatchDrainLimit-drained)
-			moved, err := s.store.dispatch(ctx, batch, s.config.Retention)
+			moved, err := s.store.dispatch(ctx, batch, s.config.ExpiredRetention)
 			if err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -506,7 +506,7 @@ func (s *Scheduler) executorLoop(ctx context.Context, worker string, deliveries 
 
 func (s *Scheduler) execute(parent context.Context, worker string, d delivery) {
 	token := uuid.NewString()
-	j, err := s.store.start(parent, d, token, worker, s.config.LeaseDuration, s.config.Retention)
+	j, err := s.store.start(parent, d, token, worker, s.config.LeaseDuration, s.config.ExpiredRetention)
 	if err != nil {
 		if !errors.Is(err, ErrInvalidState) && !errors.Is(err, ErrLeaseLost) && parent.Err() == nil {
 			s.config.Logger.Error().Err(err).Str("job_id", d.jobID).Msg("start job failed")
@@ -609,7 +609,7 @@ func (s *Scheduler) execute(parent context.Context, worker string, d delivery) {
 	opCtx, opCancel := s.operationContext(parent)
 	defer opCancel()
 	if execErr == nil || errors.Is(execErr, ErrJobCancelled) {
-		err = s.store.complete(opCtx, d, token, s.config.Retention)
+		err = s.store.complete(opCtx, d, token, s.config.SucceededRetention, s.config.CancelledRetention)
 	} else if !errors.Is(execErr, ErrLeaseLost) && !errors.Is(execErr, ErrShutdownTimeout) {
 		delay, retry := h.retry.NextDelay(j.Attempt, execErr)
 		if delay < 0 {

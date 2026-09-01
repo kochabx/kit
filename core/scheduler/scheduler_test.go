@@ -91,7 +91,7 @@ func TestSchedulerLifecycle(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := New(client, Config{Namespace: namespace, Concurrency: 2, DispatchInterval: 10 * time.Millisecond, PollTimeout: 50 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 2, DispatchInterval: 10 * time.Millisecond, PollTimeout: 50 * time.Millisecond, LeaseDuration: 3 * time.Second, SucceededRetention: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func TestRetry(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, SucceededRetention: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -288,7 +288,7 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 	if err := s.store.ensureGroups(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.store.dispatch(context.Background(), 10, s.config.Retention); err != nil {
+	if _, err := s.store.dispatch(context.Background(), 10, s.config.ExpiredRetention); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := s.store.receive(context.Background(), "worker-a", 10*time.Millisecond, 1)
@@ -296,7 +296,7 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 		t.Fatalf("receive: %v, %v", deliveries, err)
 	}
 	delivery := deliveries[0]
-	if _, err := s.store.start(context.Background(), delivery, "token-a", "worker-a", 3*time.Second, s.config.Retention); err != nil {
+	if _, err := s.store.start(context.Background(), delivery, "token-a", "worker-a", 3*time.Second, s.config.ExpiredRetention); err != nil {
 		t.Fatal(err)
 	}
 	messages, _, err := client.XAutoClaim(context.Background(), &redis.XAutoClaimArgs{Stream: s.store.keys.ready(), Group: s.store.keys.group(), Consumer: "worker-b", MinIdle: 0, Start: "0-0", Count: 1}).Result()
@@ -305,7 +305,7 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 	}
 	claimed := delivery
 	claimed.messageID = messages[0].ID
-	if _, err := s.store.start(context.Background(), claimed, "token-b", "worker-b", 3*time.Second, s.config.Retention); !errors.Is(err, ErrLeaseLost) {
+	if _, err := s.store.start(context.Background(), claimed, "token-b", "worker-b", 3*time.Second, s.config.ExpiredRetention); !errors.Is(err, ErrLeaseLost) {
 		t.Fatalf("start active lease: %v", err)
 	}
 	pending, err := client.XPending(context.Background(), s.store.keys.ready(), s.store.keys.group()).Result()
@@ -342,7 +342,7 @@ func TestReadyStreamExecutesAllJobs(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, DispatchInterval: 5 * time.Millisecond, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, SucceededRetention: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func TestDefinitionMismatchIsRejected(t *testing.T) {
 	})
 }
 
-func TestOrphanedUniqueKeyIsRepaired(t *testing.T) {
+func TestUniqueKeyDoesNotDependOnJobLifetime(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
@@ -424,11 +424,51 @@ func TestOrphanedUniqueKeyIsRepaired(t *testing.T) {
 		t.Fatal(err)
 	}
 	second, err := Enqueue(s, context.Background(), d, "two", Unique("key", time.Hour))
+	if !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("expected duplicate, got job=%+v err=%v", second, err)
+	}
+	if second != nil {
+		t.Fatalf("duplicate returned deleted job: %+v", second)
+	}
+}
+
+func TestSucceededJobIsDeletedByDefault(t *testing.T) {
+	client := testRedis(t)
+	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
+	t.Cleanup(func() { cleanup(t, client, namespace) })
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if second.ID == first.ID {
-		t.Fatal("orphaned unique key was not replaced")
+	d := Define[string]("success.delete", WithRetry(NoRetry{}))
+	handled := make(chan struct{}, 1)
+	if err := Handle(s, d, func(context.Context, string) error { handled <- struct{}{}; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- s.Run(ctx) }()
+	job, err := Enqueue(s, context.Background(), d, "payload", Unique("success:key", time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("job was not handled")
+	}
+	eventually(t, time.Second, func() bool {
+		_, getErr := s.Get(context.Background(), job.ID)
+		return errors.Is(getErr, ErrNotFound)
+	})
+	duplicate, err := Enqueue(s, context.Background(), d, "payload", Unique("success:key", time.Minute))
+	if duplicate != nil || !errors.Is(err, ErrDuplicate) {
+		t.Fatalf("duplicate=%+v err=%v", duplicate, err)
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -550,7 +590,7 @@ func TestSeparateDispatcherAndWorkerRoles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker, err := New(client, Config{Namespace: namespace, Role: RoleWorker, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second})
+	worker, err := New(client, Config{Namespace: namespace, Role: RoleWorker, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, SucceededRetention: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -799,7 +839,7 @@ func TestGracefulShutdownKeepsActiveJobLeasedUntilCompletion(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond, CancellationCheckInterval: 50 * time.Millisecond, ShutdownTimeout: 2 * time.Second})
+	s, err := New(client, Config{Namespace: namespace, Concurrency: 1, PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond, CancellationCheckInterval: 50 * time.Millisecond, ShutdownTimeout: 2 * time.Second, SucceededRetention: time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
