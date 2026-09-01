@@ -7,11 +7,8 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"strings"
 	"sync"
 	"sync/atomic"
-
-	"github.com/spf13/viper"
 
 	"github.com/kochabx/kit/core/defaults"
 )
@@ -31,7 +28,6 @@ type Event[T any] struct {
 // Config loads typed configuration and publishes its latest valid snapshot.
 // Published values must be treated as read-only.
 type Config[T any] struct {
-	v       *viper.Viper
 	options options
 
 	mu      sync.Mutex
@@ -42,61 +38,31 @@ type Config[T any] struct {
 
 // New creates a typed configuration. By default it reads config.yaml from the
 // working directory and enables environment variable overrides.
-func New[T any](options ...Option) (*Config[T], error) {
+func New[T any](opts ...Option) (*Config[T], error) {
 	if reflect.TypeFor[T]().Kind() != reflect.Struct {
 		return nil, fmt.Errorf("%w: target type must be a struct", ErrInvalidOptions)
 	}
-	settings := defaultSettings()
-	for _, modify := range options {
-		if modify == nil {
-			return nil, fmt.Errorf("%w: nil option", ErrInvalidOptions)
-		}
-		if err := modify(&settings); err != nil {
-			return nil, err
-		}
-	}
-	if settings.hasRemote {
-		var err error
-		settings.viper, err = remoteViper(settings.viper, settings.remote)
-		if err != nil {
-			return nil, err
-		}
-	} else if settings.viper == nil {
-		settings.viper = defaultViper()
+	options, err := newOptions(opts...)
+	if err != nil {
+		return nil, err
 	}
 	return &Config[T]{
-		v:       settings.viper,
-		options: settings.options,
+		options: options,
 	}, nil
 }
 
 // Load reads, validates, and atomically publishes a configuration snapshot.
+// The context must not be nil.
 func (c *Config[T]) Load(ctx context.Context) (*T, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.watching.Load() {
+		return nil, ErrAlreadyWatching
+	}
 	if err := c.read(); err != nil {
 		return nil, err
 	}
 	return c.publish(ctx)
-}
-
-func defaultViper() *viper.Viper {
-	v := viper.New()
-	v.SetConfigFile("config.yaml")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-	return v
-}
-
-func remoteViper(v *viper.Viper, remote remoteOptions) (*viper.Viper, error) {
-	if v == nil {
-		v = defaultViper()
-	}
-	v.SetConfigType(remote.configType)
-	if err := v.AddRemoteProvider(remote.provider, remote.endpoint, remote.path); err != nil {
-		return nil, fmt.Errorf("%w: add remote provider: %w", ErrInvalidOptions, err)
-	}
-	return v, nil
 }
 
 func (c *Config[T]) read() error {
@@ -105,9 +71,9 @@ func (c *Config[T]) read() error {
 	case SourceValues:
 		return nil
 	case SourceFile:
-		err = c.v.ReadInConfig()
+		err = c.options.viper.ReadInConfig()
 	case SourceRemote:
-		err = c.v.ReadRemoteConfig()
+		err = c.options.viper.ReadRemoteConfig()
 	default:
 		return fmt.Errorf("%w: source %q", ErrUnsupportedSource, c.options.source)
 	}
@@ -121,7 +87,7 @@ func (c *Config[T]) read() error {
 }
 
 func (c *Config[T]) expandEnvironment() error {
-	filename := c.v.ConfigFileUsed()
+	filename := c.options.viper.ConfigFileUsed()
 	if filename == "" {
 		return fmt.Errorf("%w: no configuration file was used", ErrRead)
 	}
@@ -129,7 +95,7 @@ func (c *Config[T]) expandEnvironment() error {
 	if err != nil {
 		return fmt.Errorf("%w: read %s: %w", ErrRead, filename, err)
 	}
-	if err := c.v.ReadConfig(bytes.NewBufferString(os.ExpandEnv(string(content)))); err != nil {
+	if err := c.options.viper.ReadConfig(bytes.NewBufferString(os.ExpandEnv(string(content)))); err != nil {
 		return fmt.Errorf("%w: expand environment variables: %w", ErrRead, err)
 	}
 	return nil
@@ -149,7 +115,7 @@ func (c *Config[T]) decode(ctx context.Context) (*T, error) {
 	if err := defaults.Apply(candidate); err != nil {
 		return nil, fmt.Errorf("%w: apply defaults: %w", ErrDecode, err)
 	}
-	if err := c.v.Unmarshal(candidate); err != nil {
+	if err := c.options.viper.Unmarshal(candidate); err != nil {
 		return nil, fmt.Errorf("%w: unmarshal: %w", ErrDecode, err)
 	}
 	if err := c.options.validator.Struct(ctx, candidate); err != nil {

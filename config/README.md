@@ -1,29 +1,11 @@
 # Config
 
-`config` 在 Viper 之上提供类型化加载、默认值、校验和不可变配置快照。
+基于 Viper 的类型化配置加载，支持默认值、校验、环境变量和热更新。
 
-## 默认用法
+## 使用
 
-默认读取工作目录中的 `config.yaml`，开启环境变量覆盖，并支持文件中的
-`${NAME}` 环境变量占位符。
-
-```go
-cfg, err := config.New[AppConfig]()
-if err != nil {
-	return err
-}
-
-current, err := cfg.Load(ctx)
-if err != nil {
-	return err
-}
-```
-
-环境变量名称默认把配置键中的 `.` 替换为 `_`。例如 `server.port` 对应
-`SERVER_PORT`。
-
-配置结构可以使用 Viper 默认支持的 `mapstructure` tag，以及项目提供的
-`default` 和 `validate` tag：
+默认读取工作目录中的 `config.yaml`，将配置键中的 `.` 映射为环境变量的 `_`，
+并展开文件内的 `${NAME}` 占位符。
 
 ```go
 type AppConfig struct {
@@ -32,92 +14,74 @@ type AppConfig struct {
 		Port int    `mapstructure:"port" default:"8080" validate:"gte=1,lte=65535"`
 	} `mapstructure:"server"`
 }
+
+loader, err := config.New[AppConfig]()
+if err != nil {
+	return err
+}
+
+cfg, err := loader.Load(ctx)
+if err != nil {
+	return err
+}
 ```
 
-## 自定义 Viper
-
-需要自定义文件路径、`BindPFlag`、alias、`Set` 或远程 Provider 时，先配置
-Viper，再通过 `WithViper` 传入：
+需要自定义文件、环境变量、flags、alias 或预设值时，传入配置好的 Viper：
 
 ```go
 v := viper.New()
 v.SetConfigFile(configFile)
-v.SetEnvPrefix("APP")
-v.SetEnvKeyReplacer(strings.NewReplacer(".", "__"))
 v.AutomaticEnv()
-_ = v.BindPFlag("server.port", flags.Lookup("port"))
-v.RegisterAlias("http.port", "server.port")
-v.Set("build.version", version)
 
-cfg, err := config.New[AppConfig](
-	config.WithViper(v),
-)
+loader, err := config.New[AppConfig](config.WithViper(v))
 ```
 
-config package 不重复封装 Viper 的这些 API。调用 `Load` 或 `Watch` 后，不应
-再从其他 goroutine 并发修改传入的 Viper。
+调用 `Load` 或 `Watch` 后，不要再并发修改传入的 Viper。
 
 ## 配置来源
 
-未传 `WithSource` 时默认使用 `SourceFile`。
+```go
+config.WithSource(config.SourceFile)   // 默认：配置文件
+config.WithSource(config.SourceRemote) // 远程配置，必须同时使用 WithRemote
+config.WithSource(config.SourceValues) // Set、flags、环境变量和 defaults
+```
+
+也可以直接注册远程 Provider：
 
 ```go
-const (
-	SourceFile   // ReadInConfig
-	SourceRemote // ReadRemoteConfig
-	SourceValues // 只解析 Viper 当前已有的值
+loader, err := config.New[AppConfig](
+	config.WithRemote("etcd3", endpoint, "/services/app/config", "yaml", 5*time.Second),
 )
 ```
 
-远程 Provider 示例：
+远程 Provider 的实现依赖由应用按 Viper 要求引入。
+
+## 热更新
+
+监听前必须成功调用 `Load`：
 
 ```go
-cfg, err := config.New[AppConfig](
-	config.WithRemote(
-		"etcd3",
-		endpoint,
-		"/services/app/config",
-		"yaml",
-		5*time.Second,
-	),
-)
-```
-
-远程 Provider 所需依赖由应用按 Viper 的要求引入。
-
-## Watch
-
-必须先成功调用 `Load`：
-
-```go
-err := cfg.Watch(func(event config.Event[AppConfig]) {
+err := loader.Watch(func(event config.Event[AppConfig]) {
 	if event.Err != nil {
 		logger.Error().Err(event.Err).Msg("reload configuration")
 		return
 	}
 	applyReloadableSettings(event.Current)
 })
+
+// 远程配置
+err = loader.WatchRemote(ctx, handler)
 ```
 
-文件监听直接使用 Viper 的 `WatchConfig`，回调中仅做短暂等待，避免一次文件写入
-产生的中间状态被发布。Viper 没有停止文件 watcher 的 API，因此文件监听通常
-与进程同生命周期。远程配置使用可取消的独立方法：
+文件事件会经过 debounce。远程配置按 `WithRemote` 的 interval 轮询；正在进行的
+Viper 远程读取不受 context 取消影响，因此 Provider 应配置请求超时。
 
-```go
-err := cfg.WatchRemote(ctx, handler)
-```
+无效配置不会替换当前快照，内容未变化时不会调用 handler。监听启动后再次调用
+`Load` 会返回 `ErrAlreadyWatching`。
 
-它按 `WithRemote` 中指定的 interval 刷新，并在 context 取消时退出。
+## 校验与快照
 
-无效配置通过 `Event.Err` 报告，不会替换当前快照。内容没有变化时不会调用
-handler。
-
-## 快照与校验
-
-每次成功加载都会创建并原子发布一个新的 `*AppConfig`。调用方持有 `Load`
-返回的初始值，并通过 Watch handler 接收后续更新。所有快照都必须视为只读值。
-
-首先执行 `validate` tag。配置还可以实现跨字段校验：
+先执行 `validate` tag，再执行可选的跨字段校验：
 
 ```go
 func (cfg *AppConfig) Validate(ctx context.Context) error {
@@ -128,5 +92,7 @@ func (cfg *AppConfig) Validate(ctx context.Context) error {
 }
 ```
 
-所有读取、解析和校验错误都使用 `%w` 保留错误链，可通过 `ErrRead`、
-`ErrDecode` 和 `ErrValidation` 判断类型。
+每次成功加载都会发布新的快照。`Load` 和 Watch handler 返回的配置必须视为只读，
+包括其中的 map、slice 和 pointer。
+
+错误可通过 `ErrRead`、`ErrDecode` 和 `ErrValidation` 判断类型。

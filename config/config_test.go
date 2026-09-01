@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -91,7 +92,36 @@ func TestNewValidation(t *testing.T) {
 	assert.ErrorIs(t, err, ErrInvalidOptions)
 	_, err = New[testConfig](WithSource("invalid"))
 	assert.ErrorIs(t, err, ErrUnsupportedSource)
-	_, err = New[testConfig](WithRemote("etcd3", "http://127.0.0.1:2379", "/app/config", "yaml", 0))
+	for _, remote := range []struct {
+		provider   string
+		endpoint   string
+		path       string
+		configType string
+		interval   time.Duration
+	}{
+		{endpoint: "endpoint", path: "path", configType: "yaml", interval: time.Second},
+		{provider: "etcd3", path: "path", configType: "yaml", interval: time.Second},
+		{provider: "etcd3", endpoint: "endpoint", configType: "yaml", interval: time.Second},
+		{provider: "etcd3", endpoint: "endpoint", path: "path", interval: time.Second},
+		{provider: "etcd3", endpoint: "endpoint", path: "path", configType: "yaml"},
+	} {
+		_, err = New[testConfig](WithRemote(
+			remote.provider,
+			remote.endpoint,
+			remote.path,
+			remote.configType,
+			remote.interval,
+		))
+		assert.Error(t, err)
+	}
+	_, err = New[testConfig](WithSource(SourceRemote))
+	assert.ErrorIs(t, err, ErrInvalidOptions)
+	_, err = New[testConfig](WithSource(SourceRemote), WithViper(viper.New()))
+	assert.ErrorIs(t, err, ErrInvalidOptions)
+	_, err = New[testConfig](
+		WithRemote("etcd3", "http://127.0.0.1:2379", "/app/config", "yaml", time.Second),
+		WithSource(SourceFile),
+	)
 	assert.ErrorIs(t, err, ErrInvalidOptions)
 	_, err = New[testConfig](WithValidator(nil))
 	assert.ErrorIs(t, err, ErrInvalidOptions)
@@ -242,6 +272,8 @@ func TestFileWatchPublishesOnlyValidChanges(t *testing.T) {
 	events := make(chan Event[testConfig], 4)
 	require.NoError(t, loader.Watch(func(event Event[testConfig]) { events <- event }))
 	assert.ErrorIs(t, loader.Watch(func(Event[testConfig]) {}), ErrAlreadyWatching)
+	_, err = loader.Load(t.Context())
+	assert.ErrorIs(t, err, ErrAlreadyWatching)
 
 	writeConfig(t, filename, "server:\n  host: invalid\n  port: 70000\n")
 	invalid := awaitEvent(t, events)
@@ -294,6 +326,29 @@ func TestSnapshotIsSafeDuringFileWatch(t *testing.T) {
 		t.Fatal("timed out waiting for watched update")
 	}
 	readers.Wait()
+}
+
+func TestDebouncerCoalescesCalls(t *testing.T) {
+	var debounce debouncer
+	var calls atomic.Int32
+	fired := make(chan struct{}, 1)
+	callback := func() {
+		calls.Add(1)
+		fired <- struct{}{}
+	}
+
+	for range 3 {
+		debounce.schedule(20*time.Millisecond, callback)
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	select {
+	case <-fired:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for debounced callback")
+	}
+	time.Sleep(30 * time.Millisecond)
+	assert.Equal(t, int32(1), calls.Load())
 }
 
 func TestRemoteWatchPublishesChanges(t *testing.T) {
