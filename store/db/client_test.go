@@ -2,7 +2,6 @@ package db
 
 import (
 	"errors"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -94,16 +93,10 @@ func TestPostgresStructuredConfig(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "postgres", name)
 	postgresDialect := dialector.(*postgres.Dialector)
-	parsed, err := url.Parse(postgresDialect.DSN)
-	require.NoError(t, err)
-	password, ok := parsed.User.Password()
-	require.True(t, ok)
-	assert.Equal(t, input.User, parsed.User.Username())
-	assert.Equal(t, input.Password, password)
-	assert.Equal(t, "[2001:db8::1]:5432", parsed.Host)
-	assert.Equal(t, "/service", parsed.Path)
-	assert.Equal(t, "require", parsed.Query().Get("sslmode"))
-	assert.Equal(t, "2", parsed.Query().Get("connect_timeout"))
+	assert.Equal(t,
+		"host=2001:db8::1 user=app@example.com password=p:a/ss word dbname=service port=5432 sslmode=require TimeZone=UTC connect_timeout=2",
+		postgresDialect.DSN,
+	)
 	assert.True(t, postgresDialect.PreferSimpleProtocol)
 }
 

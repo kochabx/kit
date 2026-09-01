@@ -1,9 +1,8 @@
 package db
 
 import (
+	"fmt"
 	"math"
-	"net"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -30,17 +29,17 @@ func (cfg PostgresConfig) dialector() (string, gorm.Dialector, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	query := make(url.Values)
-	query.Set("sslmode", cfg.SSLMode)
-	query.Set("TimeZone", cfg.TimeZone)
-	query.Set("connect_timeout", strconv.Itoa(int(math.Ceil(cfg.ConnectTimeout.Seconds()))))
-	dsn := (&url.URL{
-		Scheme:   "postgres",
-		User:     url.UserPassword(cfg.User, cfg.Password),
-		Host:     net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)),
-		Path:     cfg.Database,
-		RawQuery: query.Encode(),
-	}).String()
+	dsn := fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%s sslmode=%s TimeZone=%s connect_timeout=%s",
+		cfg.Host,
+		cfg.User,
+		cfg.Password,
+		cfg.Database,
+		strconv.Itoa(cfg.Port),
+		cfg.SSLMode,
+		cfg.TimeZone,
+		strconv.Itoa(int(math.Ceil(cfg.ConnectTimeout.Seconds()))),
+	)
 
 	return driverPostgres, postgres.New(postgres.Config{
 		DSN:                  dsn,
