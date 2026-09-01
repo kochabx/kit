@@ -1,153 +1,84 @@
-# Go Kit Makefile - modernized build and verification workflow
-
-SHELL := /usr/bin/env
-.SHELLFLAGS := -u BASH_ENV -u ENV /bin/bash --noprofile --norc -eu -o pipefail -c
-MAKEFLAGS += --warn-undefined-variables --no-builtin-rules
-
-GO ?= go
-MODULE := github.com/kochabx/kit
-GOPATH := $(shell $(GO) env GOPATH)
-GOBIN ?= $(GOPATH)/bin
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
-BUILD_TIME := $(shell date -u '+%Y-%m-%d_%H:%M:%S')
-LDFLAGS := -X '$(MODULE)/version.Version=$(VERSION)' -X '$(MODULE)/version.BuildTime=$(BUILD_TIME)'
-
-WIRE_BIN := $(GOBIN)/wire
-SWAG_BIN := $(GOBIN)/swag
-PROTOC_GEN_GO_BIN := $(GOBIN)/protoc-gen-go
-PROTOC_GEN_GO_GRPC_BIN := $(GOBIN)/protoc-gen-go-grpc
-PROTOC_GO_INJECT_TAG_BIN := $(GOBIN)/protoc-go-inject-tag
-
-TEST_TIMEOUT ?= 120s
-
-GREEN := \033[32m
-RED := \033[31m
-YELLOW := \033[33m
-BLUE := \033[34m
-BOLD := \033[1m
-NC := \033[0m
-
-.PHONY: all build test clean install upgrade proto wire swag fmt vet mod-tidy generate info help
-
+SHELL := /bin/bash
+.SHELLFLAGS := -eu -o pipefail -c
 .DEFAULT_GOAL := help
 
-all: fmt vet test ## 完整本地校验
+GO           ?= go
+PKGS         ?= ./...
+GOFLAGS      ?= -buildvcs=false
+TEST_TIMEOUT ?= 120s
+export GOFLAGS
 
-##@ 构建
-build: ## 编译所有包
-	@printf "$(BLUE)编译验证...$(NC)\n"
-	@$(GO) build ./...
-	@printf "$(GREEN)✓ 编译通过$(NC)\n"
+MODULE  := $(shell $(GO) list -m 2>/dev/null)
+PROJECT ?= $(notdir $(MODULE))
 
-##@ 测试
-test: ## 全量测试（含 race）
-	@printf "$(BLUE)运行测试...$(NC)\n"
-	@$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
-	@printf "$(GREEN)✓ 测试通过$(NC)\n"
+ifeq ($(NO_COLOR),)
+GREEN  := \033[32m
+YELLOW := \033[33m
+BLUE   := \033[34m
+RESET  := \033[0m
+else
+GREEN  :=
+YELLOW :=
+BLUE   :=
+RESET  :=
+endif
 
-##@ 代码质量
-fmt: ## 使用 gofmt 简化并格式化代码
-	@printf "$(BLUE)格式化代码...$(NC)\n"
-	@find . -type f -name '*.go' -not -path './vendor/*' -print0 | xargs -0 gofmt -w -s
-	@printf "$(GREEN)✓ 代码格式化完成$(NC)\n"
+.PHONY: help info fmt fmt-check tidy deps deps-upgrade vet test check build
 
-vet: ## 使用 go vet 做静态检查
-	@printf "$(BLUE)静态代码分析...$(NC)\n"
-	@$(GO) vet ./...
-	@printf "$(GREEN)✓ 静态分析完成$(NC)\n"
-
-##@ 依赖
-mod-tidy: ## 整理并校验 Go 模块依赖
-	@printf "$(BLUE)整理依赖...$(NC)\n"
-	@$(GO) mod tidy
-	@$(GO) mod verify
-	@printf "$(GREEN)✓ 依赖整理完成$(NC)\n"
-
-install: $(PROTOC_GEN_GO_BIN) $(PROTOC_GEN_GO_GRPC_BIN) $(PROTOC_GO_INJECT_TAG_BIN) $(WIRE_BIN) $(SWAG_BIN) ## 安装开发工具
-	@printf "$(GREEN)✓ 开发工具安装完成$(NC)\n"
-
-upgrade: ## 升级依赖并整理模块
-	@printf "$(BLUE)升级依赖包...$(NC)\n"
-	@$(GO) get -u ./...
-	@$(MAKE) mod-tidy
-	@printf "$(GREEN)✓ 依赖升级完成$(NC)\n"
-
-$(GOBIN):
-	@mkdir -p $@
-
-$(PROTOC_GEN_GO_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 protoc-gen-go...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@latest
-
-$(PROTOC_GEN_GO_GRPC_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 protoc-gen-go-grpc...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
-
-$(PROTOC_GO_INJECT_TAG_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 protoc-go-inject-tag...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install github.com/favadi/protoc-go-inject-tag@latest
-
-$(WIRE_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 wire...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install github.com/google/wire/cmd/wire@latest
-
-$(SWAG_BIN): | $(GOBIN)
-	@printf "$(BLUE)安装 swag...$(NC)\n"
-	@GOBIN=$(GOBIN) $(GO) install github.com/swaggo/swag/cmd/swag@latest
-
-##@ 代码生成
-proto: $(PROTOC_GEN_GO_BIN) $(PROTOC_GEN_GO_GRPC_BIN) $(PROTOC_GO_INJECT_TAG_BIN) ## 生成 gRPC 代码
-	@if find . -name '*.proto' -type f -print -quit | grep -q .; then \
-		printf "$(BLUE)生成 gRPC 代码...$(NC)\n"; \
-		PATH='$(GOBIN):'"$$PATH" protoc -I=. -I=../.. \
-			--go_out=. --go_opt=module=$(MODULE) \
-			--go-grpc_out=. --go-grpc_opt=module=$(MODULE) \
-			$$(find . -name '*.proto' -type f) && \
-		PATH='$(GOBIN):'"$$PATH" $(PROTOC_GO_INJECT_TAG_BIN) -input="$$(find . -name '*.pb.go' -type f)" && \
-		$(GO) fmt ./... && \
-		printf "$(GREEN)✓ gRPC 代码生成完成$(NC)\n"; \
-	else \
-		printf "$(YELLOW)未发现 .proto 文件，跳过代码生成$(NC)\n"; \
-	fi
-
-wire: $(WIRE_BIN) ## 生成 Wire 依赖注入代码
-	@if find . -name 'wire.go' -type f -print -quit | grep -q .; then \
-		printf "$(BLUE)生成 Wire 代码...$(NC)\n"; \
-		PATH='$(GOBIN):'"$$PATH" $(WIRE_BIN) ./... && \
-		printf "$(GREEN)✓ Wire 代码生成完成$(NC)\n"; \
-	else \
-		printf "$(YELLOW)未发现 wire.go 文件，跳过代码生成$(NC)\n"; \
-	fi
-
-swag: $(SWAG_BIN) ## 生成 Swagger 文档
-	@if find . -name 'main.go' -type f -print -quit | grep -q .; then \
-		printf "$(BLUE)生成 Swagger 文档...$(NC)\n"; \
-		PATH='$(GOBIN):'"$$PATH" $(SWAG_BIN) init && \
-		printf "$(GREEN)✓ Swagger 文档生成完成$(NC)\n"; \
-	else \
-		printf "$(YELLOW)未发现 main.go 文件，跳过 Swagger 文档生成$(NC)\n"; \
-	fi
-
-generate: proto wire swag ## 生成所有代码
-
-##@ 清理
-clean: ## 清理覆盖率等生成物
-	@printf "$(BLUE)清理生成文件...$(NC)\n"
-	@rm -rf $(COVERAGE_DIR)
-	@printf "$(GREEN)✓ 清理完成$(NC)\n"
-
-##@ 信息
-info: ## 显示项目信息
-	@printf "$(BLUE)项目信息:$(NC)\n"
-	@printf "  模块: %s\n" "$(MODULE)"
-	@printf "  版本: %s\n" "$(VERSION)"
-	@printf "  构建时间: %s\n" "$(BUILD_TIME)"
-	@printf "  Go版本: %s\n" "$$( $(GO) version )"
-	@printf "  GOPATH: %s\n" "$(GOPATH)"
-	@printf "  GOBIN: %s\n" "$(GOBIN)"
-
-##@ 帮助
-help: ## 显示帮助信息
-	@printf "$(BOLD)$(GREEN)Go Kit Makefile 使用指南$(NC)\n"
+help: ## 显示可用命令
+	@printf '$(GREEN)%s 开发命令$(RESET)\n\n$(YELLOW)可用命令:$(RESET)\n' '$(PROJECT)'
 	@awk 'BEGIN {FS = ":.*## "} \
-		/^[a-zA-Z0-9_./-]+:.*## / {printf "  $(BLUE)%-18s$(NC) %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+		/^[a-zA-Z0-9_.-]+:.*## / {printf "  $(BLUE)%-18s$(RESET) %s\n", $$1, $$2}' \
+		$(MAKEFILE_LIST) | sort
+
+info: ## 显示项目配置
+	@printf '$(BLUE)项目信息$(RESET)\n'
+	@printf '  %-10s %s\n' \
+		project '$(PROJECT)' module '$(MODULE)' go "$$($(GO) version)"
+
+fmt: ## 格式化 Go 源码
+	@printf '$(BLUE)正在格式化 Go 源码...$(RESET)\n'
+	@$(GO) fmt $(PKGS)
+	@printf '$(GREEN)格式化完成$(RESET)\n'
+
+fmt-check: ## 检查 Go 源码格式
+	@printf '$(BLUE)正在检查 Go 源码格式...$(RESET)\n'
+	@files="$$(find . -type f -name '*.go' -not -path './vendor/*' -exec gofmt -l {} +)"; \
+		if [[ -n "$$files" ]]; then \
+			printf '$(YELLOW)以下文件尚未格式化:\n%s$(RESET)\n' "$$files"; \
+			exit 1; \
+		fi
+	@printf '$(GREEN)格式检查通过$(RESET)\n'
+
+tidy: ## 整理 go.mod 和 go.sum
+	@printf '$(BLUE)正在整理模块依赖...$(RESET)\n'
+	@$(GO) mod tidy
+	@printf '$(GREEN)模块依赖整理完成$(RESET)\n'
+
+deps: ## 下载模块依赖
+	@printf '$(BLUE)正在下载模块依赖...$(RESET)\n'
+	@$(GO) mod download
+	@printf '$(GREEN)模块依赖下载完成$(RESET)\n'
+
+deps-upgrade: ## 升级依赖并整理模块
+	@printf '$(BLUE)正在升级模块依赖...$(RESET)\n'
+	@$(GO) get -u $(PKGS)
+	@$(GO) mod tidy
+	@printf '$(GREEN)模块依赖升级完成$(RESET)\n'
+
+vet: ## 执行 Go 静态检查
+	@printf '$(BLUE)正在执行静态检查...$(RESET)\n'
+	@$(GO) vet $(PKGS)
+	@printf '$(GREEN)静态检查通过$(RESET)\n'
+
+test: ## 执行测试和竞态检测
+	@printf '$(BLUE)正在执行测试和竞态检测...$(RESET)\n'
+	@$(GO) test -race -timeout $(TEST_TIMEOUT) $(PKGS)
+	@printf '$(GREEN)测试通过$(RESET)\n'
+
+check: fmt-check vet test ## 执行完整本地检查
+
+build: ## 编译所有 Go 包
+	@printf '$(BLUE)正在编译 %s...$(RESET)\n' '$(PROJECT)'
+	@$(GO) build $(PKGS)
+	@printf '$(GREEN)编译通过$(RESET)\n'
