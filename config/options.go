@@ -87,12 +87,12 @@ func (o *options) initialize() error {
 		return err
 	}
 	if o.viper == nil {
-		o.viper = defaultViper()
+		o.viper = newViper()
 	}
 	return nil
 }
 
-func defaultViper() *viper.Viper {
+func newViper() *viper.Viper {
 	v := viper.New()
 	v.SetConfigFile("config.yaml")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -102,7 +102,7 @@ func defaultViper() *viper.Viper {
 
 func remoteViper(v *viper.Viper, remote remoteOptions) (*viper.Viper, error) {
 	if v == nil {
-		v = defaultViper()
+		v = newViper()
 	}
 	v.SetConfigType(remote.ConfigType)
 	if err := v.AddRemoteProvider(remote.Provider, remote.Endpoint, remote.Path); err != nil {
