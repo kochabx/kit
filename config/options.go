@@ -94,9 +94,7 @@ func (o *options) initialize() error {
 
 func newViper() *viper.Viper {
 	v := viper.New()
-	v.SetConfigName("config")
-	v.SetConfigType("yaml")
-	v.AddConfigPath(".")
+	v.SetConfigFile("config.yaml")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 	return v
