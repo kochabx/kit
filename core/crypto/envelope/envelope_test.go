@@ -81,9 +81,7 @@ func TestConcurrentUse(t *testing.T) {
 	cipher, _ := New(testKey)
 	var wait sync.WaitGroup
 	for range 16 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			for range 50 {
 				encrypted, err := cipher.Encrypt([]byte("secret"))
 				if err != nil {
@@ -95,7 +93,7 @@ func TestConcurrentUse(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wait.Wait()
 }

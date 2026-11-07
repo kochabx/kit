@@ -1,7 +1,7 @@
 package http
 
 import (
-	"encoding/json"
+	"encoding/json/v2"
 	stderrors "errors"
 	"net/http"
 
@@ -102,8 +102,8 @@ func message(err error) string {
 	if err == nil {
 		return defaultFailMsg
 	}
-	var ve gv.ValidationErrors
-	if stderrors.As(err, &ve) || validator.AsError(err) {
+	_, isValidation := stderrors.AsType[gv.ValidationErrors](err)
+	if isValidation || validator.AsError(err) {
 		return err.Error()
 	}
 	if e, ok := stderrors.AsType[*errors.Error](err); ok {

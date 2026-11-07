@@ -42,16 +42,14 @@ func TestRotateIsAtomicAndReuseRevokes(t *testing.T) {
 	var success, rejected atomic.Int32
 	var wg sync.WaitGroup
 	for i := range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			err := store.Rotate(ctx, kitjwt.Rotation{Subject: "u1", SessionID: "s1", OldJTI: "old", NewJTI: "new-" + string(rune(i)), Now: now.Add(time.Second), ExpiresAt: now.Add(time.Hour)})
 			if err == nil {
 				success.Add(1)
 			} else if errors.Is(err, kitjwt.ErrRefreshReused) || errors.Is(err, kitjwt.ErrSessionRevoked) {
 				rejected.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	require.EqualValues(t, 1, success.Load())

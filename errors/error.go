@@ -5,7 +5,7 @@ package errors
 import (
 	stderrors "errors"
 	"maps"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -35,11 +35,7 @@ func (e *Error) Error() string {
 	text.WriteString(e.message)
 
 	if len(e.metadata) > 0 {
-		keys := make([]string, 0, len(e.metadata))
-		for key := range e.metadata {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
+		keys := slices.Sorted(maps.Keys(e.metadata))
 
 		text.WriteString(separator)
 		text.WriteString("metadata={")
@@ -127,9 +123,5 @@ func (e *Error) With(key, value string) *Error {
 
 // From finds the first structured Error in err's chain.
 func From(err error) (*Error, bool) {
-	var structured *Error
-	if !stderrors.As(err, &structured) {
-		return nil, false
-	}
-	return structured, true
+	return stderrors.AsType[*Error](err)
 }

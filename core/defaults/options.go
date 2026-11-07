@@ -3,6 +3,7 @@ package defaults
 import (
 	"fmt"
 	"reflect"
+	"slices"
 )
 
 const defaultMaxDepth = 64
@@ -75,10 +76,8 @@ func WithTimeLayouts(layouts ...string) Option {
 		if len(layouts) == 0 {
 			return fmt.Errorf("%w: no time layouts", ErrInvalidOption)
 		}
-		for _, layout := range layouts {
-			if layout == "" {
-				return fmt.Errorf("%w: empty time layout", ErrInvalidOption)
-			}
+		if slices.Contains(layouts, "") {
+			return fmt.Errorf("%w: empty time layout", ErrInvalidOption)
 		}
 		c.timeLayouts = append([]string(nil), layouts...)
 		return nil

@@ -257,16 +257,14 @@ func TestRefreshIsSingleUseUnderConcurrency(t *testing.T) {
 	var reused atomic.Int32
 	var wg sync.WaitGroup
 	for range 32 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			_, err := service.Refresh(ctx, pair.RefreshToken)
 			if err == nil {
 				success.Add(1)
 			} else if errors.Is(err, kitjwt.ErrRefreshReused) || errors.Is(err, kitjwt.ErrSessionRevoked) {
 				reused.Add(1)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 	require.EqualValues(t, 1, success.Load())

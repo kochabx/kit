@@ -121,8 +121,8 @@ func (vi *validator) wrap(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
 	}
-	var verrs gv.ValidationErrors
-	if !errors.As(err, &verrs) {
+	verrs, ok := errors.AsType[gv.ValidationErrors](err)
+	if !ok {
 		return err
 	}
 

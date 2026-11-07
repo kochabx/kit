@@ -2,7 +2,7 @@ package middleware
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,14 +55,14 @@ func setupHandler(mw func(http.Handler) http.Handler) http.Handler {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		json.MarshalWrite(w, map[string]any{
 			"user_id": claims.UserID,
 			"roles":   claims.Roles,
 		})
 	})
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		json.MarshalWrite(w, map[string]any{"status": "ok"})
 	})
 	return mw(mux)
 }
@@ -339,7 +339,7 @@ func TestAuth_SkipFunc(t *testing.T) {
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]any{"skipped": true})
+		json.MarshalWrite(w, map[string]any{"skipped": true})
 	})
 	handler := mw(inner)
 
@@ -373,7 +373,7 @@ func TestAuth_CustomContextKey(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"user_id": user.UserID})
+		json.MarshalWrite(w, map[string]any{"user_id": user.UserID})
 	})
 	handler := mw(inner)
 
@@ -399,7 +399,7 @@ func TestAuth_CustomErrorHandler(t *testing.T) {
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			customErrorCalled = true
 			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]any{"custom_error": err.Error()})
+			json.MarshalWrite(w, map[string]any{"custom_error": err.Error()})
 		},
 	})
 

@@ -1,20 +1,27 @@
 package scheduler
 
-import "errors"
+import (
+	"errors"
+	"github.com/kochabx/kit/core/scheduler/internal/model"
+)
 
 var (
-	ErrClosed               = errors.New("scheduler is closed")
-	ErrAlreadyRun           = errors.New("scheduler is already running")
-	ErrNotFound             = errors.New("job not found")
-	ErrDuplicate            = errors.New("unique job already exists")
-	ErrInvalidState         = errors.New("job state does not allow this operation")
-	ErrInvalidArgument      = errors.New("invalid scheduler argument")
-	ErrLeaseLost            = errors.New("job execution lease lost")
-	ErrMaintenanceLeaseLost = errors.New("scheduler maintenance lease lost")
-	ErrNoHandler            = errors.New("job handler is not registered")
-	ErrShutdownTimeout      = errors.New("scheduler shutdown timed out")
-	ErrJobCancelled         = errors.New("job cancellation requested")
-	ErrDefinitionMismatch   = errors.New("job definition does not match registered handler")
+	ErrUnsupportedRedis     = model.ErrUnsupportedRedis
+	ErrConflict             = model.ErrConflict
+	ErrTaskRegistered       = model.ErrTaskRegistered
+	ErrUnknownQueue         = model.ErrUnknownQueue
+	ErrClosed               = model.ErrClosed
+	ErrAlreadyRun           = model.ErrAlreadyRun
+	ErrNotFound             = model.ErrNotFound
+	ErrDuplicate            = model.ErrDuplicate
+	ErrInvalidState         = model.ErrInvalidState
+	ErrInvalidArgument      = model.ErrInvalidArgument
+	ErrLeaseLost            = model.ErrLeaseLost
+	ErrMaintenanceLeaseLost = model.ErrMaintenanceLeaseLost
+	ErrNoHandler            = model.ErrNoHandler
+	ErrShutdownTimeout      = model.ErrShutdownTimeout
+	ErrJobCancelled         = model.ErrJobCancelled
+	ErrTaskMismatch         = model.ErrTaskMismatch
 )
 
 // Permanent marks an error as non-retryable.
@@ -28,9 +35,10 @@ func Permanent(err error) error {
 type permanentError struct{ err error }
 
 func (e permanentError) Error() string { return e.err.Error() }
+
 func (e permanentError) Unwrap() error { return e.err }
 
 func isPermanent(err error) bool {
-	var target permanentError
-	return errors.As(err, &target)
+	_, ok := errors.AsType[permanentError](err)
+	return ok
 }

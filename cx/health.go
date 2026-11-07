@@ -66,11 +66,9 @@ func (c *Container) HealthCheck(ctx context.Context) (HealthReport, error) {
 			results[index] = ComponentHealth{Key: name, Status: HealthSkipped}
 			continue
 		}
-		wg.Add(1)
-		go func(index int, name string, checker HealthChecker) {
-			defer wg.Done()
+		wg.Go(func() {
 			results[index] = c.checkComponentHealth(ctx, name, checker)
-		}(index, name, checker)
+		})
 	}
 	wg.Wait()
 

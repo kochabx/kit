@@ -11,7 +11,7 @@ HPKE 的基本使用方式是：发送方持有接收方的公钥并调用 `Seal
 go get github.com/kochabx/kit/core/crypto/ecies
 ```
 
-需要 Go 1.26 或更高版本。
+需要 Go 1.27 或更高版本。
 
 ## 选择加密套件
 
@@ -213,7 +213,7 @@ type Message struct {
 }
 ```
 
-Go 的 `encoding/json` 会自动把两个字节切片编码成 Base64，因此不需要再手动
+Go 的 `encoding/json/v2` 会自动把两个字节切片编码成 Base64，因此不需要再手动
 Base64 编码：
 
 ```go

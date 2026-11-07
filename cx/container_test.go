@@ -46,16 +46,16 @@ func TestTypedKeysAndDependencyOrder(t *testing.T) {
 	serviceKey := NewKey[*testComponent]("service")
 	var order []string
 
-	MustSupply(c, configKey, "dsn")
-	MustProvide(c, dbKey, func(c *Container) (*testComponent, error) {
-		require.Equal(t, "dsn", MustGet(c, configKey))
+	c.MustSupply(configKey, "dsn")
+	c.MustProvide(dbKey, func(c *Container) (*testComponent, error) {
+		require.Equal(t, "dsn", c.MustGet(configKey))
 		return &testComponent{
 			order: &order,
 			name:  "db",
 		}, nil
 	})
-	MustProvide(c, serviceKey, func(c *Container) (*testComponent, error) {
-		_ = MustGet(c, dbKey)
+	c.MustProvide(serviceKey, func(c *Container) (*testComponent, error) {
+		_ = c.MustGet(dbKey)
 		return &testComponent{
 			order: &order,
 			name:  "service",
@@ -65,7 +65,7 @@ func TestTypedKeysAndDependencyOrder(t *testing.T) {
 	require.NoError(t, c.Start(context.Background()))
 	assert.Equal(t, []string{"start:db", "start:service"}, order)
 
-	got, err := Get(c, serviceKey)
+	got, err := c.Get(serviceKey)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
@@ -78,12 +78,12 @@ func TestCircularDependency(t *testing.T) {
 	a := NewKey[int]("a")
 	b := NewKey[int]("b")
 
-	MustProvide(c, a, func(c *Container) (int, error) {
-		_, err := Get(c, b)
+	c.MustProvide(a, func(c *Container) (int, error) {
+		_, err := c.Get(b)
 		return 0, err
 	})
-	MustProvide(c, b, func(c *Container) (int, error) {
-		_, err := Get(c, a)
+	c.MustProvide(b, func(c *Container) (int, error) {
+		_, err := c.Get(a)
 		return 0, err
 	})
 
@@ -99,9 +99,9 @@ func TestExplicitDependenciesControlLifecycleOrder(t *testing.T) {
 	keyC := NewKey[*testComponent]("c")
 	var order []string
 
-	MustSupply(c, keyA, &testComponent{order: &order, name: "a"}, DependsOn(keyB))
-	MustSupply(c, keyB, &testComponent{order: &order, name: "b"}, DependsOn(keyC))
-	MustSupply(c, keyC, &testComponent{order: &order, name: "c"})
+	c.MustSupply(keyA, &testComponent{order: &order, name: "a"}, DependsOn(keyB))
+	c.MustSupply(keyB, &testComponent{order: &order, name: "b"}, DependsOn(keyC))
+	c.MustSupply(keyC, &testComponent{order: &order, name: "c"})
 
 	require.NoError(t, c.Start(context.Background()))
 	assert.Equal(t, []string{"start:c", "start:b", "start:a"}, order)
@@ -120,8 +120,8 @@ func TestExplicitDependencyCycle(t *testing.T) {
 	keyA := NewKey[int]("a")
 	keyB := NewKey[int]("b")
 
-	MustSupply(c, keyA, 1, DependsOn(keyB))
-	MustSupply(c, keyB, 2, DependsOn(keyA))
+	c.MustSupply(keyA, 1, DependsOn(keyB))
+	c.MustSupply(keyB, 2, DependsOn(keyA))
 
 	err := c.Start(context.Background())
 	assert.ErrorIs(t, err, ErrCircularDependency)
@@ -133,7 +133,7 @@ func TestStartFailureRollsBackFailingComponentAndAggregates(t *testing.T) {
 	var order []string
 	c := New()
 	key := NewKey[*testComponent]("bad")
-	MustSupply(c, key, &testComponent{
+	c.MustSupply(key, &testComponent{
 		order:    &order,
 		name:     "bad",
 		startErr: startErr,
@@ -154,7 +154,7 @@ func TestRollbackUsesIndependentOverallTimeout(t *testing.T) {
 		WithComponentStopTimeout(time.Second),
 	)
 	key := NewKey[*lifecycleComponent]("component")
-	MustSupply(c, key, &lifecycleComponent{
+	c.MustSupply(key, &lifecycleComponent{
 		start: func(context.Context) error { return startErr },
 		stop: func(ctx context.Context) error {
 			<-ctx.Done()
@@ -179,13 +179,13 @@ func TestStopFailureRetainsInstanceAndCanRetry(t *testing.T) {
 		name:    "component",
 		stopErr: errors.New("stop"),
 	}
-	MustSupply(c, key, component)
+	c.MustSupply(key, component)
 
 	require.NoError(t, c.Start(context.Background()))
 	require.Error(t, c.Stop(context.Background()))
 	assert.Equal(t, StateStopFailed, c.State())
 
-	got, err := Get(c, key)
+	got, err := c.Get(key)
 	require.NoError(t, err)
 	assert.Same(t, component, got)
 
@@ -226,13 +226,13 @@ func TestHealthCheckStatusesAndState(t *testing.T) {
 	plain := NewKey[int]("plain")
 	var order []string
 
-	MustSupply(c, healthy, &testComponent{order: &order, name: "healthy"})
-	MustSupply(c, bad, &testComponent{
+	c.MustSupply(healthy, &testComponent{order: &order, name: "healthy"})
+	c.MustSupply(bad, &testComponent{
 		order:     &order,
 		name:      "bad",
 		healthErr: errors.New("bad"),
 	})
-	MustSupply(c, plain, 1)
+	c.MustSupply(plain, 1)
 
 	_, err := c.HealthCheck(context.Background())
 	assert.ErrorIs(t, err, ErrInvalidState)
@@ -255,7 +255,7 @@ func TestHealthCheckBoundsComponentIgnoringContext(t *testing.T) {
 		<-release
 		return nil
 	})
-	MustSupply(c, key, HealthChecker(blocked))
+	c.MustSupply(key, HealthChecker(blocked))
 
 	require.NoError(t, c.Start(context.Background()))
 	started := time.Now()
@@ -276,7 +276,7 @@ func TestHealthCheckReusesTimedOutFlight(t *testing.T) {
 		<-release
 		return nil
 	})
-	MustSupply(c, key, HealthChecker(checker))
+	c.MustSupply(key, HealthChecker(checker))
 	require.NoError(t, c.Start(context.Background()))
 
 	for range 3 {
@@ -295,7 +295,7 @@ func TestWaitSupervisedExit(t *testing.T) {
 	runner := MustRunner(RunnerFunc(func(context.Context) error {
 		return runErr
 	}))
-	MustSupply(c, key, runner)
+	c.MustSupply(key, runner)
 
 	require.NoError(t, c.Start(context.Background()))
 	err := c.Wait(context.Background())
@@ -312,7 +312,7 @@ func TestWaitSharesSupervisorResult(t *testing.T) {
 		<-release
 		return runErr
 	}))
-	MustSupply(c, key, runner)
+	c.MustSupply(key, runner)
 	require.NoError(t, c.Start(context.Background()))
 
 	results := make(chan error, 2)

@@ -19,7 +19,7 @@ type loggerOptions struct {
 // WithLevel 设置日志级别
 func WithLevel(level zerolog.Level) Option {
 	return func(o *loggerOptions) {
-		o.level = &level
+		o.level = new(level)
 	}
 }
 

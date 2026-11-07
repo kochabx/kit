@@ -30,8 +30,7 @@ type Client struct {
 	producers      map[string]*segmentio.Writer
 	asyncProducers map[string]*segmentio.Writer
 	consumers      map[consumerKey]*segmentio.Reader
-	closeOnce      sync.Once
-	closeErr       error
+	close          func() error
 }
 
 // New creates a lazy Kafka client without modifying cfg. Call Ping or Start
@@ -76,7 +75,7 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 		transport = owned
 	}
 
-	return &Client{
+	c := &Client{
 		config:          resolved,
 		dialer:          dialer,
 		transport:       transport,
@@ -85,7 +84,9 @@ func New(cfg *Config, opts ...Option) (*Client, error) {
 		producers:       make(map[string]*segmentio.Writer),
 		asyncProducers:  make(map[string]*segmentio.Writer),
 		consumers:       make(map[consumerKey]*segmentio.Reader),
-	}, nil
+	}
+	c.close = sync.OnceValue(c.closeResources)
+	return c, nil
 }
 
 func saslMechanism(cfg *SASLPlainConfig) sasl.Mechanism {
@@ -208,45 +209,45 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Close flushes and closes all producers and consumers. It is safe to call
 // more than once.
-func (c *Client) Close() error {
-	c.closeOnce.Do(func() {
-		c.mu.Lock()
-		c.closed = true
-		closers := make([]func() error, 0, len(c.producers)+len(c.asyncProducers)+len(c.consumers))
-		for _, producer := range c.producers {
-			closers = append(closers, producer.Close)
-		}
-		for _, producer := range c.asyncProducers {
-			closers = append(closers, producer.Close)
-		}
-		for _, consumer := range c.consumers {
-			closers = append(closers, consumer.Close)
-		}
-		c.mu.Unlock()
+func (c *Client) Close() error { return c.close() }
 
-		errCh := make(chan error, len(closers))
-		var group sync.WaitGroup
-		for _, closeResource := range closers {
-			group.Go(func() {
-				if err := closeResource(); err != nil {
-					errCh <- err
-				}
-			})
-		}
-		group.Wait()
-		close(errCh)
-		var closeErrors []error
-		for err := range errCh {
-			closeErrors = append(closeErrors, err)
-		}
-		if c.ownedTransport != nil {
-			c.ownedTransport.CloseIdleConnections()
-		}
-		if err := errors.Join(closeErrors...); err != nil {
-			c.closeErr = fmt.Errorf("kafka: close: %w", err)
-		}
-	})
-	return c.closeErr
+func (c *Client) closeResources() error {
+	c.mu.Lock()
+	c.closed = true
+	closers := make([]func() error, 0, len(c.producers)+len(c.asyncProducers)+len(c.consumers))
+	for _, producer := range c.producers {
+		closers = append(closers, producer.Close)
+	}
+	for _, producer := range c.asyncProducers {
+		closers = append(closers, producer.Close)
+	}
+	for _, consumer := range c.consumers {
+		closers = append(closers, consumer.Close)
+	}
+	c.mu.Unlock()
+
+	errCh := make(chan error, len(closers))
+	var group sync.WaitGroup
+	for _, closeResource := range closers {
+		group.Go(func() {
+			if err := closeResource(); err != nil {
+				errCh <- err
+			}
+		})
+	}
+	group.Wait()
+	close(errCh)
+	var closeErrors []error
+	for err := range errCh {
+		closeErrors = append(closeErrors, err)
+	}
+	if c.ownedTransport != nil {
+		c.ownedTransport.CloseIdleConnections()
+	}
+	if err := errors.Join(closeErrors...); err != nil {
+		return fmt.Errorf("kafka: close: %w", err)
+	}
+	return nil
 }
 
 func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }

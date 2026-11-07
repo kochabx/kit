@@ -12,8 +12,7 @@ import (
 type Client struct {
 	client    *clientv3.Client
 	endpoints []string
-	closeOnce sync.Once
-	closeErr  error
+	close     func() error
 }
 
 // New creates a lazy etcd client without modifying cfg. Call Ping or Start
@@ -43,7 +42,14 @@ func New(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("etcd: create client: %w", err)
 	}
-	return &Client{client: underlying, endpoints: resolved.Endpoints}, nil
+	c := &Client{client: underlying, endpoints: resolved.Endpoints}
+	c.close = sync.OnceValue(func() error {
+		if err := underlying.Close(); err != nil {
+			return fmt.Errorf("etcd: close: %w", err)
+		}
+		return nil
+	})
+	return c, nil
 }
 
 // Client returns the underlying official etcd client.
@@ -68,12 +74,7 @@ func (c *Client) Status(ctx context.Context, endpoint string) (*clientv3.StatusR
 
 // Close releases the client's resources. It is safe to call more than once.
 func (c *Client) Close() error {
-	c.closeOnce.Do(func() {
-		if err := c.client.Close(); err != nil {
-			c.closeErr = fmt.Errorf("etcd: close: %w", err)
-		}
-	})
-	return c.closeErr
+	return c.close()
 }
 
 func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }

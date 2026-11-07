@@ -1,5 +1,7 @@
 # log
 
+要求 Go 1.27.0 或更高版本。
+
 基于 [zerolog](https://github.com/rs/zerolog) 的结构化日志库，提供文件轮转、多路输出和敏感数据脱敏能力。
 
 ## 特性

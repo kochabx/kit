@@ -80,8 +80,7 @@ func New(opts ...Option) *Container {
 	return c
 }
 
-func Provide[T any](
-	c *Container,
+func (c *Container) Provide[T any](
 	key Key[T],
 	constructor func(*Container) (T, error),
 	options ...ProvideOption,
@@ -123,30 +122,29 @@ func Provide[T any](
 	return nil
 }
 
-func MustProvide[T any](
-	c *Container,
+func (c *Container) MustProvide[T any](
 	key Key[T],
 	constructor func(*Container) (T, error),
 	options ...ProvideOption,
 ) {
-	if err := Provide(c, key, constructor, options...); err != nil {
+	if err := c.Provide(key, constructor, options...); err != nil {
 		panic(err)
 	}
 }
 
-func Supply[T any](c *Container, key Key[T], value T, options ...ProvideOption) error {
-	return Provide(c, key, func(*Container) (T, error) {
+func (c *Container) Supply[T any](key Key[T], value T, options ...ProvideOption) error {
+	return c.Provide(key, func(*Container) (T, error) {
 		return value, nil
 	}, options...)
 }
 
-func MustSupply[T any](c *Container, key Key[T], value T, options ...ProvideOption) {
-	if err := Supply(c, key, value, options...); err != nil {
+func (c *Container) MustSupply[T any](key Key[T], value T, options ...ProvideOption) {
+	if err := c.Supply(key, value, options...); err != nil {
 		panic(err)
 	}
 }
 
-func Get[T any](c *Container, key Key[T]) (T, error) {
+func (c *Container) Get[T any](key Key[T]) (T, error) {
 	var zero T
 	if c == nil {
 		return zero, ErrNilContainer
@@ -186,15 +184,15 @@ func Get[T any](c *Container, key Key[T]) (T, error) {
 	return result, nil
 }
 
-func MustGet[T any](c *Container, key Key[T]) T {
-	value, err := Get(c, key)
+func (c *Container) MustGet[T any](key Key[T]) T {
+	value, err := c.Get(key)
 	if err != nil {
 		panic(err)
 	}
 	return value
 }
 
-func Has[T any](c *Container, key Key[T]) bool {
+func (c *Container) Has[T any](key Key[T]) bool {
 	if c == nil {
 		return false
 	}

@@ -235,7 +235,7 @@ func TestRun_WithContainer(t *testing.T) {
 	}
 
 	c := cx.New()
-	cx.MustSupply(c, cx.NewKey[*db.Client]("db"), dbClient)
+	c.MustSupply(cx.NewKey[*db.Client]("db"), dbClient)
 
 	app := New(WithContainer(c))
 
@@ -264,7 +264,7 @@ func TestHealthCheck(t *testing.T) {
 	}
 
 	c := cx.New()
-	cx.MustSupply(c, cx.NewKey[*db.Client]("db"), dbClient)
+	c.MustSupply(cx.NewKey[*db.Client]("db"), dbClient)
 
 	app := New(WithContainer(c))
 

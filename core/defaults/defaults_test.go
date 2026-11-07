@@ -95,8 +95,8 @@ func TestApplyNestedPointersCollectionsAndCycles(t *testing.T) {
 	target := config{
 		Nodes: []node{{}},
 		ByID:  map[string]node{"one": {}},
-	}
-	target.Root = &node{}
+
+		Root: &node{}}
 	target.Root.Next = target.Root
 
 	require.NoError(t, Apply(&target))
@@ -194,14 +194,12 @@ func TestMetadataCacheIsConcurrentForRecursiveTypes(t *testing.T) {
 	require.NoError(t, err)
 	var wg sync.WaitGroup
 	for range 100 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			var target recursiveLeft
 			require.NoError(t, applier.Apply(&target))
 			require.NotNil(t, target.Right)
 			assert.Equal(t, "ok", target.Right.Value)
-		}()
+		})
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

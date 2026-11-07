@@ -1,13 +1,11 @@
 package defaults
 
 import (
-	"bytes"
 	"encoding"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
-	"io"
 	"net"
 	"net/url"
 	"reflect"
@@ -175,18 +173,7 @@ func decodeBytes(raw string) ([]byte, error) {
 }
 
 func decodeJSON(value reflect.Value, raw string) error {
-	decoder := json.NewDecoder(bytes.NewBufferString(raw))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(value.Addr().Interface()); err != nil {
-		return err
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return errors.New("multiple JSON values")
-		}
-		return err
-	}
-	return nil
+	return json.Unmarshal([]byte(raw), value.Addr().Interface(), json.RejectUnknownMembers(true))
 }
 
 func isNil(value any) bool {

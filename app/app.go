@@ -92,7 +92,7 @@ func WithServers(servers ...transport.Server) Option {
 // 组件按注册顺序启动，按反向顺序关闭。
 func WithComponent[T any](key cx.Key[T], value T) Option {
 	return func(b *builder) {
-		b.components = append(b.components, func(c *cx.Container) { cx.MustSupply(c, key, value) })
+		b.components = append(b.components, func(c *cx.Container) { c.MustSupply(key, value) })
 	}
 }
 
@@ -167,7 +167,7 @@ func New(options ...Option) *Application {
 	// 将 servers 注册为 cx 组件（transport.Server 已实现 cx.Starter/cx.Stopper）
 	for i, s := range b.servers {
 		key := cx.NewKey[transport.Server](fmt.Sprintf("app:server:%d", i))
-		cx.MustSupply(container, key, s)
+		container.MustSupply(key, s)
 	}
 
 	// 注册自定义组件

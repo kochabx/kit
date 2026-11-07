@@ -1,333 +1,166 @@
 # Scheduler
 
-`scheduler` 是一个基于 Redis 的生产级分布式任务调度模块，支持即时任务、延迟任务、Cron、失败重试、任务唯一性、协作式取消、Dead Job 与故障恢复。
+Redis 专用、类型安全、按队列隔离的持久化任务调度器。要求 Redis 8.10+，部署使用稳定系列已验证的补丁版本。数据协议从 v1 开始，不兼容旧方案。完整设计及验收记录见 [ARCHITECTURE.md](ARCHITECTURE.md)。
 
-## 核心语义
+## 概念与入口
 
-任务采用 **至少执行一次（at-least-once）** 语义。Worker 可能在业务副作用已经完成、但尚未记录成功状态时崩溃，因此 Handler 必须具备幂等性。
+- `Task[T]` 是不可变定义：名称、版本、Codec、Queue 和默认执行策略。
+- `Client` 提交与管理任务，不启动执行池。
+- `Worker` 注册 Handler，负责执行、派发、续租、恢复和清理。
+- `client.Jobs()` 管理任务实例；`client.Schedules()` 管理周期规则；`client.Queue(name)` 提供队列查询。
 
-模块通过执行租约和 fencing token 防止已经失去租约的 Worker 修改任务状态。入队、派发、开始执行、完成、失败、重试和取消等状态转换均由 Lua 原子完成。
+Task 是定义，Job 是一次提交，Schedule 按周期创建独立 Job。没有公开的 Scheduler 或 TaskClient，也无需 Bind。
 
-所有 Redis Key 使用相同的 Cluster hash tag，可以部署在 Redis Cluster 中。
-
-分布式时间点与截止时间统一使用 Redis Server Time。Go 本地单调时钟仅用于 Handler 耗时、本地超时、退避等待等进程内时间计算。
-
-即时任务通过 `HSET + XADD` 原子写入 Ready Stream，不经过 Dispatcher。只有未来任务进入 Scheduled ZSET，由 Dispatcher 以有界批次派发。
-
-## 快速开始
+## 使用
 
 ```go
-type Email struct {
-	To string `json:"to"`
-}
-
-email := scheduler.Define[Email](
-	"email.send",
-	scheduler.WithTimeout(30*time.Second),
-	scheduler.WithRetry(scheduler.Exponential{
-		MaxAttempts: 5,
-		Initial:     time.Second,
-		Max:         time.Minute,
-		Multiplier:  2,
-		Jitter:      true,
-	}),
-)
-
-s, err := scheduler.New(redisClient, scheduler.Config{
-	Namespace:   "mail-production",
-	Concurrency: 32,
-	Role:        scheduler.RoleCombined,
+// redisClient 由应用持有，构造时设置 ContextTimeoutEnabled:true。
+// Client 和 Worker 不关闭它。
+client, err := scheduler.NewClient(redisClient, scheduler.ClientConfig{
+ Namespace: "app",
+ Queues: []string{"mail"},
 })
-if err != nil {
-	return err
-}
+if err != nil { return err }
+defer client.Close()
 
-if err := scheduler.Handle(s, email, func(ctx context.Context, payload Email) error {
-	return mailer.Send(ctx, payload.To)
-}); err != nil {
-	return err
-}
-
-job, err := scheduler.Enqueue(
-	s,
-	ctx,
-	email,
-	Email{To: "user@example.com"},
-	scheduler.Delay(time.Minute),
-	scheduler.Unique("welcome:user-123", time.Hour),
-)
-if err != nil {
-	return err
-}
-
-// Run 会阻塞，直到 ctx 被取消或运行失败。
-return s.Run(ctx)
-```
-
-仅用于生产任务的进程不需要调用 `Run`，使用完成后应调用 `s.Close()` 释放 Observer 等内部资源。
-
-## 任务类型
-
-### 即时任务
-
-```go
-job, err := scheduler.Enqueue(s, ctx, email, payload)
-```
-
-即时任务直接进入 Ready Stream，Worker 可以立即消费，不依赖 Dispatcher。
-
-### 延迟任务
-
-```go
-job, err := scheduler.Enqueue(s, ctx, email, payload,
-	scheduler.Delay(10*time.Minute),
-)
-
-job, err = scheduler.Enqueue(s, ctx, email, payload,
-	scheduler.At(time.Date(2026, 8, 6, 9, 0, 0, 0, time.Local)),
-)
-
-// 可选：任务在队列中超过 30 分钟仍未开始执行时标记为 expired。
-job, err = scheduler.Enqueue(s, ctx, email, payload,
-	scheduler.ExpiresAfter(30*time.Minute),
-)
-
-// 也可以指定绝对过期时间。
-job, err = scheduler.Enqueue(s, ctx, email, payload,
-	scheduler.ExpiresAt(time.Now().Add(time.Hour)),
-)
-```
-
-`Delay` 传递持续时间，由 Redis 计算绝对时间戳，避免节点时钟偏差。
-
-### 唯一任务
-
-```go
-job, err := scheduler.Enqueue(s, ctx, email, payload,
-	scheduler.Unique("email:user-123", time.Hour),
-)
-```
-
-同一 namespace 和唯一键在有效期内只会创建一个任务。重复提交返回 `ErrDuplicate`；如果原 Job 仍在保留期内，同时返回已有 Job，否则 Job 为 `nil`。
-
-Job 即使进入 `succeeded`、`dead`、`cancelled` 或 `expired`，唯一键仍按 `Unique` 调用时指定的 TTL 独立保留；任务终态不会提前解除去重窗口。
-
-### 永久失败
-
-当重试无法解决错误时返回：
-
-```go
-return scheduler.Permanent(err)
-```
-
-Handler panic 会被恢复并作为永久失败处理。Handler 超时会取消执行 Context，但 Go 无法强制终止忽略 Context 的业务代码。
-
-## Cron
-
-每次 Cron 触发都会创建一个独立 Job。多个 Dispatcher 可以同时检查同一个 Schedule，Lua CAS 保证同一次触发只创建一个 Job。
-
-停机期间错过的执行采用固定合并语义：恢复后只生成一个补偿任务，并从 Redis 当前时间计算下一次执行时间，不回放全部历史执行。
-
-```go
-schedule, err := scheduler.ScheduleCron(
-	s,
-	ctx,
-	email,
-	Email{To: "ops@example.com"},
-	"0 9 * * 1-5",
-	time.UTC,
-)
-
-err = s.PauseSchedule(ctx, schedule.ID)
-err = s.ResumeSchedule(ctx, schedule.ID)
-err = s.UpdateSchedule(ctx, schedule.ID, "0 10 * * 1-5", time.UTC)
-err = s.CancelSchedule(ctx, schedule.ID)
-err = s.DeleteSchedule(ctx, schedule.ID)
-```
-
-Schedule Catalog 会保留全部状态：
-
-```go
-scheduler.ScheduleStateActive
-scheduler.ScheduleStatePaused
-scheduler.ScheduleStateCancelled
-scheduler.ScheduleStateInvalid
-```
-
-Cancelled 和 Invalid Schedule 默认保留 `ScheduleRetention`（7 天），之后由 Dispatcher maintenance 清理。Active 和 Paused Schedule 不会自动删除。
-
-## 生命周期
-
-`Scheduler` 实现阻塞式 `Run(context.Context) error`。在 kit 应用容器中使用 `cx.Runner` 托管，并确保 Runner 依赖 Redis、因此先于 Redis 停止：
-
-```go
-runner := cx.MustRunner(s)
-```
-
-不要同时对同一个 Scheduler 使用 `defer s.Close()` 和 Runner 生命周期管理。`Close()` 只用于不调用 `Run` 的 producer-only Scheduler。
-
-## 数据保留
-
-- succeeded Job 使用 `SucceededRetention`，默认为 `0`，完成后立即删除。
-- cancelled 和 expired Job 分别使用 `CancelledRetention` 和 `ExpiredRetention`，默认保留 1 小时。
-- dead Job 使用 `DeadRetention`。
-- `Unique` key 使用调用者传入的 TTL，并且不依赖 Job Hash 是否仍然存在。
-- 未配置 `ExpiresAt` 或 `ExpiresAfter` 的有效排队任务不会自动过期。
-- maintenance、Dead 索引、孤儿索引和 stale consumer 清理由 `RoleDispatcher` 或 `RoleCombined` 实例执行。
-
-可以按全局状态分页查询：
-
-```go
-paused, err := s.ListSchedules(ctx, scheduler.ScheduleQuery{
-	State: scheduler.ScheduleStatePaused,
-	Limit: 100,
+worker, err := scheduler.NewWorker(redisClient, scheduler.WorkerConfig{
+ Namespace: "app",
+ Queues: []scheduler.QueueConfig{{Name: "mail", Concurrency: 16}},
 })
+if err != nil { return err }
+defer worker.Close() // 释放未运行 Worker；运行后由 Run 完成资源清理
+
+type Email struct { To string `json:"to"` }
+email, err := scheduler.NewTask[Email]("email.send",
+ scheduler.WithQueue("mail"),
+ scheduler.WithVersion("1"),
+ scheduler.WithTimeout(30*time.Second),
+ scheduler.WithRetry(scheduler.Exponential{
+  MaxAttempts: 4, Initial: time.Second, Max: time.Minute,
+  Multiplier: 2, Jitter: true,
+ }),
+ scheduler.WithRecoveryLimit(3),
+ scheduler.WithExecutionLimit(100),
+)
+if err != nil { return err }
+if err := worker.Register(email, func(ctx context.Context, e Email) error {
+ return sendEmail(ctx, e.To) // 业务逻辑必须幂等
+}); err != nil { return err }
+
+job, err := client.Enqueue(ctx, email, Email{To:"user@example.com"},
+ scheduler.WithJobID("request-123"),
+)
+if err != nil { return err }
+_ = job
+
+return worker.Run(ctx)
 ```
 
-损坏的 Cron 表达式或时区会被标记为 `invalid` 并移出活跃派发索引；孤儿索引由 Maintenance 自动修复。
+仅生产任务的进程只构造 Client。注册发生在 Run 前，重复注册同 Queue/Name/Version 会失败。Worker 只能运行一次。配置未声明队列时使用 default；显式队列不会自动追加 default。
 
-## 部署角色
-
-角色使用标志位：
+## 提交与幂等
 
 ```go
-scheduler.RoleDispatcher
-scheduler.RoleWorker
-scheduler.RoleCombined
+job, err := client.Enqueue(ctx, email, payload, scheduler.Delay(time.Minute))
+job, err = client.Enqueue(ctx, email, payload, scheduler.At(runAt))
+job, err = client.Enqueue(ctx, email, payload, scheduler.ExpiresAfter(time.Hour))
+results := client.EnqueueBatch(ctx, email, payloads)
 ```
 
-- `RoleDispatcher`：派发延迟任务和 Cron，并运行 Maintenance。
-- `RoleWorker`：消费、执行、续租和恢复任务。
-- `RoleCombined`：在同一进程中同时运行两种角色。
+`WithJobID` 是调用方重发同一请求的幂等标识，允许字母、数字、点、下划线和连字符，最长 128 字符。相同 ID/请求返回已有 Job 和 ErrDuplicate；实体已清理时返回 nil 和 ErrDuplicate。不同 Queue、Task、Payload、策略或时间选项复用同 ID 返回 ErrConflict。幂等窗口由 Retention.Submission 决定，默认 24 小时，窗口过后且 Job 不存在时可重新创建。重发相对 Delay/ExpiresAfter 时沿用原请求语义，不重新计算原任务时间。
 
-Dispatcher 和 Worker 可以独立部署。扩缩容时 Redis Consumer Group 会重新分配新任务；超时 Pending 消息由 `XAUTOCLAIM` 恢复。
+`Unique(key, ttl)` 是独立的业务去重窗口，跨 Queue 共享 namespace；不是可替代 WithJobID 的请求回执。同一业务 key 的其他请求返回已有 Job 和 ErrDuplicate，实体删除不提前释放 Unique key。
 
-同一 namespace 下的所有 Worker 必须注册一致的 Definition。每个 Job 都会持久化 Definition 指纹，覆盖任务名、超时、Codec 类型和重试配置；不匹配的 Worker 会拒绝执行并记录 `ErrDefinitionMismatch`，避免静默使用不同的重试语义。
+批量提交按最多 256 条或 4 MiB payload 分块，保留输入顺序和逐项错误，不提供整体事务。每次提交固化执行策略；大 Payload 建议改传业务标识。
 
-## 取消与优雅关闭
+## 协议与重试
+
+指纹包含 TaskName、Version 和 Codec.Identity，不包含 Go 类型名、Queue、Timeout 或重试配置。JSON Codec 标识为 json:v1；Payload schema 改变时显式增加 WithVersion。
+
+自定义 Codec 必须提供稳定 Identity。内置 Exponential/NoRetry 固化为数据；自定义 RetryPolicy 必须实现 IdentifiedRetryPolicy，Identity 包含所有影响行为的配置，Worker 必须注册匹配实现。Codec 和自定义策略必须不可变且支持并发。
+
+同一 Worker 可注册多个版本。同一 Queue 的消费节点必须支持该 Queue 中全部任务版本；不同支持集合的 Worker 使用不同 Queue，Stream 不按 Handler 版本过滤。缺少 Handler、Codec 不匹配或自定义策略不匹配会进入 Dead，不静默丢弃或使用其他策略。
+
+`MaxAttempts` 限制业务失败次数（包含首次失败）；`WithRecoveryLimit` 单独限制租约失效后的恢复次数，默认 3；`WithExecutionLimit` 限制一个人工重试周期内的总执行次数，默认 100。NoRetry 禁止业务重试，不禁止崩溃恢复。人工 Jobs.Retry 重置计数并增加 generation，避免新一轮投递被 IDMP 去重。
+
+## 周期任务与管理
 
 ```go
-err := s.Cancel(ctx, job.ID)
+schedule, err := client.Schedules().Create(ctx, email, payload,
+ scheduler.CronSpec{Expression:"0 9 * * 1-5", TimeZone:"Asia/Shanghai"},
+)
+err = client.Schedules().Pause(ctx, schedule.ID)
+err = client.Schedules().Resume(ctx, schedule.ID)
+err = client.Schedules().UpdateCron(ctx, schedule.ID,
+ scheduler.CronSpec{Expression:"0 10 * * 1-5", TimeZone:"Asia/Shanghai"})
+err = client.Schedules().Cancel(ctx, schedule.ID)
+err = client.Schedules().Delete(ctx, schedule.ID)
+
+current, err := client.Jobs().Get(ctx, job.ID)
+err = client.Jobs().Cancel(ctx, job.ID)
+err = client.Jobs().Retry(ctx, deadID)
+err = client.Jobs().Delete(ctx, terminalID)
 ```
 
-Scheduled、Ready 和 Running 状态均支持取消：
+Schedules.Create 是 Go 1.27 泛型方法，使用 Schedules 管理作用域。TimeZone 默认 UTC，只接受 UTC/IANA 名称，不接受 Local 或表达式内 TZ/CRON_TZ。多 Dispatcher 用 CAS 防止重复创建 occurrence；停机错过的触发合并一次。暂停时更新保持暂停，取消后不可恢复。周期创建的 Job 继承创建 Schedule 时的执行策略。
 
-- 同一 Scheduler 实例中的运行任务会被立即通知。
-- 远程 Worker 最迟在 `CancellationCheckInterval` 内发现取消请求。
-- Ready 状态的无效消息在消费时原子执行 `XACK + XDEL`，不会长期占用 Stream。
+Delete 只允许终态，Retry 只允许 Dead。运行中取消设置标志并通过心跳通知 Handler；不能强制终止业务 goroutine。
 
-关闭时首先停止接收和派发新任务，在途任务仍会继续续租并等待完成。只有超过 `ShutdownTimeout` 后才会取消 Handler；任务保持可恢复状态，不会因为缩容被错误标记为 Dead。
+## 查询、指标与生命周期
 
-## Dead Job 管理
+Queue 提供 Stats、DeadJobs、RunningJobs、Schedules。列表使用 Cursor/Count，Count 是扫描提示；没有排序或快照保证，空页仍需继续直到 NextCursor=0，完整遍历可以按 ID 去重。
+
+WorkerConfig.Role 控制执行/派发角色；Execution.Queues、Dispatch.Queues 为 nil 表示订阅全部声明 Queue，显式空切片表示零个。每 Queue 独立执行池和接收缓冲，容量跨实例累加。Prefetch=0 仍可能由读取批次持有未执行消息，FetchBatch 限制条数，ReadMaxBytes 限制 Stream 响应字节，不包含后续 Job Hash 中的 Payload。
+
+停止 Run 的 Context 后停止 intake，交还未执行消息，保持在途任务续租。超过 ShutdownTimeout 后取消 Handler。Handler 超时或失去租约后，实际 goroutine 未退出仍占执行槽；Worker 强制停机后可能残留忽略 Context 的业务 goroutine。需要强杀能力时应由应用使用进程隔离。
+
+Observer 异步、有界、有损，必须响应 Context。EventFinished.Err 是执行结果，CommitErr 是状态提交结果。指标包 `core/scheduler/metrics` 提供 Prometheus Observer；队列快照由应用调用 Client.Stats 后通过 SetQueueStats/SetObserverDropped 发布，采集器不主动访问 Redis。
+
+普通 Redis 操作继承取消并设置 OperationTimeout，停机结果提交使用独立有界 Context。借用的 go-redis 客户端必须启用 ContextTimeoutEnabled=true；构造 Client/Worker 时会检查配置，未启用则返回 ErrInvalidArgument，不修改调用方的连接选项。请同时合理配置 Dial/Read/Write/PoolTimeout。Client.Close 关闭提交和 Observer；管理句柄继续借用 Redis 访问实体。Worker 不关闭 Redis 连接。
+
+## 可选执行历史
 
 ```go
-dead, err := s.DeadJobs(ctx, 0, 100)
-err = s.RetryDead(ctx, id)
-err = s.DeleteDead(ctx, id)
-```
-
-按任务类型查询时，会先在全局 Dead 集合中过滤，再应用 offset 和 limit：
-
-```go
-dead, err := s.QueryDead(ctx, scheduler.DeadQuery{
-	Type:   "email.send",
-	Offset: 0,
-	Limit:  100,
+worker, err := scheduler.NewWorker(redisClient, scheduler.WorkerConfig{
+ Namespace: "app",
+ History: scheduler.HistoryConfig{MaxEntries: 20, TTL: 72*time.Hour},
 })
+attempts, err := client.Jobs().Attempts(ctx, jobID)
 ```
 
-## 统计与可观测性
+History 默认关闭。启用后每个 Job 最多保留指定条数（上限 1000），TTL 自最后一次写入刷新。历史在完成、失败和失效执行恢复时由同一 Lua 原子写入，结果回执重放不会重复追加。列表最新在前，Job 删除后仍保留到历史 TTL 到期；空列表表示未启用、无完成记录或历史已过期，不用于判断 Job 是否存在。
 
-```go
-stats, err := s.Stats(ctx)
-```
+内部实现与 Key、Lua、编解码全部位于 `internal/store`。`internal/model` 保存共享领域值，Client 和 Worker 不共享执行引擎。目录及边界验收见 ARCHITECTURE.md。
 
-统计字段包括：
+## Redis 协议
 
-- `Scheduled`：等待未来派发的任务。
-- `Ready`：尚未被 Consumer 读取的 Stream 消息。
-- `Pending`：已经读取但尚未 ACK 的消息。
-- `Running`：持有执行租约的任务。
-- `Dead`：Dead Job 数量。
-- `CronSchedules`：Catalog 中的全部 Cron Schedule。
-- `ObserverDropped`：Observer 队列满时丢弃的事件数。
+Key 前缀为 `scheduler:{namespace}:v1:`，同 namespace 共享 slot；通过 PartitionNamespace 跨 slot 扩展，按 ID 管理需保存 namespace。Lua 实现状态转换，XREADGROUP CLAIM 参与重投递，XAUTOCLAIM 提供受预算公平扫描，XACKDEL DELREF 清理单执行组消息，XNACK 交还未执行消息，XADD IDMP 按 Job/generation/attempt 防止重复投递。
 
-可以通过 `Config.Observer` 接入指标和 Trace。Observer 异步执行，其 panic 不会影响任务；`Config.Logger` 使用项目日志模块，默认值为 `log.Global()`。
+Client 第一次提交、创建 Schedule，以及 Worker.Run，预检 Redis 8.10 和必需命令。所有 Cluster 节点应运行相同版本及 ACL 配置。Lua 原子执行不代表运行时错误回滚；不要由其他程序修改内部 key 类型、删除消费组或修改 Stream 幂等配置。
 
-## Maintenance
+执行保证为 at-least-once。幂等回执仅保护调度状态，外部副作用仍需业务幂等。默认 Succeeded 立即删除，Cancelled/Expired 保留 1 小时，Dead 72 小时，终态 Schedule 7 天，提交回执 24 小时、完成回执 1 小时。生产部署使用适合任务数据的持久化、复制和容量配置；内存淘汰不能替代保留策略。
 
-Maintenance 与 Dispatcher 热路径独立运行，并通过 Redis 短租约保证同一时刻只有一个 Dispatcher 执行维护工作。
-
-其职责包括：
-
-- 使用 Redis 时间有界清理过期 Dead 索引。
-- 增量修复 Scheduled Job 和 Cron Catalog 的孤儿索引。
-- 清理长时间空闲且 `Pending=0` 的 Consumer。
-
-实体 Hash 由 Redis TTL 过期或在成功后立即删除，Maintenance 只负责二级索引和 Consumer 元数据。它不会使用 `KEYS`、全量扫描或 Keyspace Notification。
-
-相关配置：
-
-```go
-MaintenanceInterval      time.Duration
-MaintenanceBatch         int64
-MaintenanceDrainLimit    int64
-MaintenanceLeaseDuration time.Duration
-ConsumerIdleTimeout      time.Duration
-```
-
-## 关键配置
-
-```go
-scheduler.Config{
-	Namespace:                 "production",
-	Role:                      scheduler.RoleCombined,
-	Concurrency:               16,
-	DispatchBatch:             100,
-	DispatchDrainLimit:        2000,
-	CronDrainLimit:            2000,
-	DispatchInterval:          250 * time.Millisecond,
-	PollTimeout:               2 * time.Second,
-	LeaseDuration:             30 * time.Second,
-	LeaseRenewInterval:        time.Second,
-	CancellationCheckInterval: 500 * time.Millisecond,
-	ShutdownTimeout:           30 * time.Second,
-	SucceededRetention:        0,
-	CancelledRetention:        time.Hour,
-	ExpiredRetention:          time.Hour,
-	DeadRetention:             3 * 24 * time.Hour,
-	ScheduleRetention:         7 * 24 * time.Hour,
-	MaxPayloadBytes:           1 << 20,
-}
-```
-
-配置默认值由 `default` tag 注入，约束由 `validate` tag 校验。Namespace 只允许字母、数字、点、下划线和连字符，长度不超过 128。
-
-Redis 操作故障使用 `github.com/cenkalti/backoff/v5` 提供的指数退避和 jitter；操作恢复成功后重置退避状态。
-
-## 生产建议
-
-- Handler 必须幂等，推荐使用业务唯一键、事务 Inbox/Outbox 或数据库唯一约束。
-- 每个环境使用独立 namespace。
-- 根据任务可靠性要求配置 Redis 高可用与持久化。
-- 保持 Payload 较小，默认上限为 1 MiB。
-- 至少部署两个 Worker 实例，才能在节点故障后自动恢复任务。
-- 将 `Ping` 接入 readiness，将 `Stats` 接入监控系统。
-- 监控 Ready、Pending、Running、Dead、ObserverDropped 和任务执行延迟。
-
-## 测试
-
-本地 Redis 默认地址为 `localhost:6379`，默认密码为 `12345678`。可以通过环境变量覆盖：
+## 验证
 
 ```bash
-REDIS_ADDR=localhost:6379 \
-REDIS_PASSWORD=12345678 \
-SCHEDULER_INTEGRATION_REQUIRED=1 \
-go test -race ./core/scheduler/...
+SCHEDULER_INTEGRATION_REQUIRED=1 go test -race ./core/scheduler/... -count=3
+go vet ./core/scheduler/...
+go test ./...
+go test ./core/scheduler -run '^$' -bench 'Benchmark(TaskRoundTrip|ConcurrentRoundTrip)$' -benchmem -benchtime=200ms
 ```
 
-性能测试：
+REDIS_ADDR 默认 localhost:6379，REDIS_PASSWORD 默认本地测试密码；可通过环境变量覆盖。测试只清理独立随机 namespace，不执行 FLUSHDB/FLUSHALL。不设置 SCHEDULER_INTEGRATION_REQUIRED 时 Redis 不可用会跳过集成测试。
+
+## 回执容量与隔离故障验证
+
+Retention.Submission 默认 24h，约束提交重发窗口；Retention.Completion 默认 1h，约束执行结果重放窗口，可分别调整。新建 Job 使用独立 incarnation 作为 Stream 投递身份，JobID 在提交窗口之后复用不会撞到旧的 IDMP 记录。Claim 对相同 token/worker 的有效租约重放返回原快照，不延长租约、不增加执行计数。
+
+回执 Key 数量大致为 `每秒提交数 × 提交保留秒数 + 每秒完成的执行数 × 完成保留秒数`。本地 Redis 8.10 MEMORY USAGE 样本：提交回执约 206B、完成回执约 212B；不包含全局 Key 管理、分配器碎片、Stream/IDMP、Job 或历史开销。按实际吞吐和可接受重放窗口配置 TTL。
 
 ```bash
-go test -run '^$' -bench '^BenchmarkBatchEnqueue$' ./core/scheduler/...
+go test ./core/scheduler -run '^$' -bench '^BenchmarkReceiptFootprint$' -benchtime=200ms
+# Linux Docker host networking；创建专属六节点 Cluster 和 AOF 实例，自动清理。
+bash core/scheduler/scripts/verify-redis.sh
 ```
+
+隔离环境测试在普通 go test 中跳过；脚本显式启用，验证计划切换、主节点退出后的自动切换，以及 AOF 容器重启后的任务/周期/回执/历史恢复。脚本不连接共享 Redis，不清理现有数据；需本地 Redis 8.10 Docker 镜像，可用 SCHEDULER_REDIS_IMAGE 指定版本。

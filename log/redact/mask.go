@@ -26,11 +26,10 @@ type emailMask struct{}
 func Email() Mask { return emailMask{} }
 
 func (emailMask) Append(dst, value []byte) []byte {
-	at := bytes.LastIndexByte(value, '@')
-	if at <= 0 || at == len(value)-1 {
+	local, domain, found := bytes.CutLast(value, []byte("@"))
+	if !found || len(local) == 0 || len(domain) == 0 {
 		return append(dst, "******"...)
 	}
-	local := value[:at]
 	if len(local) == 1 {
 		dst = append(dst, local[0])
 		dst = append(dst, "***"...)
@@ -39,7 +38,7 @@ func (emailMask) Append(dst, value []byte) []byte {
 		dst = append(dst, "***"...)
 		dst = append(dst, local[len(local)-1])
 	}
-	return append(dst, value[at:]...)
+	return append(dst, value[len(local):]...)
 }
 
 // KeepEdges preserves prefix and suffix bytes and masks the middle. Values too

@@ -21,9 +21,9 @@ type Client struct {
 	tlsConfig *tls.Config
 
 	// 生命周期
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closeOnce sync.Once
+	ctx    context.Context
+	cancel context.CancelFunc
+	close  func()
 
 	// 受 mu 保护的运行时状态
 	mu                    sync.RWMutex
@@ -74,6 +74,7 @@ func New(opts ...Option) *Client {
 		c.dialer.TLSClientConfig = c.tlsConfig
 	}
 
+	c.close = sync.OnceFunc(c.closeResources)
 	return c
 }
 
@@ -397,30 +398,29 @@ func (c *Client) Disconnect() error {
 }
 
 // Close 见 Clienter.Close。
-func (c *Client) Close() error {
-	c.closeOnce.Do(func() {
-		c.mu.Lock()
-		c.closed = true
-		c.intentionalDisconnect = true
-		conn := c.conn
-		cancel := c.connCancel
-		c.mu.Unlock()
+func (c *Client) Close() error { c.close(); return nil }
 
-		c.cancel()
+func (c *Client) closeResources() {
+	c.mu.Lock()
+	c.closed = true
+	c.intentionalDisconnect = true
+	conn := c.conn
+	cancel := c.connCancel
+	c.mu.Unlock()
 
-		if conn != nil {
-			_ = conn.WriteControl(
-				websocket.CloseMessage,
-				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
-				time.Now().Add(time.Second),
-			)
-			_ = conn.Close()
-		}
-		if cancel != nil {
-			cancel()
-		}
-	})
-	return nil
+	c.cancel()
+
+	if conn != nil {
+		_ = conn.WriteControl(
+			websocket.CloseMessage,
+			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
+			time.Now().Add(time.Second),
+		)
+		_ = conn.Close()
+	}
+	if cancel != nil {
+		cancel()
+	}
 }
 
 // OnEvent 见 Clienter.OnEvent。

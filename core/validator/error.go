@@ -21,10 +21,9 @@ type Violation struct {
 
 // Error 是 Struct / Var 在有字段校验失败时返回的聚合错误。
 //
-// 推荐通过 errors.As 提取：
+// 推荐通过 errors.AsType 提取：
 //
-//	var ve *validator.Error
-//	if errors.As(err, &ve) { … }
+//	if ve, ok := errors.AsType[*validator.Error](err); ok { … }
 type Error struct {
 	violations []Violation
 	message    string
@@ -50,6 +49,6 @@ func newError(violations []Violation) *Error {
 
 // AsError 报告 err（或其 Unwrap 链路中的某个错误）是否为 *Error。
 func AsError(err error) bool {
-	var ve *Error
-	return errors.As(err, &ve)
+	_, ok := errors.AsType[*Error](err)
+	return ok
 }

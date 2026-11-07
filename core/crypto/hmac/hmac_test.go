@@ -103,9 +103,7 @@ func TestConcurrentUse(t *testing.T) {
 	}
 	var wait sync.WaitGroup
 	for range 16 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			for range 50 {
 				signature, err := signer.Sign([]byte("payload"))
 				if err != nil {
@@ -117,7 +115,7 @@ func TestConcurrentUse(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 	wait.Wait()
 }

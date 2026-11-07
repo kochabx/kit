@@ -2,7 +2,7 @@ package httpx
 
 import (
 	"encoding/base64"
-	"encoding/json"
+	"encoding/json/v2"
 	"encoding/xml"
 	"fmt"
 	"io"
@@ -91,7 +91,7 @@ func IntoJSON(dest any) RequestOption {
 	return func(c *requestConfig) {
 		c.decode = func(resp *http.Response) error {
 			defer resp.Body.Close()
-			return json.NewDecoder(resp.Body).Decode(dest)
+			return json.UnmarshalRead(resp.Body, dest)
 		}
 	}
 }
@@ -166,7 +166,7 @@ func decodeAuto(resp *http.Response, dest any) error {
 	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(ct, ";", 2)[0]))
 	switch {
 	case mediaType == "" || strings.Contains(mediaType, "json"):
-		return json.NewDecoder(resp.Body).Decode(dest)
+		return json.UnmarshalRead(resp.Body, dest)
 	case strings.Contains(mediaType, "xml"):
 		return xml.NewDecoder(resp.Body).Decode(dest)
 	default:

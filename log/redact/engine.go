@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -97,7 +98,7 @@ func (r *Redactor) AddRules(rules ...Rule) error {
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	next := append([]ruleEntry(nil), r.rules...)
+	next := slices.Clone(r.rules)
 	seen := make(map[string]struct{}, len(rules))
 	for _, rule := range rules {
 		if _, exists := r.index[rule.name]; exists {
@@ -127,8 +128,7 @@ func (r *Redactor) RemoveRule(name string) bool {
 	if !exists {
 		return false
 	}
-	next := append([]ruleEntry(nil), r.rules[:i]...)
-	next = append(next, r.rules[i+1:]...)
+	next := slices.Delete(slices.Clone(r.rules), i, i+1)
 	compiled, _ := compile(next)
 	r.rules = next
 	r.reindexLocked()
@@ -160,7 +160,7 @@ func (r *Redactor) setEnabled(name string, enabled bool) bool {
 	if r.rules[i].enabled == enabled {
 		return true
 	}
-	next := append([]ruleEntry(nil), r.rules...)
+	next := slices.Clone(r.rules)
 	next[i].enabled = enabled
 	compiled, _ := compile(next)
 	r.rules = next

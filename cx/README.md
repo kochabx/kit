@@ -11,9 +11,9 @@ var (
 )
 
 c := cx.New()
-cx.MustSupply(c, configKey, cfg)
-cx.MustProvide(c, dbKey, func(c *cx.Container) (*DB, error) {
-    return NewDB(cx.MustGet(c, configKey))
+c.MustSupply(configKey, cfg)
+c.MustProvide(dbKey, func(c *cx.Container) (*DB, error) {
+    return NewDB(c.MustGet(configKey))
 })
 ```
 
@@ -22,7 +22,7 @@ cx.MustProvide(c, dbKey, func(c *cx.Container) (*DB, error) {
 不作为构造参数、但需要约束生命周期顺序的依赖可显式声明：
 
 ```go
-cx.MustProvide(c, workerKey, newWorker,
+c.MustProvide(workerKey, newWorker,
     cx.DependsOn(dbKey, redisKey),
 )
 ```
@@ -69,7 +69,7 @@ New/Stopped/Failed -> Starting -> Running -> Stopping -> Stopped
 ```go
 runner := cx.MustRunner(scheduler)
 runnerKey := cx.NewKey[*cx.Runner]("scheduler")
-cx.MustSupply(c, runnerKey, runner)
+c.MustSupply(runnerKey, runner)
 ```
 
 普通函数使用 `RunnerFunc`：
@@ -104,10 +104,10 @@ report, err := c.HealthCheck(ctx)
 | API | 说明 |
 |---|---|
 | `NewKey[T](name)` | 创建类型化组件 Key |
-| `Provide(c, key, ctor, options...)` | 注册惰性构造函数 |
-| `Supply(c, key, value)` | 注册预构造值 |
+| `c.Provide(key, ctor, options...)` | 注册惰性构造函数 |
+| `c.Supply(key, value)` | 注册预构造值 |
 | `DependsOn(keys...)` | 声明显式生命周期依赖 |
-| `Get(c, key)` | 类型安全读取 |
+| `c.Get(key)` | 类型安全读取 |
 | `MustProvide/MustSupply/MustGet` | wiring 阶段失败时 panic 的变体 |
 | `NewRunner/MustRunner` | 创建受监督的后台任务适配器 |
 | `Start/Stop/Restart` | 严格生命周期管理 |

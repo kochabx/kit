@@ -296,3 +296,19 @@ func TestOK_ContentType_AcrossFrameworks(t *testing.T) {
 		assert.Equal(t, wantCT, w.Header().Get("Content-Type"))
 	})
 }
+
+func TestOKJSONV2EmptyValues(t *testing.T) {
+	for _, tc := range []struct {
+		data any
+		want string
+	}{
+		{0, `{"code":200,"msg":"ok","data":0}`},
+		{false, `{"code":200,"msg":"ok","data":false}`},
+		{[]string(nil), `{"code":200,"msg":"ok"}`},
+		{map[string]string(nil), `{"code":200,"msg":"ok"}`},
+	} {
+		w := httptest.NewRecorder()
+		OK(w, tc.data)
+		assert.JSONEq(t, tc.want, w.Body.String())
+	}
+}

@@ -2,7 +2,7 @@ package httpx
 
 import (
 	"context"
-	"encoding/json"
+	"encoding/json/v2"
 	"errors"
 	"io"
 	"net/http"
@@ -35,7 +35,7 @@ func newEchoServer(t *testing.T) *httptest.Server {
 			Auth:   r.Header.Get("Authorization"),
 		}
 		w.Header().Set("Content-Type", ContentTypeJSON)
-		_ = json.NewEncoder(w).Encode(resp)
+		_ = json.MarshalWrite(w, resp)
 	}))
 }
 func TestClient_GetWithInto(t *testing.T) {
@@ -133,8 +133,8 @@ func TestClient_HTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	var herr *HTTPError
-	if !errors.As(err, &herr) {
+	herr, ok := errors.AsType[*HTTPError](err)
+	if !ok {
 		t.Fatalf("expected *HTTPError, got %T", err)
 	}
 	if herr.StatusCode != 404 {
@@ -275,8 +275,8 @@ func TestClient_Retry_Exhausted(t *testing.T) {
 
 	c := New(WithRetry(3, nil, nil))
 	_, err := c.Get(context.Background(), srv.URL+"/")
-	var herr *HTTPError
-	if !errors.As(err, &herr) || herr.StatusCode != 503 {
+	herr, ok := errors.AsType[*HTTPError](err)
+	if !ok || herr.StatusCode != 503 {
 		t.Fatalf("expected 503 HTTPError, got %v", err)
 	}
 	if c := calls.Load(); c != 3 {
@@ -362,5 +362,32 @@ func TestClient_NilContext(t *testing.T) {
 	_, err := c.Do(ctx, "GET", "http://example.com", nil)
 	if err == nil {
 		t.Fatal("expected error for nil context")
+	}
+}
+
+func TestJSONV2ResponseDecoding(t *testing.T) {
+	for _, input := range []string{
+		`{"name":"a","name":"b"}`,
+		`{"name":"a"} {"name":"b"}`,
+		"{\"name\":\"\xff\"}",
+	} {
+		for _, option := range []func(any) RequestOption{IntoJSON, Into} {
+			var dest struct {
+				Name string `json:"name"`
+			}
+			config := requestConfig{}
+			option(&dest)(&config)
+			resp := &http.Response{Header: make(http.Header), Body: io.NopCloser(strings.NewReader(input))}
+			if err := config.decode(resp); err == nil {
+				t.Fatalf("accepted invalid JSON document %q", input)
+			}
+		}
+	}
+	var dest struct {
+		Name string `json:"name"`
+	}
+	resp := &http.Response{Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"NAME":"ignored"}`))}
+	if err := decodeAuto(resp, &dest); err != nil || dest.Name != "" {
+		t.Fatalf("case-sensitive matching: dest=%+v err=%v", dest, err)
 	}
 }

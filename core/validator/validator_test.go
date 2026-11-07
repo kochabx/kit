@@ -101,8 +101,8 @@ func TestStruct_Invalid_ReturnsError(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.True(t, AsError(err))
-	var ve *Error
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*Error](err)
+	require.True(t, ok)
 	assert.Len(t, ve.Violations(), 4)
 }
 
@@ -120,8 +120,8 @@ func TestFieldName_JSONTag(t *testing.T) {
 	require.Error(t, err)
 
 	require.True(t, AsError(err))
-	var ve *Error
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*Error](err)
+	require.True(t, ok)
 	for _, vi := range ve.Violations() {
 		if vi.Tag == "required" {
 			assert.Equal(t, "name", vi.Field, "预期 json tag 中的字段名")
@@ -137,8 +137,8 @@ func TestFieldName_GoStructField(t *testing.T) {
 	require.Error(t, err)
 
 	require.True(t, AsError(err))
-	var ve *Error
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*Error](err)
+	require.True(t, ok)
 	for _, vi := range ve.Violations() {
 		if vi.Tag == "required" {
 			assert.Equal(t, "Name", vi.Field, "预期 Go 结构体字段名")
@@ -242,8 +242,8 @@ func TestViolation_Attributes(t *testing.T) {
 	require.Error(t, err)
 
 	require.True(t, AsError(err))
-	var ve *Error
-	require.True(t, errors.As(err, &ve))
+	ve, ok := errors.AsType[*Error](err)
+	require.True(t, ok)
 	violations := ve.Violations()
 	require.NotEmpty(t, violations)
 
