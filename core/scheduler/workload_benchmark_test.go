@@ -112,7 +112,13 @@ func BenchmarkCronDispatchScale(b *testing.B) {
 			client := testRedis(b)
 			namespace := fmt.Sprintf("cron-scale-%d", time.Now().UnixNano())
 			b.Cleanup(func() { cleanup(b, client, namespace) })
-			s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Dispatch: DispatchConfig{Batch: 128, CronDrainLimit: int64(count)}})
+			s, err := newWorkerRuntime(client, WorkerConfig{
+				Namespace: namespace,
+				Dispatch: DispatchConfig{
+					Batch:          128,
+					CronDrainLimit: int64(count),
+				},
+			})
 			if err != nil {
 				b.Fatal(err)
 			}

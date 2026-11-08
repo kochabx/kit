@@ -36,30 +36,35 @@ func (c *Client) Close() error {
 	}
 	return c.state.Close()
 }
+
 func (c *Client) Ping(ctx context.Context) error {
 	if c == nil || c.state == nil {
 		return ErrInvalidArgument
 	}
 	return c.state.Ping(ctx)
 }
+
 func (c *Client) Jobs() Jobs {
 	if c == nil || c.state == nil {
 		return Jobs{}
 	}
 	return c.state.Jobs()
 }
+
 func (c *Client) Schedules() Schedules {
 	if c == nil || c.state == nil {
 		return Schedules{}
 	}
 	return c.state.Schedules()
 }
+
 func (c *Client) Queue(name string) (*Queue, error) {
 	if c == nil || c.state == nil {
 		return nil, ErrInvalidArgument
 	}
 	return c.state.Queue(name)
 }
+
 func (c *Client) Stats(ctx context.Context) (Stats, error) {
 	if c == nil || c.state == nil {
 		return Stats{}, ErrInvalidArgument
@@ -77,6 +82,7 @@ func (c *Client) Enqueue[T any](ctx context.Context, task Task[T], payload T, op
 	}
 	return producer.Enqueue(ctx, payload, opts...)
 }
+
 func (c *Client) EnqueueBatch[T any](ctx context.Context, task Task[T], payloads []T, opts ...EnqueueOption) []EnqueueResult {
 	if c != nil {
 		if producer, err := task.bind(c.state); err == nil {
@@ -87,6 +93,7 @@ func (c *Client) EnqueueBatch[T any](ctx context.Context, task Task[T], payloads
 	}
 	return batchError(len(payloads), ErrInvalidArgument)
 }
+
 func batchError(n int, err error) []EnqueueResult {
 	out := make([]EnqueueResult, n)
 	for i := range out {

@@ -20,21 +20,30 @@ type testClaims struct {
 }
 type fixedClock struct{ now time.Time }
 
-func (c fixedClock) Now() time.Time { return c.now }
+func (c fixedClock) Now() time.Time {
+	return c.now
+}
 
 type fakeStore struct {
 	mu       sync.Mutex
 	sessions map[string]kitjwt.Session
 }
 
-func newFakeStore() *fakeStore                     { return &fakeStore{sessions: map[string]kitjwt.Session{}} }
-func (s *fakeStore) key(subject, id string) string { return subject + "\x00" + id }
+func newFakeStore() *fakeStore {
+	return &fakeStore{sessions: map[string]kitjwt.Session{}}
+}
+
+func (s *fakeStore) key(subject, id string) string {
+	return subject + "\x00" + id
+}
+
 func (s *fakeStore) Create(_ context.Context, v kitjwt.Session, _ int) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions[s.key(v.Subject, v.ID)] = v
 	return nil
 }
+
 func (s *fakeStore) Get(_ context.Context, subject, id string) (*kitjwt.Session, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -44,6 +53,7 @@ func (s *fakeStore) Get(_ context.Context, subject, id string) (*kitjwt.Session,
 	}
 	return &v, nil
 }
+
 func (s *fakeStore) Rotate(_ context.Context, r kitjwt.Rotation) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -67,6 +77,7 @@ func (s *fakeStore) Rotate(_ context.Context, r kitjwt.Rotation) error {
 	s.sessions[k] = v
 	return nil
 }
+
 func (s *fakeStore) Revoke(_ context.Context, subject, id string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -80,6 +91,7 @@ func (s *fakeStore) Revoke(_ context.Context, subject, id string, now time.Time)
 	s.sessions[k] = v
 	return nil
 }
+
 func (s *fakeStore) RevokeAll(_ context.Context, subject string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -92,6 +104,7 @@ func (s *fakeStore) RevokeAll(_ context.Context, subject string, now time.Time) 
 	}
 	return nil
 }
+
 func (s *fakeStore) RevokeDevice(_ context.Context, subject, deviceID string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,6 +122,7 @@ func (s *fakeStore) RevokeDevice(_ context.Context, subject, deviceID string, no
 	}
 	return nil
 }
+
 func (s *fakeStore) List(_ context.Context, subject string, query kitjwt.SessionQuery) (kitjwt.SessionPage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

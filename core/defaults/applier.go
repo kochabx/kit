@@ -3,12 +3,21 @@ package defaults
 import (
 	"fmt"
 	"reflect"
+	"sync"
 )
 
-// Applier is an immutable, concurrency-safe default-value processor.
+// Applier is immutable. Custom decoders and filters must be safe for concurrent use.
 type Applier struct {
 	config config
 }
+
+var sharedApplier = sync.OnceValue(func() *Applier {
+	applier, err := New()
+	if err != nil {
+		panic(err)
+	}
+	return applier
+})
 
 func New(options ...Option) (*Applier, error) {
 	c := defaultConfig()
@@ -21,13 +30,16 @@ func New(options ...Option) (*Applier, error) {
 		}
 	}
 	if c.decoder == nil {
-		c.decoder = builtinDecoder{timeLayouts: c.timeLayouts}
+		c.decoder = newBuiltinDecoder(c.timeLayouts)
 	}
 	return &Applier{config: c}, nil
 }
 
 // Apply applies defaults atomically. The target remains unchanged on error.
 func Apply(target any, options ...Option) error {
+	if len(options) == 0 {
+		return sharedApplier().Apply(target)
+	}
 	applier, err := New(options...)
 	if err != nil {
 		return err
@@ -35,7 +47,8 @@ func Apply(target any, options ...Option) error {
 	return applier.Apply(target)
 }
 
-// Apply applies defaults atomically. Applier may be shared by goroutines.
+// Apply applies defaults atomically for configuration data. Concurrent calls
+// must use distinct targets and concurrency-safe custom callbacks.
 func (a *Applier) Apply(target any) (err error) {
 	if a == nil {
 		return fmt.Errorf("%w: nil applier", ErrInvalidOption)
@@ -57,7 +70,10 @@ func (a *Applier) Apply(target any) (err error) {
 		}
 	}()
 
-	working := deepClone(value.Elem())
+	working, err := deepClone(value.Elem(), a.config.maxDepth)
+	if err != nil {
+		return err
+	}
 	state := traversal{
 		applier: a,
 		visited: make(map[visit]struct{}),

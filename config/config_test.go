@@ -35,8 +35,13 @@ type contextKey struct{}
 
 type passValidator struct{}
 
-func (passValidator) Struct(context.Context, any) error      { return nil }
-func (passValidator) Var(context.Context, any, string) error { return nil }
+func (passValidator) Struct(context.Context, any) error {
+	return nil
+}
+
+func (passValidator) Var(context.Context, any, string) error {
+	return nil
+}
 
 type fakeRemote struct {
 	mu      sync.RWMutex

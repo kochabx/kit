@@ -118,9 +118,19 @@ func TestSubmittedRetryPolicySurvivesWorkerDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	producer := mustTask[string]("attempt.job", WithRetry(Exponential{MaxAttempts: 2, Initial: 5 * time.Millisecond, Max: 5 * time.Millisecond}))
-	worker := mustTask[string]("attempt.job", WithRetry(Exponential{MaxAttempts: 10, Initial: 5 * time.Millisecond, Max: 5 * time.Millisecond}))
-	if err := mustBind(s, worker).Handle(func(context.Context, string) error { return errors.New("always fails") }); err != nil {
+	producer := mustTask[string]("attempt.job", WithRetry(Exponential{
+		MaxAttempts: 2,
+		Initial:     5 * time.Millisecond,
+		Max:         5 * time.Millisecond,
+	}))
+	worker := mustTask[string]("attempt.job", WithRetry(Exponential{
+		MaxAttempts: 10,
+		Initial:     5 * time.Millisecond,
+		Max:         5 * time.Millisecond,
+	}))
+	if err := mustBind(s, worker).Handle(func(context.Context, string) error {
+		return errors.New("always fails")
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -178,7 +188,10 @@ func TestImmediateJobDoesNotRequireDispatcher(t *testing.T) {
 	}
 	d := mustTask[string]("immediate.fast", WithRetry(NoRetry{}))
 	handled := make(chan struct{}, 1)
-	if err := mustBind(s, d).Handle(func(context.Context, string) error { handled <- struct{}{}; return nil }); err != nil {
+	if err := mustBind(s, d).Handle(func(context.Context, string) error {
+		handled <- struct{}{}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

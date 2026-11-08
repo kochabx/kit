@@ -364,7 +364,9 @@ func TestNewRunnerRejectsTypedNil(t *testing.T) {
 
 type typedNilRunnable struct{}
 
-func (*typedNilRunnable) Run(context.Context) error { return nil }
+func (*typedNilRunnable) Run(context.Context) error {
+	return nil
+}
 
 type lifecycleComponent struct {
 	start func(context.Context) error

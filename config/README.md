@@ -96,3 +96,13 @@ func (cfg *AppConfig) Validate(ctx context.Context) error {
 包括其中的 map、slice 和 pointer。
 
 错误可通过 `ErrRead`、`ErrDecode` 和 `ErrValidation` 判断类型。
+
+## 解码与生命周期
+
+实际顺序是：应用 `default` 标签 → Viper 解码并覆盖配置 → 字段校验 → `Validate(ctx)` 跨字段校验。配置键映射使用 Viper 默认的 `mapstructure` 标签。
+
+`New[T]` 的 T 必须是结构体。文件监听由 Viper 管理，远程监听用传入的 Context 取消；没有通用的 `Config.Close`。测试文件监听需要允许文件系统事件。
+
+```bash
+go test -race ./config -count=1
+```

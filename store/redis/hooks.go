@@ -68,7 +68,12 @@ func (h *debugHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.Pr
 			for i, cmd := range cmds {
 				cmdNames[i] = cmd.FullName()
 			}
-			h.logger.Warn().Strs("commands", cmdNames).Int("count", len(cmds)).Dur("duration", duration).Dur("threshold", h.slowQueryThreshold).Msg("slow redis pipeline")
+			h.logger.Warn().
+				Strs("commands", cmdNames).
+				Int("count", len(cmds)).
+				Dur("duration", duration).
+				Dur("threshold", h.slowQueryThreshold).
+				Msg("slow redis pipeline")
 			return err
 		}
 

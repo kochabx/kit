@@ -1,8 +1,12 @@
 local replay = read_receipt(KEYS[6], ARGV[10])
-if replay then return replay end
+if replay then
+  return replay
+end
 local clock = redis.call('TIME')
 local now = clock[1] * 1000 + math.floor(clock[2] / 1000)
-if not owns_lease(KEYS[1], ARGV[1], now) then return 0 end
+if not owns_lease(KEYS[1], ARGV[1], now) then
+  return 0
+end
 if redis.call('HGET', KEYS[1], 'cancel_requested') == '1' then
   local id = redis.call('HGET', KEYS[1], 'id')
   append_attempt(KEYS[1], KEYS[7], ARGV[11], ARGV[12], now, 'cancelled', ARGV[2])

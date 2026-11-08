@@ -70,7 +70,10 @@ func TestQueueRetryDeadAndCancellationRoutes(t *testing.T) {
 	if err := client.HSet(ctx, s.namespace.Keys.Job("dead-manual"), "id", "dead-manual", "queue", "reports", "state", "dead").Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, s.queues["reports"].store.Keys.Dead(), redis.Z{Score: float64(time.Now().UnixMilli()), Member: "dead-manual"}).Err(); err != nil {
+	if err := client.ZAdd(ctx, s.queues["reports"].store.Keys.Dead(), redis.Z{
+		Score:  float64(time.Now().UnixMilli()),
+		Member: "dead-manual",
+	}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Jobs().Delete(ctx, "dead-manual"); err != nil {
@@ -87,7 +90,10 @@ func TestCronPreservesQueueAndManagementRoutes(t *testing.T) {
 	namespace := fmt.Sprintf("queue-cron-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
 	s := queueTestScheduler(t, client, namespace, RoleDispatcher, "cron", "other")
-	schedule, err := mustBind(s, mustTask[int]("cron", WithQueue("cron"))).Schedule(ctx, 1, CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, mustTask[int]("cron", WithQueue("cron"))).Schedule(ctx, 1, CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +109,10 @@ func TestCronPreservesQueueAndManagementRoutes(t *testing.T) {
 	if err := client.HSet(ctx, s.namespace.Keys.Schedule(schedule.ID), "next_at", due).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, q.store.Keys.Schedules(), redis.Z{Score: float64(due), Member: schedule.ID}).Err(); err != nil {
+	if err := client.ZAdd(ctx, q.store.Keys.Schedules(), redis.Z{
+		Score:  float64(due),
+		Member: schedule.ID,
+	}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.dispatchSchedules(ctx); err != nil {
@@ -160,7 +169,10 @@ func TestWrongQueueDeliveryCannotAcquireJob(t *testing.T) {
 	if err := wrong.store.EnsureConsumerGroup(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.XAdd(ctx, &redis.XAddArgs{Stream: wrong.store.Keys.Ready(), Values: map[string]any{"job_id": job.ID}}).Err(); err != nil {
+	if err := client.XAdd(ctx, &redis.XAddArgs{
+		Stream: wrong.store.Keys.Ready(),
+		Values: map[string]any{"job_id": job.ID},
+	}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	deliveries, err := wrong.store.ReadDeliveries(ctx, "wrong-reader", time.Millisecond, 1)
@@ -211,7 +223,10 @@ func TestCronWrongQueueIndexDoesNotMisroute(t *testing.T) {
 	namespace := fmt.Sprintf("queue-cron-stale-index-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
 	s := queueTestScheduler(t, client, namespace, RoleDispatcher, "a", "b")
-	schedule, err := mustBind(s, mustTask[int]("task", WithQueue("a"))).Schedule(ctx, 1, CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, mustTask[int]("task", WithQueue("a"))).Schedule(ctx, 1, CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,7 +239,10 @@ func TestCronWrongQueueIndexDoesNotMisroute(t *testing.T) {
 		t.Fatal(err)
 	}
 	wrong := s.queues["b"]
-	if err := client.ZAdd(ctx, wrong.store.Keys.Schedules(), redis.Z{Score: float64(due), Member: schedule.ID}).Err(); err != nil {
+	if err := client.ZAdd(ctx, wrong.store.Keys.Schedules(), redis.Z{
+		Score:  float64(due),
+		Member: schedule.ID,
+	}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := wrong.dispatchSchedules(ctx); err != nil {
@@ -261,7 +279,10 @@ func TestDelayedWrongQueueIndexDoesNotMisroute(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"a", "b"} {
-		if err := client.ZAdd(ctx, s.queues[name].store.Keys.Scheduled(), redis.Z{Score: float64(due), Member: job.ID}).Err(); err != nil {
+		if err := client.ZAdd(ctx, s.queues[name].store.Keys.Scheduled(), redis.Z{
+			Score:  float64(due),
+			Member: job.ID,
+		}).Err(); err != nil {
 			t.Fatal(err)
 		}
 	}

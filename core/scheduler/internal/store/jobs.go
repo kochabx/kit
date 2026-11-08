@@ -131,7 +131,29 @@ func (s *Queue) enqueueChunk(ctx context.Context, records []EnqueueRecord) []Enq
 		if r.UniqueKey != "" {
 			unique = s.Keys.Unique(r.UniqueKey)
 		}
-		cmds[i] = Enqueue.Eval(ctx, pipe, []string{s.Keys.Job(r.ID), s.Keys.Scheduled(), unique, s.Keys.Ready(), s.Keys.Submission(r.ID)}, r.ID, r.TaskName, r.Payload, TimeMillis(r.RunAt), r.MaxAttempts, r.UniqueKey, CeilDurationMillis(r.UniqueTTL), s.Keys.JobPrefix(), CeilDurationMillis(r.Delay), r.Fingerprint, TimeMillis(r.ExpiresAt), CeilDurationMillis(r.ExpiresAfter), s.Keys.Name, r.Version, encodePolicy(r.Policy), s.Keys.Name+":"+submissionSignature(r), CeilDurationMillis(s.SubmissionRetention), uuid.NewString())
+		cmds[i] = Enqueue.Eval(
+			ctx,
+			pipe,
+			[]string{s.Keys.Job(r.ID), s.Keys.Scheduled(), unique, s.Keys.Ready(), s.Keys.Submission(r.ID)},
+			r.ID,
+			r.TaskName,
+			r.Payload,
+			TimeMillis(r.RunAt),
+			r.MaxAttempts,
+			r.UniqueKey,
+			CeilDurationMillis(r.UniqueTTL),
+			s.Keys.JobPrefix(),
+			CeilDurationMillis(r.Delay),
+			r.Fingerprint,
+			TimeMillis(r.ExpiresAt),
+			CeilDurationMillis(r.ExpiresAfter),
+			s.Keys.Name,
+			r.Version,
+			encodePolicy(r.Policy),
+			s.Keys.Name+":"+submissionSignature(r),
+			CeilDurationMillis(s.SubmissionRetention),
+			uuid.NewString(),
+		)
 	}
 	_, _ = pipe.Exec(ctx)
 	duplicateRows := make(map[string][]int)
@@ -255,6 +277,19 @@ func submissionSignature(r EnqueueRecord) string {
 		Unique                         string
 		UniqueTTL                      int64
 		Policy                         ExecutionPolicy
-	}{r.ID, r.TaskName, r.Version, r.Fingerprint, sha256.Sum256(r.Payload), TimeMillis(r.RunAt), TimeMillis(r.ExpiresAt), int64(r.Delay), int64(r.ExpiresAfter), r.UniqueKey, int64(r.UniqueTTL), r.Policy}, json.Deterministic(true))
+	}{
+		r.ID,
+		r.TaskName,
+		r.Version,
+		r.Fingerprint,
+		sha256.Sum256(r.Payload),
+		TimeMillis(r.RunAt),
+		TimeMillis(r.ExpiresAt),
+		int64(r.Delay),
+		int64(r.ExpiresAfter),
+		r.UniqueKey,
+		int64(r.UniqueTTL),
+		r.Policy,
+	}, json.Deterministic(true))
 	return fmt.Sprintf("%x", sha256.Sum256(b))
 }

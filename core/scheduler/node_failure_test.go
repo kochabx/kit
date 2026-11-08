@@ -21,9 +21,28 @@ func TestNodeFailureWorkerHelper(t *testing.T) {
 	if mode == "" {
 		return
 	}
-	client := redis.NewClient(&redis.Options{ContextTimeoutEnabled: true, Addr: os.Getenv("REDIS_ADDR"), Password: os.Getenv("REDIS_PASSWORD")})
+	client := redis.NewClient(&redis.Options{
+		ContextTimeoutEnabled: true,
+		Addr:                  os.Getenv("REDIS_ADDR"),
+		Password:              os.Getenv("REDIS_PASSWORD"),
+	})
 	defer client.Close()
-	s, err := NewWorker(client, WorkerConfig{Namespace: os.Getenv("SCHEDULER_TEST_NODE_NAMESPACE"), Queues: []QueueConfig{{Name: DefaultQueue, Concurrency: 1}}, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond}, Retention: RetentionConfig{Succeeded: time.Minute}})
+	s, err := NewWorker(
+		client,
+		WorkerConfig{
+			Namespace: os.Getenv("SCHEDULER_TEST_NODE_NAMESPACE"),
+			Queues: []QueueConfig{{
+				Name:        DefaultQueue,
+				Concurrency: 1,
+			}},
+			Execution: ExecutionConfig{
+				PollTimeout:        20 * time.Millisecond,
+				LeaseDuration:      3 * time.Second,
+				LeaseRenewInterval: 100 * time.Millisecond,
+			},
+			Retention: RetentionConfig{Succeeded: time.Minute},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +90,15 @@ func TestKilledNodeTaskRecoversOnReplacement(t *testing.T) {
 	}
 	start := func(mode string) (*exec.Cmd, <-chan struct{}) {
 		command := exec.Command(executable, "-test.run=^TestNodeFailureWorkerHelper$", "-test.timeout=20s")
-		command.Env = append(os.Environ(), "REDIS_ADDR="+client.Options().Addr, "REDIS_PASSWORD="+client.Options().Password, "SCHEDULER_TEST_NODE_NAMESPACE="+namespace, "SCHEDULER_TEST_NODE_MODE="+mode)
+		command.Env = append(
+			os.Environ(),
+			"REDIS_ADDR="+client.Options().
+				Addr,
+			"REDIS_PASSWORD="+client.Options().
+				Password,
+			"SCHEDULER_TEST_NODE_NAMESPACE="+namespace,
+			"SCHEDULER_TEST_NODE_MODE="+mode,
+		)
 		command.Stderr = io.Discard
 		output, err := command.StdoutPipe()
 		if err != nil {

@@ -32,7 +32,10 @@ func TestDispatcherUsesExplicitQueueSubscriptions(t *testing.T) {
 		t.Fatal(err)
 	}
 	runQueueTestScheduler(t, s)
-	eventually(t, time.Second, func() bool { job, err := s.Jobs().Get(ctx, a.ID); return err == nil && job.State == JobReady })
+	eventually(t, time.Second, func() bool {
+		job, err := s.Jobs().Get(ctx, a.ID)
+		return err == nil && job.State == JobReady
+	})
 	job, err := s.Jobs().Get(ctx, b.ID)
 	if err != nil || job.State != JobScheduled {
 		t.Fatalf("unassigned queue dispatched: %+v %v", job, err)
@@ -109,7 +112,10 @@ func TestQueueSubscriptionsValidateAndPreserveEmpty(t *testing.T) {
 			t.Fatal("invalid queue subscription accepted")
 		}
 	}
-	config, err := prepareConfig(WorkerConfig{Execution: ExecutionConfig{Queues: []string{}}, Dispatch: DispatchConfig{Queues: []string{}}})
+	config, err := prepareConfig(WorkerConfig{
+		Execution: ExecutionConfig{Queues: []string{}},
+		Dispatch:  DispatchConfig{Queues: []string{}},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,18 +8,18 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// RotateMode 日志轮转模式。
+// RotateMode selects the log rotation policy.
 type RotateMode int
 
 const (
 	RotateModeUnknown RotateMode = iota
-	// RotateModeTime 按时间轮转。
+	// RotateModeTime selects time-based rotation.
 	RotateModeTime
-	// RotateModeSize 按大小轮转。
+	// RotateModeSize selects size-based rotation.
 	RotateModeSize
 )
 
-// String 返回轮转模式的字符串表示
+// String returns the rotation mode name.
 func (m RotateMode) String() string {
 	switch m {
 	case RotateModeTime:
@@ -31,7 +31,7 @@ func (m RotateMode) String() string {
 	}
 }
 
-// timeRotateWriter 按时间轮转的 writer
+// timeRotateWriter creates a time-based rotating writer.
 func timeRotateWriter(config FileConfig) (io.Writer, error) {
 	writer, err := rotatelogs.New(
 		config.rotatePattern(),
@@ -45,7 +45,7 @@ func timeRotateWriter(config FileConfig) (io.Writer, error) {
 	return writer, nil
 }
 
-// sizeRotateWriter 按大小轮转的 writer
+// sizeRotateWriter creates a size-based rotating writer.
 func sizeRotateWriter(config FileConfig) (io.Writer, error) {
 	return &lumberjack.Logger{
 		Filename:   config.Path,

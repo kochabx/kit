@@ -45,6 +45,12 @@ func (p *Exponential) UnmarshalJSONFrom(dec *jsontext.Decoder) error {
 	if err := json.UnmarshalDecode(dec, &wire); err != nil {
 		return err
 	}
-	*p = Exponential{wire.MaxAttempts, time.Duration(wire.Initial), time.Duration(wire.Max), wire.Multiplier, wire.Jitter}
+	*p = Exponential{
+		wire.MaxAttempts,
+		time.Duration(wire.Initial),
+		time.Duration(wire.Max),
+		wire.Multiplier,
+		wire.Jitter,
+	}
 	return nil
 }

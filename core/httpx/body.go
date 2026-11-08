@@ -8,23 +8,27 @@ import (
 	"net/url"
 )
 
-// Body 描述一次请求的有效载荷。
+// Body describes a request payload.
 //
-// Encode 必须可以被安全地多次调用 (用于重试)，返回的字节切片不应在外部被修改。
-// 当 data 为 nil 时表示没有 body；contentType 为空时不会自动设置 Content-Type。
+// Encode must be safe to call repeatedly for retries. Callers must not modify the returned bytes.
+// Nil data means no body; an empty contentType leaves Content-Type unset.
 type Body interface {
 	Encode() (data []byte, contentType string, err error)
 }
 
-// bodyFunc 把函数适配为 Body 接口。
+// bodyFunc adapts a function to Body.
 type bodyFunc func() ([]byte, string, error)
 
-func (f bodyFunc) Encode() ([]byte, string, error) { return f() }
+func (f bodyFunc) Encode() ([]byte, string, error) {
+	return f()
+}
 
-// NoBody 表示不携带请求体。等价于传入 nil Body。
-func NoBody() Body { return bodyFunc(func() ([]byte, string, error) { return nil, "", nil }) }
+// NoBody represents an absent request body, equivalent to a nil Body.
+func NoBody() Body {
+	return bodyFunc(func() ([]byte, string, error) { return nil, "", nil })
+}
 
-// JSON 使用 application/json 编码 v 作为请求体。
+// JSON encodes v as an application/json request body.
 func JSON(v any) Body {
 	return bodyFunc(func() ([]byte, string, error) {
 		data, err := json.Marshal(v)
@@ -35,7 +39,7 @@ func JSON(v any) Body {
 	})
 }
 
-// XML 使用 application/xml 编码 v 作为请求体。
+// XML encodes v as an application/xml request body.
 func XML(v any) Body {
 	return bodyFunc(func() ([]byte, string, error) {
 		data, err := xml.Marshal(v)
@@ -46,14 +50,14 @@ func XML(v any) Body {
 	})
 }
 
-// Form 使用 application/x-www-form-urlencoded 编码 values 作为请求体。
+// Form encodes values as an application/x-www-form-urlencoded request body.
 func Form(values url.Values) Body {
 	return bodyFunc(func() ([]byte, string, error) {
 		return []byte(values.Encode()), ContentTypeForm, nil
 	})
 }
 
-// FormMap 是 Form 的便捷版本，接收 map[string]string。
+// FormMap is a convenience wrapper for a map of string values.
 func FormMap(values map[string]string) Body {
 	v := make(url.Values, len(values))
 	for k, val := range values {
@@ -62,17 +66,19 @@ func FormMap(values map[string]string) Body {
 	return Form(v)
 }
 
-// Raw 以给定 contentType 直接发送原始字节。contentType 为空时不会设置 Content-Type 头。
+// Raw sends data unchanged; an empty contentType leaves Content-Type unset.
 func Raw(contentType string, data []byte) Body {
 	return bodyFunc(func() ([]byte, string, error) { return data, contentType, nil })
 }
 
-// Text 以 text/plain 发送字符串。
-func Text(s string) Body { return Raw(ContentTypeText, []byte(s)) }
+// Text sends a string as text/plain.
+func Text(s string) Body {
+	return Raw(ContentTypeText, []byte(s))
+}
 
-// ReadAll 从 io.Reader 一次性读出全部字节，然后以 contentType 发送。
+// ReadAll creates a body that reads all bytes from r and uses contentType.
 //
-// 该函数会立即消费 reader，因此调用后请勿再读取。如果 reader 实现了 io.Closer，会被关闭。
+// Encoding consumes r and closes it if it implements io.Closer. Do not reuse the reader afterward.
 func ReadAll(contentType string, r io.Reader) Body {
 	return bodyFunc(func() ([]byte, string, error) {
 		if r == nil {

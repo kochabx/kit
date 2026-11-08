@@ -8,7 +8,7 @@ import (
 	"strings"
 )
 
-// 提供链式调用API用于构建复杂URL
+// URLBuilder provides a fluent API for constructing URLs.
 type URLBuilder struct {
 	scheme   string
 	host     string
@@ -18,26 +18,26 @@ type URLBuilder struct {
 	fragment string
 }
 
-// NewURLBuilder 创建新的URL构建器实例
+// NewURLBuilder creates a URL builder.
 func NewURLBuilder() *URLBuilder {
 	return &URLBuilder{
 		query: make(url.Values),
 	}
 }
 
-// Scheme 设置URL协议 (http, https, ftp等)
+// Scheme sets the URL scheme, such as http, https, or ftp.
 func (b *URLBuilder) Scheme(scheme string) *URLBuilder {
 	b.scheme = scheme
 	return b
 }
 
-// Host 设置主机地址
+// Host sets the host address.
 func (b *URLBuilder) Host(host string) *URLBuilder {
 	b.host = host
 	return b
 }
 
-// Port 设置端口号
+// Port sets the port number.
 func (b *URLBuilder) Port(port string) *URLBuilder {
 	if port != "" && port != "0" {
 		b.port = port
@@ -45,7 +45,7 @@ func (b *URLBuilder) Port(port string) *URLBuilder {
 	return b
 }
 
-// Path 设置完整路径，会覆盖之前的路径。传入空字符串将清空路径。
+// Path replaces the complete path. An empty string clears it.
 func (b *URLBuilder) Path(path string) *URLBuilder {
 	b.path.Reset()
 	if path != "" {
@@ -54,7 +54,7 @@ func (b *URLBuilder) Path(path string) *URLBuilder {
 	return b
 }
 
-// AppendPath 追加路径段，自动处理斜杠
+// AppendPath appends path segments and normalizes slash boundaries.
 func (b *URLBuilder) AppendPath(segments ...string) *URLBuilder {
 	if len(segments) == 0 {
 		return b
@@ -62,13 +62,13 @@ func (b *URLBuilder) AppendPath(segments ...string) *URLBuilder {
 
 	currentPath := b.path.String()
 
-	// 构建新路径
+	// Build the new path.
 	var pathSegments []string
 	if currentPath != "" {
 		pathSegments = append(pathSegments, currentPath)
 	}
 
-	// 过滤空段
+	// Filter out empty segments.
 	for _, segment := range segments {
 		if segment != "" {
 			pathSegments = append(pathSegments, segment)
@@ -83,19 +83,19 @@ func (b *URLBuilder) AppendPath(segments ...string) *URLBuilder {
 	return b
 }
 
-// Query 添加单个查询参数
+// Query appends a query parameter.
 func (b *URLBuilder) Query(key, value string) *URLBuilder {
 	b.query.Add(key, value)
 	return b
 }
 
-// SetQuery 设置查询参数，会覆盖同名参数
+// SetQuery replaces existing values for a query parameter.
 func (b *URLBuilder) SetQuery(key, value string) *URLBuilder {
 	b.query.Set(key, value)
 	return b
 }
 
-// QueryMap 批量添加查询参数
+// QueryMap appends query parameters from a map.
 func (b *URLBuilder) QueryMap(params map[string]string) *URLBuilder {
 	for k, v := range params {
 		b.query.Add(k, v)
@@ -103,7 +103,7 @@ func (b *URLBuilder) QueryMap(params map[string]string) *URLBuilder {
 	return b
 }
 
-// SetQueryMap 批量设置查询参数，会覆盖同名参数
+// SetQueryMap sets query parameters, replacing matching names.
 func (b *URLBuilder) SetQueryMap(params map[string]string) *URLBuilder {
 	for k, v := range params {
 		b.query.Set(k, v)
@@ -111,7 +111,7 @@ func (b *URLBuilder) SetQueryMap(params map[string]string) *URLBuilder {
 	return b
 }
 
-// QuerySlice 添加多值查询参数
+// QuerySlice appends multiple values for a query parameter.
 func (b *URLBuilder) QuerySlice(key string, values []string) *URLBuilder {
 	for _, value := range values {
 		b.query.Add(key, value)
@@ -119,13 +119,13 @@ func (b *URLBuilder) QuerySlice(key string, values []string) *URLBuilder {
 	return b
 }
 
-// Fragment 设置URL片段标识符 (#后面的部分)
+// Fragment sets the URL fragment after the # delimiter.
 func (b *URLBuilder) Fragment(fragment string) *URLBuilder {
 	b.fragment = fragment
 	return b
 }
 
-// Build 构建最终的URL字符串
+// Build constructs the final URL string.
 func (b *URLBuilder) Build() (string, error) {
 	u := &url.URL{
 		Scheme: b.scheme,
@@ -144,13 +144,13 @@ func (b *URLBuilder) Build() (string, error) {
 	return u.String(), nil
 }
 
-// String 实现fmt.Stringer接口
+// String implements fmt.Stringer.
 func (b *URLBuilder) String() string {
 	result, _ := b.Build()
 	return result
 }
 
-// Reset 重置构建器到初始状态
+// Reset restores the builder to its initial state.
 func (b *URLBuilder) Reset() *URLBuilder {
 	b.scheme = ""
 	b.host = ""
@@ -161,7 +161,7 @@ func (b *URLBuilder) Reset() *URLBuilder {
 	return b
 }
 
-// Clone 深拷贝构建器
+// Clone creates an independent copy of the builder.
 func (b *URLBuilder) Clone() *URLBuilder {
 	newBuilder := &URLBuilder{
 		scheme:   b.scheme,
@@ -171,10 +171,10 @@ func (b *URLBuilder) Clone() *URLBuilder {
 		query:    make(url.Values),
 	}
 
-	// 拷贝路径
+	// Copy the path.
 	newBuilder.path.WriteString(b.path.String())
 
-	// 深拷贝查询参数
+	// Deep-copy query parameters.
 	for k, v := range b.query {
 		newBuilder.query[k] = slices.Clone(v)
 	}
@@ -182,7 +182,7 @@ func (b *URLBuilder) Clone() *URLBuilder {
 	return newBuilder
 }
 
-// buildHost 构建主机部分，包含端口
+// buildHost constructs the host, including the port.
 func (b *URLBuilder) buildHost() string {
 	if b.host == "" {
 		return ""
@@ -195,17 +195,17 @@ func (b *URLBuilder) buildHost() string {
 	return b.host + ":" + b.port
 }
 
-// BuildHTTP 快速构建HTTP URL
+// BuildHTTP constructs an HTTP URL.
 func BuildHTTP(host string, pathSegments ...string) *URLBuilder {
 	return NewURLBuilder().Scheme("http").Host(host).AppendPath(pathSegments...)
 }
 
-// BuildHTTPS 快速构建HTTPS URL
+// BuildHTTPS constructs an HTTPS URL.
 func BuildHTTPS(host string, pathSegments ...string) *URLBuilder {
 	return NewURLBuilder().Scheme("https").Host(host).AppendPath(pathSegments...)
 }
 
-// FromURL 从现有URL字符串创建构建器
+// FromURL creates a builder from an existing URL string.
 func FromURL(rawURL string) (*URLBuilder, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
@@ -227,7 +227,7 @@ func FromURL(rawURL string) (*URLBuilder, error) {
 	return builder, nil
 }
 
-// Join 简单的路径拼接函数
+// Join joins path segments.
 func Join(base string, segments ...string) string {
 	if len(segments) == 0 {
 		return base

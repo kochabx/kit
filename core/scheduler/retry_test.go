@@ -38,9 +38,13 @@ func TestExponentialSaturatesDurationBoundary(t *testing.T) {
 
 type panicRetry struct{}
 
-func (panicRetry) Identity() string { return "panic:v1" }
+func (panicRetry) Identity() string {
+	return "panic:v1"
+}
 
-func (panicRetry) NextDelay(int, error) (time.Duration, bool) { panic("broken policy") }
+func (panicRetry) NextDelay(int, error) (time.Duration, bool) {
+	panic("broken policy")
+}
 
 func TestRetryPolicyBoundary(t *testing.T) {
 	for _, cause := range []error{Permanent(errors.New("invalid payload")), errors.New("exhausted")} {

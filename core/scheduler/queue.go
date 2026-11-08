@@ -77,7 +77,9 @@ type Scan = model.Scan
 // when Items is empty. Concurrent index updates may yield duplicates.
 type Page[T any] = model.Page[T]
 
-func isValidScan(count int64) bool { return count > 0 && count <= 1000 }
+func isValidScan(count int64) bool {
+	return count > 0 && count <= 1000
+}
 
 func isValidScheduleState(state ScheduleState) bool {
 	return state == "" || state == ScheduleActive || state == SchedulePaused || state == ScheduleCancelled || state == ScheduleInvalid

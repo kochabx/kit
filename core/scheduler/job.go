@@ -53,7 +53,9 @@ func ExpiresAfter(d time.Duration) EnqueueOption {
 
 // WithJobID makes submission retryable within Retention.Submission, even if the Job
 // has already been removed. Reusing an ID with a different request is a conflict.
-func WithJobID(id string) EnqueueOption { return func(o *enqueueOptions) { o.id = id } }
+func WithJobID(id string) EnqueueOption {
+	return func(o *enqueueOptions) { o.id = id }
+}
 
 // Attempt is an optional retained execution-history entry.
 type Attempt = model.Attempt

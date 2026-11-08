@@ -24,12 +24,46 @@ type Observer struct {
 
 func NewObserver() *Observer {
 	return &Observer{
-		jobs:        prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "scheduler_jobs", Help: "Latest externally supplied queue state snapshot."}, []string{"queue", "state"}),
-		lag:         prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "scheduler_dispatch_lag_seconds", Help: "Latest delayed job dispatch lag."}, []string{"queue"}),
-		pendingIdle: prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "scheduler_pending_head_idle_seconds", Help: "Latest idle age of the first pending stream entry."}, []string{"queue"}),
-		dropped:     prometheus.NewGauge(prometheus.GaugeOpts{Name: "scheduler_observer_dropped", Help: "Latest process observer drop count supplied by the caller."}),
-		events:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "scheduler_events_total", Help: "Scheduler events by queue, task, kind and bounded outcome."}, []string{"queue", "task", "kind", "outcome"}),
-		durations:   prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: "scheduler_execution_duration_seconds", Help: "Handler execution duration including timeout waits.", Buckets: prometheus.DefBuckets}, []string{"queue", "task"}),
+		jobs: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "scheduler_jobs",
+				Help: "Latest externally supplied queue state snapshot.",
+			},
+			[]string{"queue", "state"},
+		),
+		lag: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "scheduler_dispatch_lag_seconds",
+				Help: "Latest delayed job dispatch lag.",
+			},
+			[]string{"queue"},
+		),
+		pendingIdle: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "scheduler_pending_head_idle_seconds",
+				Help: "Latest idle age of the first pending stream entry.",
+			},
+			[]string{"queue"},
+		),
+		dropped: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "scheduler_observer_dropped",
+			Help: "Latest process observer drop count supplied by the caller.",
+		}),
+		events: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "scheduler_events_total",
+				Help: "Scheduler events by queue, task, kind and bounded outcome.",
+			},
+			[]string{"queue", "task", "kind", "outcome"},
+		),
+		durations: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "scheduler_execution_duration_seconds",
+				Help:    "Handler execution duration including timeout waits.",
+				Buckets: prometheus.DefBuckets,
+			},
+			[]string{"queue", "task"},
+		),
 	}
 }
 
@@ -55,6 +89,7 @@ func (o *Observer) Observe(_ context.Context, event scheduler.Event) {
 		o.durations.WithLabelValues(event.Queue, event.TaskName).Observe(event.Duration.Seconds())
 	}
 }
+
 func (o *Observer) Describe(ch chan<- *prometheus.Desc) {
 	o.events.Describe(ch)
 	o.durations.Describe(ch)
@@ -63,6 +98,7 @@ func (o *Observer) Describe(ch chan<- *prometheus.Desc) {
 	o.pendingIdle.Describe(ch)
 	o.dropped.Describe(ch)
 }
+
 func (o *Observer) Collect(ch chan<- prometheus.Metric) {
 	o.events.Collect(ch)
 	o.durations.Collect(ch)
@@ -77,7 +113,14 @@ func (o *Observer) SetQueueStats(queue string, stats scheduler.Stats) {
 	for _, state := range []struct {
 		name  string
 		value int64
-	}{{"scheduled", stats.Scheduled}, {"ready", stats.Ready}, {"pending", stats.Pending}, {"running", stats.Running}, {"dead", stats.Dead}, {"schedules", stats.Schedules}} {
+	}{
+		{"scheduled", stats.Scheduled},
+		{"ready", stats.Ready},
+		{"pending", stats.Pending},
+		{"running", stats.Running},
+		{"dead", stats.Dead},
+		{"schedules", stats.Schedules},
+	} {
 		o.jobs.WithLabelValues(queue, state.name).Set(float64(state.value))
 	}
 	o.lag.WithLabelValues(queue).Set(stats.DispatchLag.Seconds())
@@ -85,4 +128,6 @@ func (o *Observer) SetQueueStats(queue string, stats scheduler.Stats) {
 }
 
 // SetObserverDropped publishes Client.Stats().ObserverDropped.
-func (o *Observer) SetObserverDropped(count uint64) { o.dropped.Set(float64(count)) }
+func (o *Observer) SetObserverDropped(count uint64) {
+	o.dropped.Set(float64(count))
+}

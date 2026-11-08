@@ -57,7 +57,14 @@ func TestOperationTimeoutBoundsUnresponsiveRedis(t *testing.T) {
 		defer conn.Close()
 		<-serverDone
 	}()
-	r := redis.NewClient(&redis.Options{Addr: listener.Addr().String(), ContextTimeoutEnabled: true, MaxRetries: -1, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second})
+	r := redis.NewClient(&redis.Options{
+		Addr: listener.Addr().
+			String(),
+		ContextTimeoutEnabled: true,
+		MaxRetries:            -1,
+		ReadTimeout:           10 * time.Second,
+		WriteTimeout:          10 * time.Second,
+	})
 	defer r.Close()
 	c, err := NewClient(r, ClientConfig{OperationTimeout: 40 * time.Millisecond})
 	if err != nil {

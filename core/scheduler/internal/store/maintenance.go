@@ -22,7 +22,14 @@ func (s *Queue) PruneExpiredDeadIndex(ctx context.Context, batch int64) (int64, 
 func (s *Queue) PurgeExpiredSchedules(ctx context.Context, batch int64) (int64, error) {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	result, err := PurgeExpiredSchedules.Run(ctx, s.Client, []string{s.Keys.TerminalSchedules(), s.Keys.ScheduleCatalog(), s.Keys.Schedules()}, s.Keys.SchedulePrefix(), batch).Int64()
+	result, err := PurgeExpiredSchedules.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.TerminalSchedules(), s.Keys.ScheduleCatalog(), s.Keys.Schedules()},
+		s.Keys.SchedulePrefix(),
+		batch,
+	).
+		Int64()
 	if err != nil {
 		return 0, fmt.Errorf("cleanup expired cron schedules: %w", err)
 	}

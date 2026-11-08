@@ -54,7 +54,9 @@ func NewServer(handler http.Handler, opts ...Option) *Server {
 }
 
 // Handler returns the effective handler, including configured built-in endpoints.
-func (s *Server) Handler() http.Handler { return s.srv.Handler }
+func (s *Server) Handler() http.Handler {
+	return s.srv.Handler
+}
 
 // Start opens the listener and serves requests in the background.
 func (s *Server) Start(_ context.Context) error {

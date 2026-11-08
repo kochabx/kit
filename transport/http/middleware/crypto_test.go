@@ -11,24 +11,24 @@ import (
 )
 
 // ============================================================================
-// Crypto 中间件测试
-// 展示：stdlib net/http 与 Gin 两种框架下的一致行为
+// Crypto middleware tests.
+// Verify consistent behavior with net/http and Gin.
 // ============================================================================
 
-// identityDecryptor 身份解密器：原样返回，用于测试
+// identityDecryptor returns its input unchanged for testing.
 var identityDecryptor = DecryptorFunc(func(ciphertext []byte) ([]byte, error) {
 	return ciphertext, nil
 })
 
-// failDecryptor 失败解密器：始终返回错误
+// failDecryptor always returns an error.
 var failDecryptor = DecryptorFunc(func(ciphertext []byte) ([]byte, error) {
 	return nil, errors.New("decrypt failed")
 })
 
 func TestCrypto_Success(t *testing.T) {
 	plaintext := `{"user":"alice"}`
-	// 因为 Base64Decode 默认为 true，body 需要是 base64 编码的"密文"
-	// 使用身份解密器时：密文 = 明文，body = base64(明文)
+	// This test sends Base64-encoded ciphertext.
+	// The identity decryptor returns its input unchanged; the request contains Base64 plaintext.
 	encoded := base64.StdEncoding.EncodeToString([]byte(plaintext))
 
 	mw := Crypto(CryptoConfig{Decryptor: identityDecryptor})
@@ -69,7 +69,7 @@ func TestCrypto_DecryptFail(t *testing.T) {
 }
 
 func TestCrypto_EmptyBody(t *testing.T) {
-	// 空 body 应直接透传，不调用解密器
+	// An empty body should pass through without invoking the decryptor.
 	called := false
 	d := DecryptorFunc(func(ciphertext []byte) ([]byte, error) {
 		called = true
@@ -96,7 +96,7 @@ func TestCrypto_InvalidBase64(t *testing.T) {
 	w := httptest.NewRecorder()
 	mw(okHandler).ServeHTTP(w, req)
 
-	// base64 解码失败，触发 ErrorHandler
+	// Expect malformed Base64 to invoke ErrorHandler.
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d (Fail uses business code)", w.Code, http.StatusOK)
 	}
@@ -106,7 +106,7 @@ func TestCrypto_InvalidBase64(t *testing.T) {
 }
 
 func TestCrypto_SkipPaths(t *testing.T) {
-	// 在跳过的路径上，body 不经过解密
+	// Skipped requests retain their original body.
 	var gotBody string
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -156,7 +156,7 @@ func TestCrypto_CustomErrorHandler(t *testing.T) {
 }
 
 // ============================================================================
-// Gin 集成测试
+// Gin integration test.
 // ============================================================================
 
 func TestCrypto_Gin(t *testing.T) {

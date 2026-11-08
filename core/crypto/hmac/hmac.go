@@ -228,7 +228,9 @@ func (signature Signature) ReplayKey() string {
 }
 
 // Expiration returns the configured signature validity window.
-func (signer *Signer) Expiration() time.Duration { return signer.expiration }
+func (signer *Signer) Expiration() time.Duration {
+	return signer.expiration
+}
 
 func (signer *Signer) compute(keyID string, key []byte, timestamp int64, nonce, payload []byte) []byte {
 	mac := hmac.New(sha256.New, key)

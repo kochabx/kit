@@ -9,7 +9,9 @@ import (
 // Jobs operates on jobs by namespace-wide ID; mutations use persisted queue ownership.
 type Jobs struct{ scheduler *clientState }
 
-func (s *clientState) Jobs() Jobs { return Jobs{scheduler: s} }
+func (s *clientState) Jobs() Jobs {
+	return Jobs{scheduler: s}
+}
 
 func (j Jobs) Get(ctx context.Context, id string) (*Job, error) {
 	if j.scheduler == nil || id == "" {

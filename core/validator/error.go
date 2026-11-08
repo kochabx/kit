@@ -2,53 +2,71 @@ package validator
 
 import (
 	"errors"
+	"slices"
 	"strings"
 )
 
-// Violation 描述单个字段的一条校验失败。
+// Violation describes one field validation failure without its raw value.
 type Violation struct {
-	// Field 是失败的字段名（受 WithFieldNameTag 影响）。
+	// Field is the short field name selected by WithFieldNameTag; it may be empty for single-value validation.
 	Field string
-	// Tag 是失败的校验约束标签（如 "required"）。
+	// Tag is the failed validation constraint, such as "required".
 	Tag string
-	// Param 是校验约束的参数值（如 gte=18 中的 "18"），无参数时为空字符串。
+	// Param is the constraint parameter, such as "18" in gte=18, or an empty string when absent.
 	Param string
-	// Value 是校验时的字段值。
-	Value any
-	// Message 是经翻译的、人类可读的错误消息。
+	// Path includes the root struct name, nested fields, and collection indexes, such as Request.users[0].email.
+	// Field names follow WithFieldNameTag; the path may be empty for single-value validation.
+	Path string
+	// Message is the translated, human-readable validation message.
 	Message string
 }
 
-// Error 是 Struct / Var 在有字段校验失败时返回的聚合错误。
+// Error aggregates field failures from Struct or Var and preserves the underlying error chain.
 //
-// 推荐通过 errors.AsType 提取：
+// Extract it with errors.AsType:
 //
 //	if ve, ok := errors.AsType[*validator.Error](err); ok { … }
 type Error struct {
 	violations []Violation
 	message    string
+	cause      error
 }
 
-// Error 实现 error 接口。
-func (ve *Error) Error() string { return ve.message }
+// Error joins validation messages with a semicolon and a space.
+func (ve *Error) Error() string {
+	return ve.message
+}
 
-// Violations 返回各字段校验错误，顺序与遇到的顺序一致。
-func (ve *Error) Violations() []Violation { return ve.violations }
+// Violations returns a copy of the failures in the order reported by the underlying validator.
+// Modifying the returned slice does not change Error.
+func (ve *Error) Violations() []Violation {
+	return slices.Clone(ve.violations)
+}
 
-// newError 根据 Violation 切片构造 *Error。
-func newError(violations []Violation) *Error {
+// newError copies failures, joins messages, and preserves the cause for Unwrap.
+func newError(violations []Violation, cause error) *Error {
 	msgs := make([]string, len(violations))
 	for i, v := range violations {
 		msgs[i] = v.Message
 	}
 	return &Error{
-		violations: violations,
+		violations: slices.Clone(violations),
+		cause:      cause,
 		message:    strings.Join(msgs, "; "),
 	}
 }
 
-// AsError 报告 err（或其 Unwrap 链路中的某个错误）是否为 *Error。
+// AsError reports whether err's error chain contains an *Error.
 func AsError(err error) bool {
 	_, ok := errors.AsType[*Error](err)
 	return ok
 }
+
+// Unwrap returns the cause, which can be inspected with errors.AsType[gv.ValidationErrors].
+// The cause can expose raw field values and should not be sent directly in public responses.
+func (ve *Error) Unwrap() error {
+	return ve.cause
+}
+
+// ErrInvalidOption identifies invalid New configuration or registration; use errors.Is to match it.
+var ErrInvalidOption = errors.New("invalid validator option")

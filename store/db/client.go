@@ -131,8 +131,13 @@ func applyPoolConfig(db *sql.DB, pool PoolConfig) {
 	db.SetConnMaxIdleTime(pool.ConnMaxIdleTime)
 }
 
-func (c *Client) DB() *gorm.DB       { return c.db }
-func (c *Client) Stats() sql.DBStats { return c.sqlDB.Stats() }
+func (c *Client) DB() *gorm.DB {
+	return c.db
+}
+
+func (c *Client) Stats() sql.DBStats {
+	return c.sqlDB.Stats()
+}
 
 func (c *Client) Ping(ctx context.Context) error {
 	if err := c.sqlDB.PingContext(ctx); err != nil {
@@ -148,6 +153,14 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }
-func (c *Client) Stop(context.Context) error            { return c.Close() }
-func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
+func (c *Client) Stop(context.Context) error {
+	return c.Close()
+}
+
+func (c *Client) HealthCheck(ctx context.Context) error {
+	return c.Ping(ctx)
+}

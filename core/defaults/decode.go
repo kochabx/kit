@@ -5,11 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json/v2"
-	"errors"
-	"net"
-	"net/url"
 	"reflect"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -21,21 +17,12 @@ const (
 	timeDateOnly    = time.DateOnly
 )
 
-var (
-	durationType = reflect.TypeFor[time.Duration]()
-	timeType     = reflect.TypeFor[time.Time]()
-	locationType = reflect.TypeFor[time.Location]()
-	urlType      = reflect.TypeFor[url.URL]()
-	ipType       = reflect.TypeFor[net.IP]()
-	ipNetType    = reflect.TypeFor[net.IPNet]()
-	regexpType   = reflect.TypeFor[regexp.Regexp]()
-)
-
 type builtinDecoder struct {
-	timeLayouts []string
+	parsers     map[reflect.Type]func(reflect.Value, string) error
+	jsonOptions json.Options
 }
 
-func (d builtinDecoder) Decode(value reflect.Value, raw string) error {
+func (d *builtinDecoder) Decode(value reflect.Value, raw string) error {
 	if value.Kind() == reflect.Pointer {
 		decoded := reflect.New(value.Type().Elem())
 		if err := d.Decode(decoded.Elem(), raw); err != nil {
@@ -45,12 +32,22 @@ func (d builtinDecoder) Decode(value reflect.Value, raw string) error {
 		return nil
 	}
 
-	if handled, err := d.decodeKnownType(value, raw); handled {
+	if parse, ok := d.parsers[value.Type()]; ok {
+		return parse(value, raw)
+	}
+	if value.Type() == reflect.TypeFor[[]byte]() {
+		parsed, err := decodeBytes(raw)
+		if err == nil {
+			value.SetBytes(parsed)
+		}
 		return err
 	}
 	if value.CanAddr() {
 		if unmarshaler, ok := value.Addr().Interface().(encoding.TextUnmarshaler); ok {
 			return unmarshaler.UnmarshalText([]byte(raw))
+		}
+		if _, ok := value.Addr().Interface().(json.UnmarshalerFrom); ok {
+			return d.decodeJSON(value, raw)
 		}
 		if unmarshaler, ok := value.Addr().Interface().(json.Unmarshaler); ok {
 			return unmarshaler.UnmarshalJSON([]byte(raw))
@@ -92,73 +89,11 @@ func (d builtinDecoder) Decode(value reflect.Value, raw string) error {
 		}
 		value.SetComplex(parsed)
 	case reflect.Slice, reflect.Map, reflect.Array, reflect.Struct:
-		return decodeJSON(value, raw)
+		return d.decodeJSON(value, raw)
 	default:
 		return ErrUnsupportedType
 	}
 	return nil
-}
-
-func (d builtinDecoder) decodeKnownType(value reflect.Value, raw string) (bool, error) {
-	trimmed := strings.TrimSpace(raw)
-	switch value.Type() {
-	case durationType:
-		parsed, err := time.ParseDuration(trimmed)
-		if err == nil {
-			value.SetInt(int64(parsed))
-		}
-		return true, err
-	case timeType:
-		for _, layout := range d.timeLayouts {
-			parsed, err := time.Parse(layout, trimmed)
-			if err == nil {
-				value.Set(reflect.ValueOf(parsed))
-				return true, nil
-			}
-		}
-		return true, errors.New("time does not match configured layouts")
-	case locationType:
-		location, err := time.LoadLocation(trimmed)
-		if err == nil {
-			value.Set(reflect.ValueOf(*location))
-		}
-		return true, err
-	case urlType:
-		parsed, err := url.Parse(trimmed)
-		if err == nil {
-			value.Set(reflect.ValueOf(*parsed))
-		}
-		return true, err
-	case ipType:
-		parsed := net.ParseIP(trimmed)
-		if parsed == nil {
-			return true, errors.New("invalid IP address")
-		}
-		value.Set(reflect.ValueOf(parsed))
-		return true, nil
-	case ipNetType:
-		ip, network, err := net.ParseCIDR(trimmed)
-		if err == nil {
-			network.IP = ip
-			value.Set(reflect.ValueOf(*network))
-		}
-		return true, err
-	case regexpType:
-		compiled, err := regexp.Compile(raw)
-		if err == nil {
-			value.Set(reflect.ValueOf(*compiled))
-		}
-		return true, err
-	}
-
-	if value.Type() == reflect.TypeFor[[]byte]() {
-		decoded, err := decodeBytes(raw)
-		if err == nil {
-			value.SetBytes(decoded)
-		}
-		return true, err
-	}
-	return false, nil
 }
 
 func decodeBytes(raw string) ([]byte, error) {
@@ -170,10 +105,6 @@ func decodeBytes(raw string) ([]byte, error) {
 	default:
 		return []byte(raw), nil
 	}
-}
-
-func decodeJSON(value reflect.Value, raw string) error {
-	return json.Unmarshal([]byte(raw), value.Addr().Interface(), json.RejectUnknownMembers(true))
 }
 
 func isNil(value any) bool {

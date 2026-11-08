@@ -225,15 +225,31 @@ type QueueOptions struct {
 }
 
 func (s *Namespace) Queue(name string, options QueueOptions) *Queue {
-	return &Queue{Namespace: s, Keys: s.Keys.Queue(name), ReadMaxBytes: options.ReadMaxBytes, ClaimIdle: options.ClaimIdle, DeadRetention: options.DeadRetention, CompletionRetention: options.CompletionRetention, SubmissionRetention: options.SubmissionRetention, HistoryLimit: options.HistoryLimit, HistoryTTL: options.HistoryTTL}
+	return &Queue{
+		Namespace:           s,
+		Keys:                s.Keys.Queue(name),
+		ReadMaxBytes:        options.ReadMaxBytes,
+		ClaimIdle:           options.ClaimIdle,
+		DeadRetention:       options.DeadRetention,
+		CompletionRetention: options.CompletionRetention,
+		SubmissionRetention: options.SubmissionRetention,
+		HistoryLimit:        options.HistoryLimit,
+		HistoryTTL:          options.HistoryTTL,
+	}
 }
-func (s *Queue) Name() string { return s.Keys.Name }
+
+func (s *Queue) Name() string {
+	return s.Keys.Name
+}
+
 func (s *Namespace) JobQueue(ctx context.Context, id string) (string, error) {
 	return s.entityQueue(ctx, s.Keys.Job(id))
 }
+
 func (s *Namespace) ScheduleQueue(ctx context.Context, id string) (string, error) {
 	return s.entityQueue(ctx, s.Keys.Schedule(id))
 }
+
 func (s *Namespace) entityQueue(ctx context.Context, key string) (string, error) {
 	ctx, cancel := s.commandContext(ctx)
 	defer cancel()

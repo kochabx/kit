@@ -2,7 +2,7 @@ package jwt
 
 import "time"
 
-// TokenPair Access Token 和 Refresh Token 对
+// TokenPair contains an access token and a refresh token.
 type TokenPair struct {
 	AccessToken      string    `json:"access_token"`
 	RefreshToken     string    `json:"refresh_token"`

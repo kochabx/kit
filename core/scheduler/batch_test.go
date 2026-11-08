@@ -77,7 +77,13 @@ func TestStatsUsesOnePipelineForAllQueues(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Force the delayed index into the past to exercise the server-clock lag calculation.
-	if err := client.ZAdd(ctx, s.queues["a"].store.Keys.Scheduled(), redis.Z{Score: float64(time.Now().Add(-time.Second).UnixMilli()), Member: "delayed"}).Err(); err != nil {
+	if err := client.ZAdd(ctx, s.queues["a"].store.Keys.Scheduled(), redis.Z{
+		Score: float64(time.Now().
+			Add(-time.Second).
+			UnixMilli()),
+		Member: "delayed",
+	}).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
 	counter.reset()

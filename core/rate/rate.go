@@ -1,4 +1,4 @@
-// Package rate 提供基于 Redis 的分布式限流器。
+// Package rate provides Redis-backed distributed rate limiters.
 package rate
 
 import (
@@ -17,8 +17,8 @@ var (
 	ErrNTooLarge  = errors.New("rate: n exceeds limiter capacity")
 )
 
-// Result 表示限流判定结果。ResetAt 表示限流器预计恢复全部配额的时间；
-// 请求被允许时 RetryAfter 为零，否则表示再次申请相同数量配额前的最短等待时间。
+// Result describes a rate-limit decision. ResetAt estimates when all quota will be restored.
+// RetryAfter is zero for allowed requests; otherwise it estimates the minimum wait before requesting the same quota again.
 type Result struct {
 	Allowed    bool
 	Remaining  int64
@@ -37,7 +37,7 @@ func validateN(n, limit int64) error {
 	return nil
 }
 
-// Limiter 对 key 对应的配额执行原子扣减。
+// Limiter atomically consumes quota for a key.
 type Limiter interface {
 	AllowN(ctx context.Context, key string, n int64) (Result, error)
 }
@@ -46,10 +46,10 @@ type options struct {
 	keyPrefix string
 }
 
-// Option 用于配置限流器。
+// Option configures a limiter.
 type Option func(*options)
 
-// WithKeyPrefix 设置 Redis key 前缀，默认为 "rate"。
+// WithKeyPrefix sets the Redis key prefix, which defaults to "rate".
 func WithKeyPrefix(prefix string) Option {
 	prefix = strings.Trim(prefix, ": ")
 	return func(opts *options) {

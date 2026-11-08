@@ -156,3 +156,12 @@ Client 实现：
 `Close` 可重复调用。关闭开始后，创建 producer 或 consumer 会返回 `ErrClosed`。异步 producer 的关闭可能等待本地队列刷新，因此应给应用整体优雅退出流程预留足够时间。
 
 由应用统一管理 Client 时，不要再对同一实例执行 `defer client.Close()`。
+
+## 验证
+
+```bash
+go test -race ./store/kafka -count=1
+KIT_KAFKA_INTEGRATION=1 KAFKA_BROKER=localhost:9092 go test -race ./store/kafka -count=1
+```
+
+默认跳过外部 Kafka 场景。集成测试会生产和消费消息，使用独立测试 broker。上面的 `segmentio` 别名指 `github.com/segmentio/kafka-go`，避免与 Kit 的 `kafka` 包同名。

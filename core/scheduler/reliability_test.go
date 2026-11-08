@@ -63,7 +63,13 @@ func TestReceiptRetentionIsIndependent(t *testing.T) {
 	r := testRedis(t)
 	ns := fmt.Sprintf("receipt-ttl-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, r, ns) })
-	e, err := newWorkerRuntime(r, WorkerConfig{Namespace: ns, Retention: RetentionConfig{Submission: time.Hour, Completion: time.Minute}})
+	e, err := newWorkerRuntime(r, WorkerConfig{
+		Namespace: ns,
+		Retention: RetentionConfig{
+			Submission: time.Hour,
+			Completion: time.Minute,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,14 +103,25 @@ func TestRejectedJobReportsCommitFailure(t *testing.T) {
 	ns := fmt.Sprintf("reject-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, r, ns) })
 	events := make(chan Event, 8)
-	e, err := newWorkerRuntime(r, WorkerConfig{Namespace: ns, Observability: ObservabilityConfig{Observer: ObserverFunc(func(_ context.Context, event Event) { events <- event })}})
+	e, err := newWorkerRuntime(
+		r,
+		WorkerConfig{
+			Namespace: ns,
+			Observability: ObservabilityConfig{Observer: ObserverFunc(func(_ context.Context, event Event) {
+				events <- event
+			})},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer e.Close()
 	producer := mustTask[int]("reject", WithRetry(panicRetry{}))
 	worker := mustTask[int]("reject")
-	if err := mustBind(e, worker).Handle(func(context.Context, int) error { t.Error("unexpected execution"); return nil }); err != nil {
+	if err := mustBind(e, worker).Handle(func(context.Context, int) error {
+		t.Error("unexpected execution")
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	q := e.queues[DefaultQueue].store
@@ -191,7 +208,23 @@ func TestRecoveryMakesProgressWithContinuousNewJobs(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 2)
 	for range 2 {
-		w, err := NewWorker(r, WorkerConfig{Namespace: ns, Queues: []QueueConfig{{Name: DefaultQueue, Concurrency: 2, FetchBatch: 4}}, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond}, Retention: RetentionConfig{Succeeded: time.Minute}})
+		w, err := NewWorker(
+			r,
+			WorkerConfig{
+				Namespace: ns,
+				Queues: []QueueConfig{{
+					Name:        DefaultQueue,
+					Concurrency: 2,
+					FetchBatch:  4,
+				}},
+				Execution: ExecutionConfig{
+					PollTimeout:        20 * time.Millisecond,
+					LeaseDuration:      3 * time.Second,
+					LeaseRenewInterval: 100 * time.Millisecond,
+				},
+				Retention: RetentionConfig{Succeeded: time.Minute},
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -264,7 +297,11 @@ func BenchmarkReceiptFootprint(b *testing.B) {
 			b.Fatal(err)
 		}
 		token := j.ID
-		if _, err := q.ClaimJob(ctx, ds[0], store.ClaimCommand{Token: token, Worker: "bench", Duration: time.Minute}); err != nil {
+		if _, err := q.ClaimJob(ctx, ds[0], store.ClaimCommand{
+			Token:    token,
+			Worker:   "bench",
+			Duration: time.Minute,
+		}); err != nil {
 			b.Fatal(err)
 		}
 		if err := q.CompleteJob(ctx, ds[0], token, 0, time.Minute); err != nil {

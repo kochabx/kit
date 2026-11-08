@@ -21,6 +21,10 @@ func newFailureBackoff(initial, maximum time.Duration) *failureBackoff {
 	return &failureBackoff{policy: policy, maximum: maximum}
 }
 
-func (b *failureBackoff) Reset() { b.policy.Reset() }
+func (b *failureBackoff) Reset() {
+	b.policy.Reset()
+}
 
-func (b *failureBackoff) NextDelay() time.Duration { return min(b.maximum, b.policy.NextBackOff()) }
+func (b *failureBackoff) NextDelay() time.Duration {
+	return min(b.maximum, b.policy.NextBackOff())
+}

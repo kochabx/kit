@@ -2,13 +2,13 @@ package redact
 
 import "io"
 
-// Writer 包装 writer 以支持脱敏
+// Writer wraps an output writer with redaction.
 type Writer struct {
 	writer   io.Writer
 	redactor *Redactor
 }
 
-// NewWriter 创建脱敏 writer
+// NewWriter creates a redacting writer.
 func NewWriter(writer io.Writer, redactor *Redactor) *Writer {
 	if writer == nil {
 		panic("writer cannot be nil")
@@ -23,7 +23,7 @@ func NewWriter(writer io.Writer, redactor *Redactor) *Writer {
 	}
 }
 
-// Write 实现 io.Writer 接口
+// Write implements io.Writer.
 func (w *Writer) Write(p []byte) (n int, err error) {
 	if len(p) == 0 {
 		return 0, nil

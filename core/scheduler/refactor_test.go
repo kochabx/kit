@@ -17,12 +17,27 @@ func TestPublicClientWorkerAndVersions(t *testing.T) {
 	r := testRedis(t)
 	ns := fmt.Sprintf("public-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, r, ns) })
-	c, err := NewClient(r, ClientConfig{Namespace: ns, Queues: []string{"mail"}, Retention: RetentionConfig{Succeeded: time.Minute}})
+	c, err := NewClient(r, ClientConfig{
+		Namespace: ns,
+		Queues:    []string{"mail"},
+		Retention: RetentionConfig{Succeeded: time.Minute},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	w, err := NewWorker(r, WorkerConfig{Namespace: ns, Queues: []QueueConfig{{Name: "mail", Concurrency: 2}}, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond}, Retention: RetentionConfig{Succeeded: time.Minute}})
+	w, err := NewWorker(
+		r,
+		WorkerConfig{
+			Namespace: ns,
+			Queues: []QueueConfig{{
+				Name:        "mail",
+				Concurrency: 2,
+			}},
+			Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond},
+			Retention: RetentionConfig{Succeeded: time.Minute},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,14 +168,26 @@ func executionFixture(t *testing.T, opts ...TaskOption) (*workerRuntime, *store.
 	}
 	return e, q, ds[0], j
 }
+
 func claimFixture(t *testing.T, q *store.Queue, d store.Delivery, token string) *Job {
 	t.Helper()
-	j, err := q.ClaimJob(context.Background(), d, store.ClaimCommand{Token: token, Worker: "worker", Duration: time.Minute, ExpiredRetention: time.Hour, CancelledRetention: time.Hour})
+	j, err := q.ClaimJob(
+		context.Background(),
+		d,
+		store.ClaimCommand{
+			Token:              token,
+			Worker:             "worker",
+			Duration:           time.Minute,
+			ExpiredRetention:   time.Hour,
+			CancelledRetention: time.Hour,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return j
 }
+
 func expireFixture(t *testing.T, q *store.Queue, d store.Delivery) {
 	t.Helper()
 	if err := q.Client.HSet(context.Background(), q.Keys.Job(d.JobID), "lease_until", 0).Err(); err != nil {
@@ -180,7 +207,11 @@ func TestRecoveryBudgetIsIndependentAndAtomicallyCleansPEL(t *testing.T) {
 		t.Fatal(j)
 	}
 	expireFixture(t, q, d)
-	if _, err := q.ClaimJob(context.Background(), d, store.ClaimCommand{Token: "third", Worker: "worker", Duration: time.Minute}); !errors.Is(err, ErrInvalidState) {
+	if _, err := q.ClaimJob(context.Background(), d, store.ClaimCommand{
+		Token:    "third",
+		Worker:   "worker",
+		Duration: time.Minute,
+	}); !errors.Is(err, ErrInvalidState) {
 		t.Fatal(err)
 	}
 	stored, err := e.Jobs().Get(context.Background(), d.JobID)
@@ -192,6 +223,7 @@ func TestRecoveryBudgetIsIndependentAndAtomicallyCleansPEL(t *testing.T) {
 		t.Fatalf("%+v %v", stats, err)
 	}
 }
+
 func TestTotalExecutionBudgetAndExpiredLeaseCannotCommit(t *testing.T) {
 	_, q, d, _ := executionFixture(t, WithExecutionLimit(1))
 	claimFixture(t, q, d, "old")
@@ -199,10 +231,14 @@ func TestTotalExecutionBudgetAndExpiredLeaseCannotCommit(t *testing.T) {
 	if err := q.CompleteJob(context.Background(), d, "old", time.Minute, time.Minute); !errors.Is(err, ErrLeaseLost) {
 		t.Fatal(err)
 	}
-	if _, err := q.ClaimJob(context.Background(), d, store.ClaimCommand{Token: "replacement", Duration: time.Minute}); !errors.Is(err, ErrInvalidState) {
+	if _, err := q.ClaimJob(context.Background(), d, store.ClaimCommand{
+		Token:    "replacement",
+		Duration: time.Minute,
+	}); !errors.Is(err, ErrInvalidState) {
 		t.Fatal(err)
 	}
 }
+
 func TestFinishReceiptReplaysAndRejectsConflictingRequest(t *testing.T) {
 	e, q, d, _ := executionFixture(t)
 	claimFixture(t, q, d, "token")
@@ -219,14 +255,24 @@ func TestFinishReceiptReplaysAndRejectsConflictingRequest(t *testing.T) {
 	if err := q.CompleteJob(ctx, d, "token", time.Minute, time.Minute); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
-	if err := q.FailJob(ctx, d, "token", store.FailureCommand{Message: "different", DeadRetention: time.Hour}); !errors.Is(err, ErrConflict) {
+	if err := q.FailJob(ctx, d, "token", store.FailureCommand{
+		Message:       "different",
+		DeadRetention: time.Hour,
+	}); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
 }
+
 func TestFailureReceiptDoesNotRetryTwice(t *testing.T) {
 	e, q, d, _ := executionFixture(t)
 	claimFixture(t, q, d, "token")
-	cmd := store.FailureCommand{Message: "temporary", Retry: true, Delay: time.Second, DeadRetention: time.Hour, CancelledRetention: time.Minute}
+	cmd := store.FailureCommand{
+		Message:            "temporary",
+		Retry:              true,
+		Delay:              time.Second,
+		DeadRetention:      time.Hour,
+		CancelledRetention: time.Minute,
+	}
 	for range 2 {
 		if err := q.FailJob(context.Background(), d, "token", cmd); err != nil {
 			t.Fatal(err)
@@ -237,6 +283,7 @@ func TestFailureReceiptDoesNotRetryTwice(t *testing.T) {
 		t.Fatalf("%+v %v", j, err)
 	}
 }
+
 func TestReleaseDeliveryChecksConsumerAndMakesPendingClaimable(t *testing.T) {
 	_, q, d, _ := executionFixture(t)
 	ctx := context.Background()
@@ -265,6 +312,7 @@ func TestReleaseDeliveryChecksConsumerAndMakesPendingClaimable(t *testing.T) {
 		t.Fatalf("%+v %v", ds, err)
 	}
 }
+
 func TestTimeoutDoesNotFreeActualHandlerCapacity(t *testing.T) {
 	r := testRedis(t)
 	ns := fmt.Sprintf("capacity-%d", time.Now().UnixNano())
@@ -274,7 +322,12 @@ func TestTimeoutDoesNotFreeActualHandlerCapacity(t *testing.T) {
 	var calls atomic.Int32
 	started := make(chan struct{}, 2)
 	release := make(chan struct{})
-	if err := mustBind(e, task).Handle(func(context.Context, int) error { calls.Add(1); started <- struct{}{}; <-release; return nil }); err != nil {
+	if err := mustBind(e, task).Handle(func(context.Context, int) error {
+		calls.Add(1)
+		started <- struct{}{}
+		<-release
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -311,6 +364,7 @@ func (h *oldVersionHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		return next(ctx, cmd)
 	}
 }
+
 func TestOldRedisRejectedBeforeMutation(t *testing.T) {
 	r := testRedis(t)
 	r.AddHook(&oldVersionHook{})
@@ -414,7 +468,12 @@ type lostReplyHook struct {
 func (h *lostReplyHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 	return func(ctx context.Context, cmd redis.Cmder) error {
 		err := next(ctx, cmd)
-		if err == nil && (cmd.Name() == "evalsha" || cmd.Name() == "eval") && len(cmd.Args()) > 1 && cmd.Args()[1] == h.scriptHash && h.lost.CompareAndSwap(false, true) {
+		if err == nil &&
+			(cmd.Name() == "evalsha" ||
+				cmd.Name() == "eval") &&
+			len(cmd.Args()) > 1 &&
+			cmd.Args()[1] == h.scriptHash &&
+			h.lost.CompareAndSwap(false, true) {
 			cmd.SetErr(errInjectedOutage)
 			return errInjectedOutage
 		}
@@ -447,13 +506,32 @@ func TestWorkerShutdownReturnsBufferedDeliveries(t *testing.T) {
 	r := testRedis(t)
 	ns := fmt.Sprintf("shutdown-buffer-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, r, ns) })
-	e, err := newWorkerRuntime(r, WorkerConfig{Namespace: ns, Queues: []QueueConfig{{Name: DefaultQueue, Concurrency: 1, FetchBatch: 4, Prefetch: 4}}, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond, ShutdownTimeout: time.Second}})
+	e, err := newWorkerRuntime(
+		r,
+		WorkerConfig{
+			Namespace: ns,
+			Queues: []QueueConfig{{
+				Name:        DefaultQueue,
+				Concurrency: 1,
+				FetchBatch:  4,
+				Prefetch:    4,
+			}},
+			Execution: ExecutionConfig{
+				PollTimeout:     20 * time.Millisecond,
+				ShutdownTimeout: time.Second,
+			},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	task := mustTask[int]("drain")
 	started, release := make(chan struct{}), make(chan struct{})
-	if err := mustBind(e, task).Handle(func(context.Context, int) error { close(started); <-release; return nil }); err != nil {
+	if err := mustBind(e, task).Handle(func(context.Context, int) error {
+		close(started)
+		<-release
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if result := mustBind(e, task).EnqueueBatch(context.Background(), []int{1, 2, 3, 4}); result[0].Err != nil {
@@ -537,7 +615,10 @@ func TestAttemptHistoryDisabledAndFailureRetained(t *testing.T) {
 	q.HistoryLimit = 1
 	q.HistoryTTL = time.Minute
 	claimFixture(t, q, d, "failed")
-	if err := q.FailJob(ctx, d, "failed", store.FailureCommand{Message: "permanent", DeadRetention: time.Hour}); err != nil {
+	if err := q.FailJob(ctx, d, "failed", store.FailureCommand{
+		Message:       "permanent",
+		DeadRetention: time.Hour,
+	}); err != nil {
 		t.Fatal(err)
 	}
 	rows, err = e.Jobs().Attempts(ctx, d.JobID)

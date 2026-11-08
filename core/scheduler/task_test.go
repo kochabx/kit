@@ -8,10 +8,19 @@ import (
 
 type countingRetry struct{ calls *atomic.Int64 }
 
-func (p countingRetry) Identity() string                           { p.calls.Add(1); return "count:v1" }
-func (p countingRetry) NextDelay(int, error) (time.Duration, bool) { return 0, false }
+func (p countingRetry) Identity() string {
+	p.calls.Add(1)
+	return "count:v1"
+}
 
-func (p countingRetry) MarshalJSON() ([]byte, error) { p.calls.Add(1); return []byte(`{"max":1}`), nil }
+func (p countingRetry) NextDelay(int, error) (time.Duration, bool) {
+	return 0, false
+}
+
+func (p countingRetry) MarshalJSON() ([]byte, error) {
+	p.calls.Add(1)
+	return []byte(`{"max":1}`), nil
+}
 
 func TestTaskFingerprintComputedOnce(t *testing.T) {
 	calls := &atomic.Int64{}
@@ -36,12 +45,21 @@ func TestTaskFingerprintComputedOnce(t *testing.T) {
 }
 
 func TestQueueConfigurationAndFingerprints(t *testing.T) {
-	for _, configs := range [][]QueueConfig{{{Name: "a"}, {Name: "a"}}, {{Name: "invalid queue"}}, {{Name: ""}}, {{Name: "a", Concurrency: -1}}} {
+	for _, configs := range [][]QueueConfig{{{Name: "a"}, {Name: "a"}}, {{Name: "invalid queue"}}, {{Name: ""}}, {{
+		Name:        "a",
+		Concurrency: -1,
+	}}} {
 		if _, err := prepareConfig(WorkerConfig{Queues: configs}); err == nil {
 			t.Fatalf("invalid queue configuration accepted: %+v", configs)
 		}
 	}
-	config, err := prepareConfig(WorkerConfig{Queues: []QueueConfig{{Name: "a", Concurrency: 2}, {Name: "b", Concurrency: 3}}})
+	config, err := prepareConfig(WorkerConfig{Queues: []QueueConfig{{
+		Name:        "a",
+		Concurrency: 2,
+	}, {
+		Name:        "b",
+		Concurrency: 3,
+	}}})
 	if err != nil {
 		t.Fatal(err)
 	}

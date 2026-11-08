@@ -15,7 +15,23 @@ func (s *Queue) CreateSchedule(ctx context.Context, schedule Schedule, payload [
 	if err := s.CheckCapabilities(ctx); err != nil {
 		return err
 	}
-	result, err := CreateSchedule.Run(ctx, s.Client, []string{s.Keys.Schedule(schedule.ID), s.Keys.Schedules(), s.Keys.ScheduleCatalog()}, schedule.ID, schedule.TaskName, payload, schedule.Expression, schedule.TimeZone, schedule.NextAt.UnixMilli(), maxAttempts, fingerprint, s.Keys.Name, version, encodePolicy(policy)).Int64()
+	result, err := CreateSchedule.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.Schedule(schedule.ID), s.Keys.Schedules(), s.Keys.ScheduleCatalog()},
+		schedule.ID,
+		schedule.TaskName,
+		payload,
+		schedule.Expression,
+		schedule.TimeZone,
+		schedule.NextAt.UnixMilli(),
+		maxAttempts,
+		fingerprint,
+		s.Keys.Name,
+		version,
+		encodePolicy(policy),
+	).
+		Int64()
 	if err != nil {
 		return fmt.Errorf("create cron schedule: %w", err)
 	}
@@ -82,7 +98,16 @@ func (s *Queue) DueSchedules(ctx context.Context, limit int64) (ScheduleBatch, e
 func (s *Queue) InvalidateSchedule(ctx context.Context, schedule ScheduleRecord, reason string, retention time.Duration) error {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	_, err := DisableSchedule.Run(ctx, s.Client, []string{s.Keys.Schedule(schedule.ID), s.Keys.Schedules(), s.Keys.TerminalSchedules()}, schedule.ID, schedule.NextAt.UnixMilli(), reason, CeilDurationMillis(retention)).Result()
+	_, err := DisableSchedule.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.Schedule(schedule.ID), s.Keys.Schedules(), s.Keys.TerminalSchedules()},
+		schedule.ID,
+		schedule.NextAt.UnixMilli(),
+		reason,
+		CeilDurationMillis(retention),
+	).
+		Result()
 	if err != nil {
 		return fmt.Errorf("disable invalid cron schedule: %w", err)
 	}
@@ -105,7 +130,15 @@ func (s *Queue) FireSchedules(ctx context.Context, records []ScheduleFire) error
 	for _, item := range records {
 		schedule := item.Record
 		instanceID := schedule.ID + ":" + strconv.FormatInt(schedule.NextAt.UnixMilli(), 10)
-		FireSchedule.Eval(ctx, pipe, []string{s.Keys.Schedule(schedule.ID), s.Keys.Schedules(), s.Keys.Job(instanceID), s.Keys.Ready()}, schedule.NextAt.UnixMilli(), item.Next, instanceID, s.Keys.Name)
+		FireSchedule.Eval(
+			ctx,
+			pipe,
+			[]string{s.Keys.Schedule(schedule.ID), s.Keys.Schedules(), s.Keys.Job(instanceID), s.Keys.Ready()},
+			schedule.NextAt.UnixMilli(),
+			item.Next,
+			instanceID,
+			s.Keys.Name,
+		)
 	}
 	_, err := pipe.Exec(ctx)
 	return err
@@ -114,7 +147,14 @@ func (s *Queue) FireSchedules(ctx context.Context, records []ScheduleFire) error
 func (s *Queue) CancelSchedule(ctx context.Context, id string, retention time.Duration) error {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	result, err := CancelSchedule.Run(ctx, s.Client, []string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.TerminalSchedules()}, id, CeilDurationMillis(retention)).Int64()
+	result, err := CancelSchedule.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.TerminalSchedules()},
+		id,
+		CeilDurationMillis(retention),
+	).
+		Int64()
 	if err != nil {
 		return err
 	}
@@ -162,7 +202,8 @@ func (s *Queue) SetScheduleState(ctx context.Context, id string, active bool, ne
 		state = ScheduleActive
 		score = next.UnixMilli()
 	}
-	result, err := SetScheduleState.Run(ctx, s.Client, []string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.TerminalSchedules()}, id, string(state), score).Int64()
+	result, err := SetScheduleState.Run(ctx, s.Client, []string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.TerminalSchedules()}, id, string(state), score).
+		Int64()
 	if err != nil {
 		return err
 	}
@@ -178,7 +219,13 @@ func (s *Queue) SetScheduleState(ctx context.Context, id string, active bool, ne
 func (s *Queue) DeleteSchedule(ctx context.Context, id string) error {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	result, err := DeleteSchedule.Run(ctx, s.Client, []string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.ScheduleCatalog(), s.Keys.TerminalSchedules()}, id).Int64()
+	result, err := DeleteSchedule.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.ScheduleCatalog(), s.Keys.TerminalSchedules()},
+		id,
+	).
+		Int64()
 	if err != nil {
 		return err
 	}
@@ -191,7 +238,16 @@ func (s *Queue) DeleteSchedule(ctx context.Context, id string) error {
 func (s *Queue) UpdateSchedule(ctx context.Context, id, expression, location string, next time.Time) error {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	result, err := UpdateSchedule.Run(ctx, s.Client, []string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.TerminalSchedules()}, id, expression, location, next.UnixMilli()).Int64()
+	result, err := UpdateSchedule.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.Schedule(id), s.Keys.Schedules(), s.Keys.TerminalSchedules()},
+		id,
+		expression,
+		location,
+		next.UnixMilli(),
+	).
+		Int64()
 	if err != nil {
 		return err
 	}

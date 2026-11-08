@@ -12,17 +12,19 @@ import (
 	gv "github.com/go-playground/validator/v10"
 )
 
-// Validator 是结构体 / 变量校验接口。
+// Validator validates structs and single values. Each call requires a non-nil Context.
+// Instances returned by New can be shared; callers manage custom callbacks and concurrent access to target data.
 type Validator interface {
-	// Struct 校验非 nil 结构体指针的所有导出字段，失败时返回 *Error。
-	// 通过 WithLocaleExtractor 设置的 Locale 用于翻译错误消息。
+	// Struct validates a struct value or a non-nil struct pointer, returning *Error for field failures.
+	// Invalid targets return the underlying *gv.InvalidValidationError.
 	Struct(ctx context.Context, s any) error
 
-	// Var 按 tag 表达式（如 "required,email"）校验单个值。
+	// Var validates one value against a tag expression such as "required,email", returning *Error on failure.
+	// Invalid or unregistered validation tags retain the underlying panic behavior.
 	Var(ctx context.Context, field any, tag string) error
 }
 
-// validator 是 Validator 的具体实现。
+// validator registers rules and translations during construction and does not change configuration during validation.
 type validator struct {
 	v               *gv.Validate
 	translators     map[Locale]ut.Translator
@@ -30,18 +32,44 @@ type validator struct {
 	localeExtractor func(context.Context) (Locale, bool)
 }
 
-// New 按选项创建一个新的 Validator。
-// 零选项默认值：默认语言 en，启用 [en, zh]，字段名取自 json tag。
-func New(opts ...Option) (Validator, error) {
+// New creates a validator with English and Simplified Chinese translations, English fallback, and json field names.
+// Invalid configuration or a registration panic returns an error wrapping ErrInvalidOption.
+// Do not mutate the underlying validator or translators through references retained by registration callbacks.
+func New(opts ...Option) (result Validator, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = nil
+			err = fmt.Errorf("%w: configuration callback or registration panicked", ErrInvalidOption)
+		}
+	}()
 	o := defaultOptions()
-	for _, fn := range opts {
+	for index, fn := range opts {
+		if fn == nil {
+			return nil, fmt.Errorf("%w: nil option at index %d", ErrInvalidOption, index)
+		}
 		fn(o)
 	}
-	return build(o)
+	if err := validateOptions(o); err != nil {
+		return nil, err
+	}
+	built, err := build(o)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidOption, err)
+	}
+	return built, nil
 }
 
-// Validate 是默认 Validator 实例，使用零选项构建。如果构建失败将得到 nil。
-var Validate, _ = New()
+// Validate is the shared instance created with default options; initialization failure panics immediately.
+// Do not replace it at runtime. Use New for custom configuration.
+var Validate = mustDefault()
+
+func mustDefault() Validator {
+	v, err := New()
+	if err != nil {
+		panic(err)
+	}
+	return v
+}
 
 func build(o *options) (*validator, error) {
 	v := gv.New()
@@ -57,7 +85,7 @@ func build(o *options) (*validator, error) {
 		})
 	}
 
-	// 收集所有 locale 实例，构建 UniversalTranslator
+	// Map application locales to translator instances, then register translations by translator identifier.
 	defaultEntry, ok := o.locales[o.defaultLocale]
 	if !ok {
 		return nil, fmt.Errorf("validator: default locale %q not in enabled locales", o.defaultLocale)
@@ -81,13 +109,23 @@ func build(o *options) (*validator, error) {
 	}
 
 	for _, cv := range o.validations {
-		if err := v.RegisterValidation(cv.tag, cv.fn, cv.callEvenIfNull); err != nil {
+		var err error
+		if cv.ctxFn != nil {
+			err = v.RegisterValidationCtx(cv.tag, cv.ctxFn, cv.callEvenIfNull)
+		} else {
+			err = v.RegisterValidation(cv.tag, cv.fn, cv.callEvenIfNull)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("validator: register validation %q: %w", cv.tag, err)
 		}
 	}
 
 	for _, sv := range o.structValidations {
-		v.RegisterStructValidation(sv.fn, sv.types...)
+		if sv.ctxFn != nil {
+			v.RegisterStructValidationCtx(sv.ctxFn, sv.types...)
+		} else {
+			v.RegisterStructValidation(sv.fn, sv.types...)
+		}
 	}
 
 	return &validator{
@@ -106,7 +144,8 @@ func (vi *validator) Var(ctx context.Context, field any, tag string) error {
 	return vi.wrap(ctx, vi.v.VarCtx(ctx, field, tag))
 }
 
-// resolveLocale 按优先级解析 Locale：localeExtractor → defaultLocale。
+// resolveLocale prefers a locale from the extractor and otherwise returns the default.
+// wrap handles unsupported locales when looking up translators.
 func (vi *validator) resolveLocale(ctx context.Context) Locale {
 	if vi.localeExtractor != nil {
 		if l, ok := vi.localeExtractor(ctx); ok {
@@ -116,7 +155,7 @@ func (vi *validator) resolveLocale(ctx context.Context) Locale {
 	return vi.defaultLocale
 }
 
-// wrap 将底层 gv.ValidationErrors 转换为 *Error。
+// wrap translates field failures and preserves their cause; other errors pass through unchanged.
 func (vi *validator) wrap(ctx context.Context, err error) error {
 	if err == nil {
 		return nil
@@ -145,10 +184,10 @@ func (vi *validator) wrap(ctx context.Context, err error) error {
 			Field:   fe.Field(),
 			Tag:     fe.Tag(),
 			Param:   fe.Param(),
-			Value:   fe.Value(),
+			Path:    fe.Namespace(),
 			Message: msg,
 		}
 	}
 
-	return newError(violations)
+	return newError(violations, err)
 }

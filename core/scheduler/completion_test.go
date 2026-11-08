@@ -34,7 +34,15 @@ func TestFinishedEventSeparatesCommitFailure(t *testing.T) {
 	namespace := fmt.Sprintf("commit-event-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
 	events := make(chan Event, 8)
-	s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Observability: ObservabilityConfig{Observer: ObserverFunc(func(_ context.Context, event Event) { events <- event })}})
+	s, err := newWorkerRuntime(
+		client,
+		WorkerConfig{
+			Namespace: namespace,
+			Observability: ObservabilityConfig{Observer: ObserverFunc(func(_ context.Context, event Event) {
+				events <- event
+			})},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}

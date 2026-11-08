@@ -65,7 +65,11 @@ func (s *queueRuntime) dispatchSchedules(ctx context.Context) error {
 			}
 			next, nextErr := s.scheduler.cronCache.nextRunMillis(record, due.Now)
 			if nextErr != nil {
-				s.scheduler.config.Observability.Logger.Error().Str("queue", s.settings.Name).Err(nextErr).Str("schedule_id", record.ID).Msg("invalid persisted cron schedule disabled")
+				s.scheduler.config.Observability.Logger.Error().
+					Str("queue", s.settings.Name).
+					Err(nextErr).
+					Str("schedule_id", record.ID).
+					Msg("invalid persisted cron schedule disabled")
 				if disableErr := s.store.InvalidateSchedule(ctx, record, nextErr.Error(), s.scheduler.config.Retention.Schedule); disableErr != nil {
 					return disableErr
 				}

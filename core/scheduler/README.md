@@ -75,7 +75,7 @@ results := client.EnqueueBatch(ctx, email, payloads)
 
 ## 协议与重试
 
-指纹包含 TaskName、Version 和 Codec.Identity，不包含 Go 类型名、Queue、Timeout 或重试配置。JSON Codec 标识为 json:v1；Payload schema 改变时显式增加 WithVersion。
+指纹包含 TaskName、Version 和 Codec.Identity，不包含 Go 类型名、Queue、Timeout 或重试配置。JSON Codec 标识为 `json:v1`（调度器内部协议标识），实现使用 `encoding/json/v2`；Payload schema 改变时显式增加 WithVersion。
 
 自定义 Codec 必须提供稳定 Identity。内置 Exponential/NoRetry 固化为数据；自定义 RetryPolicy 必须实现 IdentifiedRetryPolicy，Identity 包含所有影响行为的配置，Worker 必须注册匹配实现。Codec 和自定义策略必须不可变且支持并发。
 
@@ -159,8 +159,6 @@ Retention.Submission 默认 24h，约束提交重发窗口；Retention.Completio
 
 ```bash
 go test ./core/scheduler -run '^$' -bench '^BenchmarkReceiptFootprint$' -benchtime=200ms
-# Linux Docker host networking；创建专属六节点 Cluster 和 AOF 实例，自动清理。
-bash core/scheduler/scripts/verify-redis.sh
 ```
 
-隔离环境测试在普通 go test 中跳过；脚本显式启用，验证计划切换、主节点退出后的自动切换，以及 AOF 容器重启后的任务/周期/回执/历史恢复。脚本不连接共享 Redis，不清理现有数据；需本地 Redis 8.10 Docker 镜像，可用 SCHEDULER_REDIS_IMAGE 指定版本。
+当前仓库没有自动创建 Cluster/AOF 环境的脚本。隔离环境测试位于 `redis_environment_test.go`，需要测试专用的 Redis 部署及显式环境变量；普通测试不会自动执行故障切换和持久化重启。仅运行普通集成测试不能证明这些部署场景已经验证。

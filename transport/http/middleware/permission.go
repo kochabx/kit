@@ -16,28 +16,28 @@ var (
 	ErrForbidden            = errors.Forbidden("forbidden")
 )
 
-// PermissionChecker 权限检查器接口
+// PermissionChecker checks request permissions.
 type PermissionChecker interface {
 	Check(ctx context.Context, r *http.Request) error
 }
 
-// PermissionCheckerFunc 权限检查器函数适配器
+// PermissionCheckerFunc adapts a function to PermissionChecker.
 type PermissionCheckerFunc func(ctx context.Context, r *http.Request) error
 
 func (f PermissionCheckerFunc) Check(ctx context.Context, r *http.Request) error {
 	return f(ctx, r)
 }
 
-// PermissionConfig 权限中间件配置
+// PermissionConfig configures permission middleware.
 type PermissionConfig struct {
-	Skip           SkipConfig                                      // 跳过配置
-	Checker        PermissionChecker                               // 权限检查器（必需）
-	SuccessHandler func(http.ResponseWriter, *http.Request)        // 成功回调
-	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理函数
-	Logger         *log.Logger                                     // 自定义日志记录器
+	Skip           SkipConfig                                      // Skip rules.
+	Checker        PermissionChecker                               // Required permission checker.
+	SuccessHandler func(http.ResponseWriter, *http.Request)        // Success callback.
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // Error handler.
+	Logger         *log.Logger                                     // Custom logger.
 }
 
-// Permission 创建权限检查中间件
+// Permission creates permission-checking middleware.
 func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 	var cfg PermissionConfig
 	if len(cfgs) > 0 {
@@ -89,14 +89,14 @@ func Permission(cfgs ...PermissionConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// RoleBasedConfig 基于角色的权限检查器配置
+// RoleBasedConfig configures role-based permission checks.
 type RoleBasedConfig struct {
-	AllowedRoles []string                  // 允许的角色列表
-	ClaimsKey    string                    // 从 context 获取 claims 的 key
-	RolesGetter  func(claims any) []string // 从 claims 获取角色的函数
+	AllowedRoles []string                  // Allowed roles.
+	ClaimsKey    string                    // Context key holding claims.
+	RolesGetter  func(claims any) []string // Callback that extracts roles from claims.
 }
 
-// RoleBasedChecker 创建基于角色的权限检查器
+// RoleBasedChecker creates a role-based permission checker.
 func RoleBasedChecker(cfg RoleBasedConfig) PermissionChecker {
 	if cfg.ClaimsKey == "" {
 		cfg.ClaimsKey = "claims"
@@ -123,16 +123,16 @@ func RoleBasedChecker(cfg RoleBasedConfig) PermissionChecker {
 	})
 }
 
-// OwnerBasedConfig 基于所有权的权限检查器配置
+// OwnerBasedConfig configures ownership checks.
 type OwnerBasedConfig struct {
-	SkipRoles      []string                                                     // 跳过检查的角色（如管理员）
-	ClaimsKey      string                                                       // 从 context 获取 claims 的 key
-	RolesGetter    func(claims any) []string                                    // 从 claims 获取角色
-	OperatorGetter func(claims any) string                                      // 从 claims 获取操作者 ID
-	OwnerGetter    func(ctx context.Context, r *http.Request) ([]string, error) // 获取资源所有者列表
+	SkipRoles      []string                                                     // Roles that bypass ownership checks, such as administrators.
+	ClaimsKey      string                                                       // Context key holding claims.
+	RolesGetter    func(claims any) []string                                    // Callback that extracts roles from claims.
+	OperatorGetter func(claims any) string                                      // Callback that extracts the acting subject ID from claims.
+	OwnerGetter    func(ctx context.Context, r *http.Request) ([]string, error) // Callback that returns resource owner IDs.
 }
 
-// OwnerBasedChecker 创建基于所有权的权限检查器
+// OwnerBasedChecker creates an ownership-based permission checker.
 func OwnerBasedChecker(cfg OwnerBasedConfig) PermissionChecker {
 	if cfg.ClaimsKey == "" {
 		cfg.ClaimsKey = "claims"
@@ -183,7 +183,7 @@ func OwnerBasedChecker(cfg OwnerBasedConfig) PermissionChecker {
 	})
 }
 
-// hasIntersection 检查两个切片是否有交集
+// hasIntersection reports whether two slices share an element.
 func hasIntersection[T comparable](a, b []T) bool {
 	for _, item := range b {
 		if slices.Contains(a, item) {

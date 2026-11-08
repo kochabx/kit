@@ -6,30 +6,38 @@ import (
 	"strings"
 )
 
-// CorsConfig CORS 中间件配置
+// CorsConfig configures CORS middleware.
 type CorsConfig struct {
-	Skip             SkipConfig // 跳过配置
-	AllowCredentials bool       // 是否允许携带凭证
-	MaxAge           int        // 预检请求缓存时间（秒）
-	AllowOrigins     []string   // 允许的源，支持 "*" 通配符
-	AllowMethods     []string   // 允许的 HTTP 方法
-	AllowHeaders     []string   // 允许的请求头
-	ExposeHeaders    []string   // 暴露给客户端的响应头
+	Skip             SkipConfig // Skip rules.
+	AllowCredentials bool       // Whether to allow credentials.
+	MaxAge           int        // Preflight cache duration in seconds.
+	AllowOrigins     []string   // Allowed origins, supporting "*" wildcards.
+	AllowMethods     []string   // Allowed HTTP methods.
+	AllowHeaders     []string   // Allowed request headers.
+	ExposeHeaders    []string   // Response headers exposed to clients.
 }
 
-// DefaultCorsConfig 返回默认 CORS 配置
+// DefaultCorsConfig returns the default CORS configuration.
 func DefaultCorsConfig() CorsConfig {
 	return CorsConfig{
-		AllowCredentials: false, // 注意：当 AllowOrigins 为 "*" 时，AllowCredentials 必须为 false
+		AllowCredentials: false, // AllowCredentials must be false when AllowOrigins is "*".
 		MaxAge:           43200,
 		ExposeHeaders:    []string{},
 		AllowOrigins:     []string{"*"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
-		AllowHeaders:     []string{"Origin", "Content-Type", "Content-Length", "Accept-Encoding", "X-CSRF-Token", "Authorization", "X-Request-Id"},
+		AllowHeaders: []string{
+			"Origin",
+			"Content-Type",
+			"Content-Length",
+			"Accept-Encoding",
+			"X-CSRF-Token",
+			"Authorization",
+			"X-Request-Id",
+		},
 	}
 }
 
-// Cors 创建 CORS 中间件
+// Cors creates CORS middleware.
 func Cors(cfgs ...CorsConfig) func(http.Handler) http.Handler {
 	cfg := DefaultCorsConfig()
 	if len(cfgs) > 0 {
@@ -91,13 +99,13 @@ func Cors(cfgs ...CorsConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// isOriginAllowed 检查源是否在允许列表中
+// isOriginAllowed checks whether an origin is allowed.
 func isOriginAllowed(origin string, allowedOrigins []string) bool {
 	for _, allowed := range allowedOrigins {
 		if allowed == origin {
 			return true
 		}
-		// 支持通配符匹配，如 "*.example.com"
+		// Wildcard patterns such as "*.example.com" are supported.
 		if strings.HasPrefix(allowed, "*.") {
 			suffix := allowed[1:] // ".example.com"
 			if strings.HasSuffix(origin, suffix) {

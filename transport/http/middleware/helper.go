@@ -8,30 +8,30 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// prefixPath 预编译的前缀路径
+// prefixPath holds a precompiled path prefix.
 type prefixPath struct {
-	prefix    string // 原始前缀，如 "/api"
-	prefixLen int    // 前缀长度
+	prefix    string // Original prefix, such as "/api".
+	prefixLen int    // Prefix length.
 }
 
-// PathMatcher 路径匹配器
+// PathMatcher matches request paths.
 type PathMatcher struct {
-	exactPaths  map[string]struct{} // 精确匹配路径, 如 "/health"
-	prefixPaths []prefixPath        // 前缀匹配路径, 如 "/api/**"
-	patterns    []string            // glob 模式匹配, 如 "/api/*/users"
+	exactPaths  map[string]struct{} // Exact paths, such as "/health".
+	prefixPaths []prefixPath        // Prefix paths, such as "/api/**".
+	patterns    []string            // Glob patterns, such as "/api/*/users".
 }
 
-// NewPathMatcher 创建路径匹配器
-// 支持三种匹配模式：
-//   - 精确匹配："/health" 只匹配 "/health"
-//   - 前缀匹配："/api/**" 匹配 "/api" 及其所有子路径
-//   - Glob 模式："/api/*/users" 使用 path.Match 进行模式匹配
+// NewPathMatcher creates a path matcher.
+// Three matching modes are supported:
+//   - Exact: "/health" matches only "/health"
+//   - Prefix: "/api/**" matches "/api" and its descendants
+//   - Glob: "/api/*/users" uses path.Match
 //
-// Glob 模式语法（与 path.Match 一致）：
-//   - '*' 匹配任意非 '/' 字符序列
-//   - '?' 匹配任意单个非 '/' 字符
-//   - '[abc]' 匹配括号内任意字符
-//   - '[a-z]' 匹配范围内任意字符
+// Glob syntax follows path.Match:
+//   - '*' matches any sequence of characters other than '/'
+//   - '?' matches one character other than '/'
+//   - '[abc]' matches one listed character
+//   - '[a-z]' matches one character in the range
 func NewPathMatcher(paths []string) *PathMatcher {
 	if len(paths) == 0 {
 		return &PathMatcher{
@@ -41,62 +41,62 @@ func NewPathMatcher(paths []string) *PathMatcher {
 
 	pm := &PathMatcher{
 		exactPaths:  make(map[string]struct{}, len(paths)),
-		prefixPaths: make([]prefixPath, 0, len(paths)/2), // 预估一半用于前缀匹配
-		patterns:    make([]string, 0, len(paths)/4),     // 预估四分之一用于 glob 模式
+		prefixPaths: make([]prefixPath, 0, len(paths)/2), // Estimate that half of the paths are prefixes.
+		patterns:    make([]string, 0, len(paths)/4),     // Estimate that a quarter of the paths are glob patterns.
 	}
 	for _, p := range paths {
 		if prefix, ok := strings.CutSuffix(p, "/**"); ok {
-			// 前缀匹配模式：预编译前缀信息
+			// Precompile a prefix path.
 			pm.prefixPaths = append(pm.prefixPaths, prefixPath{
 				prefix:    prefix,
 				prefixLen: len(prefix),
 			})
 		} else if strings.ContainsAny(p, "*?[") {
-			// Glob 模式
+			// Glob pattern.
 			pm.patterns = append(pm.patterns, p)
 		} else {
-			// 精确匹配模式
+			// Exact path.
 			pm.exactPaths[p] = struct{}{}
 		}
 	}
 	return pm
 }
 
-// Match 检查路径是否匹配
+// Match reports whether urlPath matches a configured rule.
 func (pm *PathMatcher) Match(urlPath string) bool {
-	// 空匹配器快速返回
+	// Return quickly for an empty matcher.
 	if pm == nil {
 		return false
 	}
 
-	// 1. 精确匹配检查 (O(1) 哈希查找，最快)
+	// 1. Check exact paths with an O(1) map lookup.
 	if _, ok := pm.exactPaths[urlPath]; ok {
 		return true
 	}
 
 	pathLen := len(urlPath)
 
-	// 2. 前缀匹配检查
+	// 2. Check prefixes.
 	for i := range pm.prefixPaths {
 		pp := &pm.prefixPaths[i]
 		if pathLen < pp.prefixLen {
-			continue // 路径比前缀短，不可能匹配
+			continue // The path is shorter than the prefix and cannot match.
 		}
-		// 精确匹配前缀本身
+		// Match the prefix itself.
 		if pathLen == pp.prefixLen {
 			if urlPath == pp.prefix {
 				return true
 			}
 			continue
 		}
-		// pathLen > pp.prefixLen: 使用 strings.HasPrefix 替代切片比较
-		// 先检查分隔符位置，避免不必要的前缀比较
+		// For longer paths, use strings.HasPrefix rather than slicing.
+		// Check the separator first to avoid unnecessary prefix comparisons.
 		if urlPath[pp.prefixLen] == '/' && strings.HasPrefix(urlPath, pp.prefix) {
 			return true
 		}
 	}
 
-	// 3. Glob 模式匹配 (最慢，放最后)
+	// 3. Check glob patterns last.
 	for i := range pm.patterns {
 		if matched, _ := path.Match(pm.patterns[i], urlPath); matched {
 			return true
@@ -105,10 +105,10 @@ func (pm *PathMatcher) Match(urlPath string) bool {
 	return false
 }
 
-// SkipConfig 中间件通用跳过配置
+// SkipConfig defines common middleware skip rules.
 type SkipConfig struct {
-	Paths []string                 // 跳过处理的路径
-	Func  func(*http.Request) bool // 动态跳过判断函数
+	Paths []string                 // Paths that bypass the middleware.
+	Func  func(*http.Request) bool // Dynamic skip predicate.
 }
 
 // shouldSkip reports whether the request should be skipped.
@@ -119,12 +119,12 @@ func shouldSkip(r *http.Request, matcher *PathMatcher, skipFunc func(*http.Reque
 	return matcher.Match(r.URL.Path)
 }
 
-// AdaptToGin 将标准 net/http 中间件转换为 gin.HandlerFunc，可直接传入 r.Use() 或路由注册。
+// AdaptToGin converts standard net/http middleware into a gin.HandlerFunc for routes or r.Use.
 //
-// 中间件内对 *http.Request 的任何修改（例如写入 context 的 Claims）会通过
-// c.Request = r 同步回 Gin 上下文，后续 Handler 可从 c.Request.Context() 中正常读取。
+// Changes to *http.Request, including claims added to context, are propagated through
+// c.Request = r so downstream handlers can read them from c.Request.Context().
 //
-// 示例：
+// Example:
 //
 //	r := gin.New()
 //	r.Use(AdaptToGin(Recovery()))
@@ -137,7 +137,10 @@ func AdaptToGin(m func(http.Handler) http.Handler) gin.HandlerFunc {
 			nextCalled = true
 			c.Request = r
 			c.Next()
-		})).ServeHTTP(c.Writer, c.Request)
+		})).ServeHTTP(
+			c.Writer,
+			c.Request,
+		)
 		if !nextCalled {
 			c.Abort()
 		}

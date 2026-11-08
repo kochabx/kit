@@ -11,27 +11,27 @@ import (
 	"strings"
 )
 
-// RequestOption 配置单次请求。
+// RequestOption configures a single request.
 type RequestOption func(*requestConfig)
 
-// requestConfig 是单次请求的可变配置，由 RequestOption 填充。
+// requestConfig holds mutable per-request settings populated by RequestOption.
 type requestConfig struct {
 	header http.Header
 	query  url.Values
 	decode func(*http.Response) error
 }
 
-// Header 添加单个请求头。多次调用同一 key 会追加值。
+// Header appends a header value; repeated calls with the same key retain all values.
 func Header(key, value string) RequestOption {
 	return func(c *requestConfig) { c.header.Add(key, value) }
 }
 
-// SetHeader 设置单个请求头，覆盖同名值。
+// SetHeader sets a header, replacing existing values for the key.
 func SetHeader(key, value string) RequestOption {
 	return func(c *requestConfig) { c.header.Set(key, value) }
 }
 
-// Headers 批量设置请求头 (覆盖同名值)。
+// Headers sets multiple headers, replacing existing values for matching keys.
 func Headers(headers map[string]string) RequestOption {
 	return func(c *requestConfig) {
 		for k, v := range headers {
@@ -40,28 +40,28 @@ func Headers(headers map[string]string) RequestOption {
 	}
 }
 
-// Bearer 设置 Authorization: Bearer <token>。
+// Bearer sets Authorization: Bearer <token>.
 func Bearer(token string) RequestOption {
 	return SetHeader("Authorization", "Bearer "+token)
 }
 
-// BasicAuth 设置 HTTP Basic 认证头。
+// BasicAuth sets the HTTP Basic authentication header.
 func BasicAuth(username, password string) RequestOption {
 	creds := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
 	return SetHeader("Authorization", "Basic "+creds)
 }
 
-// Query 追加单个 query 参数。
+// Query appends a query parameter value.
 func Query(key, value string) RequestOption {
 	return func(c *requestConfig) { c.query.Add(key, value) }
 }
 
-// SetQuery 设置单个 query 参数 (覆盖同名值)。
+// SetQuery sets a query parameter, replacing existing values for the key.
 func SetQuery(key, value string) RequestOption {
 	return func(c *requestConfig) { c.query.Set(key, value) }
 }
 
-// Queries 批量追加 query 参数。
+// Queries appends multiple query parameter values.
 func Queries(values url.Values) RequestOption {
 	return func(c *requestConfig) {
 		for k, vs := range values {
@@ -72,12 +72,12 @@ func Queries(values url.Values) RequestOption {
 	}
 }
 
-// Into 根据响应的 Content-Type 自动解码到 dest：
+// Into selects a decoder from the response Content-Type:
 //   - application/json => json.Unmarshal
 //   - application/xml / text/xml => xml.Unmarshal
-//   - 当 dest 为 *[]byte / *string 时，直接保存原始响应体
+//   - *[]byte and *string targets receive the raw response body
 //
-// 解码完成后 Body 会被关闭。如果状态码被判定为错误 (HTTPError)，不会进行解码。
+// The response body is closed after decoding. Responses classified as HTTPError are not decoded.
 func Into(dest any) RequestOption {
 	return func(c *requestConfig) {
 		c.decode = func(resp *http.Response) error {
@@ -86,7 +86,7 @@ func Into(dest any) RequestOption {
 	}
 }
 
-// IntoJSON 强制以 JSON 解码到 dest，忽略响应 Content-Type。
+// IntoJSON decodes JSON into dest regardless of the response Content-Type.
 func IntoJSON(dest any) RequestOption {
 	return func(c *requestConfig) {
 		c.decode = func(resp *http.Response) error {
@@ -96,7 +96,7 @@ func IntoJSON(dest any) RequestOption {
 	}
 }
 
-// IntoXML 强制以 XML 解码到 dest。
+// IntoXML decodes XML into dest regardless of the response Content-Type.
 func IntoXML(dest any) RequestOption {
 	return func(c *requestConfig) {
 		c.decode = func(resp *http.Response) error {
@@ -106,7 +106,7 @@ func IntoXML(dest any) RequestOption {
 	}
 }
 
-// IntoBytes 将原始响应体写入 *dest。
+// IntoBytes stores the raw response body in dest.
 func IntoBytes(dest *[]byte) RequestOption {
 	return func(c *requestConfig) {
 		c.decode = func(resp *http.Response) error {
@@ -121,7 +121,7 @@ func IntoBytes(dest *[]byte) RequestOption {
 	}
 }
 
-// IntoString 将原始响应体写入 *dest。
+// IntoString stores the raw response body in dest.
 func IntoString(dest *string) RequestOption {
 	return func(c *requestConfig) {
 		c.decode = func(resp *http.Response) error {
@@ -136,12 +136,12 @@ func IntoString(dest *string) RequestOption {
 	}
 }
 
-// Decode 注册一个自定义响应处理函数，调用方负责关闭 resp.Body。
+// Decode sets a custom response handler. The handler must close resp.Body.
 func Decode(fn func(*http.Response) error) RequestOption {
 	return func(c *requestConfig) { c.decode = fn }
 }
 
-// decodeAuto 根据 Content-Type 自动选择解码方式。
+// decodeAuto selects a decoder from Content-Type.
 func decodeAuto(resp *http.Response, dest any) error {
 	defer resp.Body.Close()
 

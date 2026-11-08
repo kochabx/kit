@@ -11,8 +11,6 @@ HPKE 的基本使用方式是：发送方持有接收方的公钥并调用 `Seal
 go get github.com/kochabx/kit/core/crypto/ecies
 ```
 
-需要 Go 1.27 或更高版本。
-
 ## 选择加密套件
 
 一般业务使用 `X25519ChaCha20`：
@@ -411,3 +409,13 @@ Recipient 状态。
 | `Suite.ParsePublicKey()` | 解析公钥 |
 | `Suite.Seal()` | 使用公钥加密 |
 | `Suite.Open()` | 使用私钥认证并解密 |
+
+## 验证
+
+本页的 `json` 指 `encoding/json/v2`。
+
+```bash
+go test -race ./core/crypto/ecies -count=1
+```
+
+套件、密钥、info 与 AAD 都属于通信协议，发送端和接收端必须一致；包名仍为 ecies，实际公开 API 使用 HPKE Suite。

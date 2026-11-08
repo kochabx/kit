@@ -9,7 +9,7 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Console 创建控制台输出 writer
+// NewConsole creates a console output writer.
 func NewConsole() zerolog.ConsoleWriter {
 	return zerolog.ConsoleWriter{
 		Out:         os.Stdout,
@@ -18,7 +18,7 @@ func NewConsole() zerolog.ConsoleWriter {
 	}
 }
 
-// formatLevel 格式化日志级别显示
+// formatLevel formats a log level for display.
 func formatLevel(i any) string {
 	return strings.ToUpper(fmt.Sprintf("| %-6s|", i))
 }

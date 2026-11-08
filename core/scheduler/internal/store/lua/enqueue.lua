@@ -1,7 +1,9 @@
 local receipt = redis.call('GET', KEYS[5])
 if receipt then
- if receipt ~= ARGV[16] then return { -1, ARGV[1], '' } end
- return { 0, ARGV[1], redis.call('HGET', KEYS[1], 'state') or '' }
+  if receipt ~= ARGV[16] then
+    return { -1, ARGV[1], '' }
+  end
+  return { 0, ARGV[1], redis.call('HGET', KEYS[1], 'state') or '' }
 end
 local unique = KEYS[3]
 local clock = redis.call('TIME')
@@ -27,11 +29,42 @@ local state = 'scheduled'
 if run_at <= now then
   state = 'ready'
 end
-redis.call('HSET', KEYS[1],
-  'queue', ARGV[13], 'id', ARGV[1], 'task', ARGV[2], 'payload', ARGV[3],
-  'state', state, 'run_at', run_at,
-  'created_at', now, 'attempt', 0, 'max_attempts', ARGV[5],
-  'incarnation', ARGV[18], 'unique_key', ARGV[6], 'fingerprint', ARGV[10], 'version', ARGV[14], 'policy', ARGV[15], 'failure_count', 0, 'recovery_count', 0)
+redis.call(
+  'HSET',
+  KEYS[1],
+  'queue',
+  ARGV[13],
+  'id',
+  ARGV[1],
+  'task',
+  ARGV[2],
+  'payload',
+  ARGV[3],
+  'state',
+  state,
+  'run_at',
+  run_at,
+  'created_at',
+  now,
+  'attempt',
+  0,
+  'max_attempts',
+  ARGV[5],
+  'incarnation',
+  ARGV[18],
+  'unique_key',
+  ARGV[6],
+  'fingerprint',
+  ARGV[10],
+  'version',
+  ARGV[14],
+  'policy',
+  ARGV[15],
+  'failure_count',
+  0,
+  'recovery_count',
+  0
+)
 if expires_at > 0 then
   redis.call('HSET', KEYS[1], 'expires_at', expires_at)
 end

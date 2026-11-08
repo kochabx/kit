@@ -8,18 +8,23 @@ import (
 )
 
 // ============================================================================
-// Permission 中间件测试
-// 展示：stdlib net/http 与 Gin 两种框架下的一致行为
+// Permission middleware tests.
+// Verify consistent behavior with net/http and Gin.
 // ============================================================================
 
-// permClaims 实现 GetRoles / GetSubject 接口，供 RoleBasedChecker / OwnerBasedChecker 使用
+// permClaims implements GetRoles and GetSubject for role and ownership checks.
 type permClaims struct {
 	subject string
 	roles   []string
 }
 
-func (c *permClaims) GetRoles() []string { return c.roles }
-func (c *permClaims) GetSubject() string { return c.subject }
+func (c *permClaims) GetRoles() []string {
+	return c.roles
+}
+
+func (c *permClaims) GetSubject() string {
+	return c.subject
+}
 
 func TestPermission_Allow(t *testing.T) {
 	checker := PermissionCheckerFunc(func(ctx context.Context, r *http.Request) error {
@@ -50,7 +55,7 @@ func TestPermission_Deny(t *testing.T) {
 
 func TestPermission_SkipPaths(t *testing.T) {
 	checker := PermissionCheckerFunc(func(ctx context.Context, r *http.Request) error {
-		return ErrForbidden // 如果被调用一定拒绝
+		return ErrForbidden // Reject whenever invoked.
 	})
 	mw := Permission(PermissionConfig{
 		Checker: checker,
@@ -105,7 +110,7 @@ func TestPermission_CustomErrorHandler(t *testing.T) {
 }
 
 // ============================================================================
-// RoleBasedChecker 测试
+// RoleBasedChecker tests.
 // ============================================================================
 
 func TestRoleBasedChecker_Allow(t *testing.T) {
@@ -141,7 +146,7 @@ func TestRoleBasedChecker_NoClaims(t *testing.T) {
 	checker := RoleBasedChecker(RoleBasedConfig{AllowedRoles: []string{"admin"}})
 	mw := Permission(PermissionConfig{Checker: checker})
 
-	// 无 claims → ErrUnauthorized
+	// Missing claims should produce ErrUnauthorized.
 	w := do(mw(okHandler), http.MethodGet, "/", nil)
 	if !containsString(w.Body.String(), `"code":401`) {
 		t.Errorf("no claims should return 401, got: %s", w.Body.String())
@@ -185,7 +190,7 @@ func TestRoleBasedChecker_CustomRolesGetter(t *testing.T) {
 }
 
 // ============================================================================
-// OwnerBasedChecker 测试
+// OwnerBasedChecker tests.
 // ============================================================================
 
 func TestOwnerBasedChecker_Allow(t *testing.T) {
@@ -226,12 +231,12 @@ func TestOwnerBasedChecker_SkipRoles(t *testing.T) {
 	checker := OwnerBasedChecker(OwnerBasedConfig{
 		SkipRoles: []string{"admin"},
 		OwnerGetter: func(ctx context.Context, r *http.Request) ([]string, error) {
-			return []string{}, nil // 没有所有者
+			return []string{}, nil // No resource owners.
 		},
 	})
 	mw := Permission(PermissionConfig{Checker: checker})
 
-	// admin 跳过所有权检查
+	// Administrators bypass ownership checks.
 	claims := &permClaims{subject: "admin-1", roles: []string{"admin"}}
 	handler := withContextValue("claims", claims)(mw(okHandler))
 
@@ -242,7 +247,7 @@ func TestOwnerBasedChecker_SkipRoles(t *testing.T) {
 }
 
 // ============================================================================
-// Gin 集成测试
+// Gin integration test.
 // ============================================================================
 
 func TestPermission_Gin(t *testing.T) {

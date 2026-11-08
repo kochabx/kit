@@ -105,10 +105,18 @@ type Result struct {
 
 ## 测试
 
-单元测试不依赖 Redis。需要运行真实 Redis 集成测试时，设置以下环境变量：
+参数校验和错误包装用例不需要 Redis；完整测试包含真实 Redis 场景，并且不会自动跳过。当前 `rate_test.go` 使用 `localhost:6379` 和本地测试密码 `12345678`，没有读取 `RATE_REDIS_ADDR` / `RATE_REDIS_PASSWORD` 环境变量。
 
 ```bash
-RATE_REDIS_ADDR=localhost:6379 \
-RATE_REDIS_PASSWORD=secret \
-go test ./core/rate -count=1
+go test -race ./core/rate -count=1
+# 无 Redis 时只运行不依赖服务的参数与错误用例：
+go test ./core/rate -run 'Test(ConstructorsValidateArguments|BuildRedisKey|AllowValidatesInputBeforeRedis|RedisErrorIsWrapped)$'
 ```
+
+应在测试专用 Redis 上执行完整测试；需要不同连接地址时先调整测试连接配置。
+
+## 客户端与时间单位
+
+限流器借用 `redis.UniversalClient`，不负责关闭它。与 Scheduler 不同，限流模块不要求 Redis 8.10 专用命令。固定窗口和滑动窗口构造参数中的窗口为整数秒；令牌桶速率按每秒计算。
+
+如果请求失败后由调用方重试，相同业务操作可能再次消耗配额；限流结果不承担业务幂等职责。

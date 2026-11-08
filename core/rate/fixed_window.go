@@ -16,17 +16,17 @@ var (
 	fixedWindowLuaScript = redis.NewScript(fixedWindowLua)
 )
 
-// FixedWindow 是按自然时间边界对齐的分布式固定窗口限流器。
+// FixedWindow is a distributed limiter aligned to fixed time boundaries.
 type FixedWindow struct {
 	client    redis.UniversalClient
 	limit     int64
-	window    int64 // 窗口秒数
+	window    int64 // Window length in seconds.
 	keyPrefix string
 }
 
 var _ Limiter = (*FixedWindow)(nil)
 
-// NewFixedWindow 创建按自然时间边界对齐的固定窗口限流器。
+// NewFixedWindow creates a limiter aligned to fixed time boundaries.
 func NewFixedWindow(client redis.UniversalClient, limit, window int64, opts ...Option) (*FixedWindow, error) {
 	if client == nil {
 		return nil, ErrNilClient
@@ -52,12 +52,12 @@ func NewFixedWindow(client redis.UniversalClient, limit, window int64, opts ...O
 	}, nil
 }
 
-// Allow 申请一个配额。
+// Allow requests one quota unit.
 func (l *FixedWindow) Allow(ctx context.Context, key string) (Result, error) {
 	return l.AllowN(ctx, key, 1)
 }
 
-// AllowN 申请 n 个配额。
+// AllowN requests n quota units.
 func (l *FixedWindow) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	if err := validateN(n, l.limit); err != nil {
 		return Result{}, err

@@ -57,7 +57,12 @@ func TestClaimReturnsAtomicExecutionSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if started.ID != job.ID || started.State != JobRunning || started.Attempt != 1 || string(started.Payload) != string(job.Payload) || started.Fingerprint != job.Fingerprint || started.StartedAt.IsZero() {
+	if started.ID != job.ID ||
+		started.State != JobRunning ||
+		started.Attempt != 1 ||
+		string(started.Payload) != string(job.Payload) ||
+		started.Fingerprint != job.Fingerprint ||
+		started.StartedAt.IsZero() {
 		t.Fatalf("invalid snapshot: %+v", started)
 	}
 	if len(counter.commands) != 1 || counter.commands[0] != "evalsha" {

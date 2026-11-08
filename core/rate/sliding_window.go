@@ -17,17 +17,17 @@ var (
 	slidingWindowLuaScript = redis.NewScript(slidingWindowLua)
 )
 
-// SlidingWindow 是支持权重的精确滑动窗口限流器。
+// SlidingWindow is an exact sliding-window limiter with weighted requests.
 type SlidingWindow struct {
 	client    redis.UniversalClient
 	limit     int64
-	window    int64 // 窗口秒数
+	window    int64 // Window length in seconds.
 	keyPrefix string
 }
 
 var _ Limiter = (*SlidingWindow)(nil)
 
-// NewSlidingWindow 创建精确滑动窗口限流器。
+// NewSlidingWindow creates an exact sliding-window limiter.
 func NewSlidingWindow(client redis.UniversalClient, limit, window int64, opts ...Option) (*SlidingWindow, error) {
 	if client == nil {
 		return nil, ErrNilClient
@@ -53,12 +53,12 @@ func NewSlidingWindow(client redis.UniversalClient, limit, window int64, opts ..
 	}, nil
 }
 
-// Allow 申请一个配额。
+// Allow requests one quota unit.
 func (l *SlidingWindow) Allow(ctx context.Context, key string) (Result, error) {
 	return l.AllowN(ctx, key, 1)
 }
 
-// AllowN 申请 n 个配额。每次调用仅存储一个带权事件，Redis 写入复杂度不会随 n 增长。
+// AllowN requests n quota units, recording one weighted event regardless of n.
 func (l *SlidingWindow) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	if err := validateN(n, l.limit); err != nil {
 		return Result{}, err

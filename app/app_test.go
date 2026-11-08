@@ -1,338 +1,343 @@
 package app
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"os"
-	"syscall"
+	"os/exec"
+	"reflect"
 	"testing"
 	"time"
 
-	"github.com/gin-gonic/gin"
-
 	"github.com/kochabx/kit/cx"
-	"github.com/kochabx/kit/store/db"
-	"github.com/kochabx/kit/transport/http"
+	kithttp "github.com/kochabx/kit/transport/http"
+	"github.com/stretchr/testify/require"
 )
 
-func init() { gin.SetMode(gin.TestMode) }
-
-func newTestServer() *http.Server {
-	return http.NewServer(gin.New())
+type testComponent struct {
+	start func(context.Context) error
+	stop  func(context.Context) error
 }
 
-// ---------------------------------------------------------------------------
-// 基础创建
-// ---------------------------------------------------------------------------
+func (c *testComponent) Start(ctx context.Context) error {
+	if c.start != nil {
+		return c.start(ctx)
+	}
+	return nil
+}
 
-func TestNew_Default(t *testing.T) {
-	app := New()
-	if app.Container() == nil {
-		t.Fatal("expected non-nil container")
+func (c *testComponent) Stop(ctx context.Context) error {
+	if c.stop != nil {
+		return c.stop(ctx)
+	}
+	return nil
+}
+
+func (c *testComponent) HealthCheck(context.Context) error {
+	return nil
+}
+
+func mustNew(t *testing.T, options ...Option) *Application {
+	t.Helper()
+	value, err := New(options...)
+	require.NoError(t, err)
+	return value
+}
+
+func waitReady(t *testing.T, ready <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-ready:
+	case <-time.After(5 * time.Second):
+		t.Fatal("startup did not complete")
 	}
 }
 
-func TestNew_WithServer(t *testing.T) {
-	app := New(WithServer(newTestServer()))
-
-	m := app.Container().Metrics()
-	if m.ComponentCount != 1 {
-		t.Fatalf("expected 1 component, got %d", m.ComponentCount)
-	}
-}
-
-func TestNew_WithServers(t *testing.T) {
-	app := New(WithServers(newTestServer(), newTestServer()))
-
-	m := app.Container().Metrics()
-	if m.ComponentCount != 2 {
-		t.Fatalf("expected 2 components, got %d", m.ComponentCount)
-	}
-}
-
-func TestNew_NilServerIgnored(t *testing.T) {
-	app := New(WithServer(nil))
-
-	m := app.Container().Metrics()
-	if m.ComponentCount != 0 {
-		t.Fatalf("expected 0 components, got %d", m.ComponentCount)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Run / Stop 生命周期
-// ---------------------------------------------------------------------------
-
-func TestRun_NoServers(t *testing.T) {
-	app := New()
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(50 * time.Millisecond)
-	app.Shutdown()
-
+func waitRun(t *testing.T, done <-chan error) error {
+	t.Helper()
 	select {
 	case err := <-done:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
+		return err
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return after Shutdown()")
+		t.Fatal("Run did not finish")
+		return nil
 	}
 }
 
-func TestRun_ContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	app := New(WithContext(ctx))
-
+func launch(t *testing.T, application *Application) <-chan error {
+	t.Helper()
 	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return after context cancel")
-	}
+	go func() { done <- application.Run() }()
+	t.Cleanup(application.Shutdown)
+	return done
 }
 
-func TestRun_DoubleRunReturnsError(t *testing.T) {
-	app := New()
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(50 * time.Millisecond)
-
-	// 第二次 Start 应立即返回错误
-	err := app.Run()
-	if err != ErrAlreadyRunning {
-		t.Fatalf("expected ErrAlreadyRunning, got %v", err)
+func TestNewValidation(t *testing.T) {
+	var nilServer *testComponent
+	for _, tc := range []struct {
+		name    string
+		options []Option
+	}{
+		{"nil option", []Option{nil}},
+		{"nil context", []Option{WithContext(nil)}},
+		{"timeout", []Option{WithShutdownTimeout(0)}},
+		{"nil container", []Option{WithContainer(nil)}},
+		{"nil server", []Option{WithServer(nil)}},
+		{"typed nil server", []Option{WithServer(nilServer)}},
+		{"nil signal", []Option{WithSignals(nil)}},
+		{"nil component", []Option{WithComponent(cx.NewKey[*testComponent]("component"), nilServer)}},
+		{"empty key", []Option{WithComponent(cx.NewKey[int](""), 1)}},
+		{"nil hook", []Option{WithOnStart(nil)}},
+		{
+			"external hook",
+			[]Option{WithContainer(cx.New()), WithOnStart(func(context.Context) error { return nil })},
+		},
+		{"external server", []Option{WithServer(&testComponent{}), WithContainer(cx.New())}},
+		{"external component", []Option{WithContainer(cx.New()), WithComponent(cx.NewKey[int]("value"), 1)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			app, err := New(tc.options...)
+			require.Nil(t, app)
+			require.ErrorIs(t, err, ErrInvalidOption)
+		})
 	}
-
-	app.Shutdown()
-	<-done
+	key := cx.NewKey[int]("duplicate")
+	app, err := New(WithComponent(key, 1), WithComponent(key, 2))
+	require.Nil(t, app)
+	require.Error(t, err)
 }
 
-func TestRun_SupervisedComponentFailureStopsApplication(t *testing.T) {
-	runErr := errors.New("worker failed")
-	runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return runErr }))
-	application := New(WithComponent(cx.NewKey[*cx.Runner]("worker"), runner))
-
-	err := application.Run()
-	if !errors.Is(err, runErr) {
-		t.Fatalf("expected supervised error %v, got %v", runErr, err)
-	}
-	if application.Container().State() != cx.StateStopped {
-		t.Fatalf("expected stopped container, got %s", application.Container().State())
-	}
-}
-
-func TestRun_UnexpectedComponentCancellationIsFailure(t *testing.T) {
-	runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return context.Canceled }))
-	application := New(WithComponent(cx.NewKey[*cx.Runner]("worker"), runner))
-
-	err := application.Run()
-	if err == nil || !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected unexpected cancellation error, got %v", err)
-	}
-}
-
-func TestRun_WithOptions(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	app := New(
-		WithContext(ctx),
-		WithShutdownTimeout(5*time.Second),
-		WithSignals(os.Interrupt, syscall.SIGTERM),
-		WithServer(newTestServer()),
-	)
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(100 * time.Millisecond)
-	app.Shutdown()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 生命周期钩子
-// ---------------------------------------------------------------------------
-
-func TestRun_LifecycleHooks(t *testing.T) {
+func TestRunOrderHooksAndContext(t *testing.T) {
+	type key struct{}
 	var order []string
-
-	app := New(
-		WithOnStart(func(ctx context.Context) error {
-			order = append(order, "onStart")
-			return nil
-		}),
-		WithOnStarted(func(ctx context.Context) error {
-			order = append(order, "onStarted")
-			return nil
-		}),
-		WithOnStopping(func(ctx context.Context) error {
-			order = append(order, "onStopping")
-			return nil
-		}),
-		WithOnStop(func(ctx context.Context) error {
-			order = append(order, "onStop")
-			return nil
-		}),
-	)
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(50 * time.Millisecond)
-	app.Shutdown()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return")
-	}
-
-	expected := []string{"onStart", "onStarted", "onStopping", "onStop"}
-	if len(order) != len(expected) {
-		t.Fatalf("expected hooks %v, got %v", expected, order)
-	}
-	for i, v := range expected {
-		if order[i] != v {
-			t.Fatalf("hook[%d]: expected %q, got %q", i, v, order[i])
-		}
-	}
-}
-
-// ---------------------------------------------------------------------------
-// WithContainer — 自定义容器
-// ---------------------------------------------------------------------------
-
-func TestRun_WithContainer(t *testing.T) {
-	dbClient, err := db.New(db.Config{Driver: db.SQLiteConfig{Path: t.TempDir() + "/test.db"}})
-	if err != nil {
-		t.Fatalf("failed to create db client: %v", err)
-	}
-
-	c := cx.New()
-	c.MustSupply(cx.NewKey[*db.Client]("db"), dbClient)
-
-	app := New(WithContainer(c))
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(50 * time.Millisecond)
-
-	// db.Client.Start 调用 Ping，验证组件已启动
-	if dbClient.Ping(context.Background()) != nil {
-		t.Fatal("expected db to be reachable after start")
-	}
-
-	app.Shutdown()
-	<-done
-}
-
-// ---------------------------------------------------------------------------
-// HealthCheck
-// ---------------------------------------------------------------------------
-
-func TestHealthCheck(t *testing.T) {
-	dbClient, err := db.New(db.Config{Driver: db.SQLiteConfig{Path: t.TempDir() + "/test.db"}})
-	if err != nil {
-		t.Fatalf("failed to create db client: %v", err)
-	}
-
-	c := cx.New()
-	c.MustSupply(cx.NewKey[*db.Client]("db"), dbClient)
-
-	app := New(WithContainer(c))
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(50 * time.Millisecond)
-
-	report, err := app.HealthCheck(context.Background())
-	if err != nil {
-		t.Fatalf("health check: %v", err)
-	}
-	if !report.Healthy {
-		t.Fatal("expected healthy report")
-	}
-
-	app.Shutdown()
-	<-done
-}
-
-// ---------------------------------------------------------------------------
-// 关闭顺序 — 验证 cx 反向依赖序
-// ---------------------------------------------------------------------------
-
-func TestRun_ShutdownOrder(t *testing.T) {
-	// 使用真实 HTTP server 和 SQLite DB 验证关闭顺序
-	// 注册顺序：server → db → 停止顺序：db → server
-
-	srv := http.NewServer(gin.New(), http.WithAddr(":18999"))
-
-	dbClient, err := db.New(db.Config{Driver: db.SQLiteConfig{Path: t.TempDir() + "/test.db"}})
-	if err != nil {
-		t.Fatalf("failed to create db client: %v", err)
-	}
-
-	var order []string
-
-	app := New(
-		WithServer(srv),
-		WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
-		WithOnStopping(func(ctx context.Context) error {
-			// 记录 db 连接状态：如果 db 已关闭，Ping 会失败
-			if dbClient.Ping(ctx) != nil {
-				order = append(order, "db-closed")
-			} else {
-				order = append(order, "db-alive")
+	record := func(name string) func(context.Context) error {
+		return func(ctx context.Context) error {
+			if name == "server-stop" || name == "dependency-stop" {
+				require.NoError(t, ctx.Err())
+				require.Equal(t, "value", ctx.Value(key{}))
+				_, hasDeadline := ctx.Deadline()
+				require.True(t, hasDeadline)
 			}
+			order = append(order, name)
+			return nil
+		}
+	}
+	dependency := &testComponent{start: record("dependency-start"), stop: record("dependency-stop")}
+	server := &testComponent{start: record("server-start"), stop: record("server-stop")}
+	ready := make(chan struct{})
+	app := mustNew(t, WithSignals(), WithContext(context.WithValue(context.Background(), key{}, "value")),
+		WithServer(server), WithComponent(cx.NewKey[*testComponent]("dependency"), dependency),
+		WithOnStart(record("onStart")),
+		WithOnStarted(func(ctx context.Context) error { _ = record("onStarted")(ctx); close(ready); return nil }),
+		WithOnStopping(record("onStopping")), WithOnStop(record("onStop")))
+	done := launch(t, app)
+	waitReady(t, ready)
+	require.ErrorIs(t, app.Run(), ErrAlreadyRunning)
+	report, err := app.HealthCheck(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.Healthy)
+	app.Shutdown()
+	require.NoError(t, waitRun(t, done))
+	require.Equal(
+		t,
+		[]string{
+			"onStart",
+			"dependency-start",
+			"server-start",
+			"onStarted",
+			"onStopping",
+			"server-stop",
+			"dependency-stop",
+			"onStop",
+		},
+		order,
+	)
+	require.ErrorIs(t, app.Run(), ErrAlreadyRun)
+}
+
+func TestRunContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ready := make(chan struct{})
+	app := mustNew(t, WithSignals(), WithContext(ctx), WithOnStarted(func(context.Context) error {
+		close(ready)
+		return nil
+	}))
+	done := launch(t, app)
+	waitReady(t, ready)
+	cancel()
+	require.NoError(t, waitRun(t, done))
+}
+
+func TestRunStartupCancellationAndRollback(t *testing.T) {
+	entered := make(chan struct{})
+	stopped := false
+	dependency := &testComponent{stop: func(ctx context.Context) error { stopped = true; return ctx.Err() }}
+	blocking := &testComponent{start: func(ctx context.Context) error { close(entered); <-ctx.Done(); return ctx.Err() }}
+	app := mustNew(t, WithSignals(), WithComponent(cx.NewKey[*testComponent]("dependency"), dependency), WithServer(blocking))
+	done := launch(t, app)
+	waitReady(t, entered)
+	app.Shutdown()
+	require.ErrorIs(t, waitRun(t, done), context.Canceled)
+	require.True(t, stopped)
+	require.ErrorIs(t, app.Run(), ErrAlreadyRun)
+}
+
+func TestRunSupervisedFailure(t *testing.T) {
+	for _, failure := range []error{errors.New("worker failed"), context.Canceled} {
+		runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return failure }))
+		app := mustNew(t, WithSignals(), WithComponent(cx.NewKey[*cx.Runner]("worker"), runner))
+		require.ErrorIs(t, app.Run(), failure)
+		require.Equal(t, cx.StateStopped, app.Container().State())
+	}
+}
+
+func TestRunShutdownFailure(t *testing.T) {
+	failure := errors.New("stop failed")
+	ready := make(chan struct{})
+	app := mustNew(
+		t,
+		WithSignals(),
+		WithComponent(cx.NewKey[*testComponent]("resource"), &testComponent{stop: func(context.Context) error {
+			return failure
+		}}),
+		WithOnStarted(func(context.Context) error {
+			close(ready)
 			return nil
 		}),
 	)
-
-	done := make(chan error, 1)
-	go func() { done <- app.Run() }()
-
-	time.Sleep(100 * time.Millisecond)
+	done := launch(t, app)
+	waitReady(t, ready)
 	app.Shutdown()
+	require.ErrorIs(t, waitRun(t, done), failure)
+}
 
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
+func TestRunExternalContainer(t *testing.T) {
+	ready := make(chan struct{})
+	container := cx.New(cx.WithOnStarted(func(context.Context) error { close(ready); return nil }))
+	container.MustSupply(cx.NewKey[*testComponent]("resource"), &testComponent{})
+	app := mustNew(t, WithSignals(), WithContainer(container))
+	require.Same(t, container, app.Container())
+	done := launch(t, app)
+	waitReady(t, ready)
+	report, err := app.HealthCheck(context.Background())
+	require.NoError(t, err)
+	require.True(t, report.Healthy)
+	_, err = New(WithContainer(container))
+	require.ErrorIs(t, err, ErrInvalidOption)
+	app.Shutdown()
+	require.NoError(t, waitRun(t, done))
+}
+
+func TestSignalOptionsSnapshot(t *testing.T) {
+	signals := []os.Signal{os.Interrupt}
+	option := WithSignals(signals...)
+	signals[0] = nil
+	app := mustNew(t, option)
+	require.True(t, reflect.DeepEqual([]os.Signal{os.Interrupt}, app.signals))
+	app.Shutdown()
+}
+
+func TestRunHTTPServer(t *testing.T) {
+	ready := make(chan struct{})
+	app := mustNew(
+		t,
+		WithSignals(),
+		WithServer(kithttp.NewServer(http.NotFoundHandler(), kithttp.WithAddr("127.0.0.1:0"))),
+		WithOnStarted(func(context.Context) error {
+			close(ready)
+			return nil
+		}),
+	)
+	done := launch(t, app)
+	waitReady(t, ready)
+	app.Shutdown()
+	require.NoError(t, waitRun(t, done))
+}
+
+func TestRunSignalDuringStartup(t *testing.T) {
+	const childEnv = "KIT_APP_SIGNAL_CHILD"
+	if os.Getenv(childEnv) == "1" {
+		app := mustNew(t, WithSignals(os.Interrupt), WithOnStart(func(ctx context.Context) error {
+			fmt.Println("startup-ready")
+			<-ctx.Done()
+			return ctx.Err()
+		}))
+		require.ErrorIs(t, app.Run(), context.Canceled)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRunSignalDuringStartup$")
+	cmd.Env = append(os.Environ(), childEnv+"=1")
+	output, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() {
+		if cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
 		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run() did not return")
+	})
+	scanner := bufio.NewScanner(output)
+	require.True(t, scanner.Scan())
+	require.Equal(t, "startup-ready", scanner.Text())
+	require.NoError(t, cmd.Process.Signal(os.Interrupt))
+	for scanner.Scan() {
 	}
+	require.NoError(t, scanner.Err())
+	require.NoError(t, cmd.Wait())
+}
 
-	// OnStopping 在组件 Stop 之前执行，此时 db 应该还活着
-	if len(order) != 1 || order[0] != "db-alive" {
-		t.Fatalf("expected [db-alive], got %v", order)
+func TestStartupFailureRollsBackBeforeServing(t *testing.T) {
+	failure := errors.New("dependency startup failed")
+	var order []string
+	dependency := &testComponent{
+		start: func(context.Context) error { order = append(order, "start"); return failure },
+		stop:  func(context.Context) error { order = append(order, "rollback"); return nil },
 	}
+	server := &testComponent{start: func(context.Context) error { order = append(order, "serve"); return nil }}
+	app := mustNew(t, WithSignals(), WithServer(server), WithComponent(cx.NewKey[*testComponent]("dependency"), dependency))
+	require.ErrorIs(t, app.Run(), failure)
+	require.Equal(t, []string{"start", "rollback"}, order)
+	require.ErrorIs(t, app.Run(), ErrAlreadyRun)
+}
+
+func TestShutdownTimeout(t *testing.T) {
+	ready := make(chan struct{})
+	resource := &testComponent{stop: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
+	app := mustNew(
+		t,
+		WithSignals(),
+		WithShutdownTimeout(20*time.Millisecond),
+		WithComponent(cx.NewKey[*testComponent]("resource"), resource),
+		WithOnStarted(func(context.Context) error {
+			close(ready)
+			return nil
+		}),
+	)
+	done := launch(t, app)
+	waitReady(t, ready)
+	app.Shutdown()
+	require.ErrorIs(t, waitRun(t, done), context.DeadlineExceeded)
+}
+
+func TestSupervisedAndShutdownErrorsAreJoined(t *testing.T) {
+	runErr := errors.New("worker failed")
+	stopErr := errors.New("cleanup failed")
+	runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return runErr }))
+	app := mustNew(
+		t,
+		WithSignals(),
+		WithComponent(cx.NewKey[*testComponent]("resource"), &testComponent{stop: func(context.Context) error {
+			return stopErr
+		}}),
+		WithComponent(cx.NewKey[*cx.Runner]("runner"), runner),
+	)
+	err := app.Run()
+	require.ErrorIs(t, err, runErr)
+	require.ErrorIs(t, err, stopErr)
 }

@@ -77,7 +77,11 @@ func TestNestedConfigJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if config.Queues[0].Concurrency != 8 || config.Dispatch.Batch != 20 || config.Maintenance.Batch != 10 || config.Retention.Succeeded != time.Second || config.Observability.Buffer != 128 {
+	if config.Queues[0].Concurrency != 8 ||
+		config.Dispatch.Batch != 20 ||
+		config.Maintenance.Batch != 10 ||
+		config.Retention.Succeeded != time.Second ||
+		config.Observability.Buffer != 128 {
 		t.Fatalf("nested config=%+v", config)
 	}
 	config.Dispatch.DrainLimit = 1
@@ -87,7 +91,10 @@ func TestNestedConfigJSON(t *testing.T) {
 }
 
 func TestHeartbeatConfigRequiresLeaseHeadroom(t *testing.T) {
-	_, err := prepareConfig(WorkerConfig{Execution: ExecutionConfig{LeaseDuration: 3 * time.Second, LeaseRenewInterval: 2 * time.Second}})
+	_, err := prepareConfig(WorkerConfig{Execution: ExecutionConfig{
+		LeaseDuration:      3 * time.Second,
+		LeaseRenewInterval: 2 * time.Second,
+	}})
 	if err == nil {
 		t.Fatal("renew interval without lease headroom accepted")
 	}

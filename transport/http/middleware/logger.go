@@ -14,23 +14,23 @@ import (
 	"github.com/kochabx/kit/log"
 )
 
-// LogFields 控制日志中各字段的记录开关
+// LogFields selects request log fields.
 type LogFields struct {
-	Header       bool // 是否记录请求头
-	RequestBody  bool // 是否记录请求体
-	ResponseBody bool // 是否记录响应体
-	Trace        bool // 是否从 context 注入 trace_id / span_id
+	Header       bool // Whether to log request headers.
+	RequestBody  bool // Whether to log the request body.
+	ResponseBody bool // Whether to log the response body.
+	Trace        bool // Whether to include trace_id and span_id from context.
 }
 
-// LoggerConfig 日志中间件配置
+// LoggerConfig configures request logging middleware.
 type LoggerConfig struct {
-	Skip     SkipConfig                                         // 跳过配置
-	Fields   LogFields                                          // 日志字段记录开关
-	Enricher func(*http.Request, *zerolog.Event) *zerolog.Event // 追加自定义日志字段
-	Logger   *log.Logger                                        // 自定义日志记录器
+	Skip     SkipConfig                                         // Skip rules.
+	Fields   LogFields                                          // Enabled log fields.
+	Enricher func(*http.Request, *zerolog.Event) *zerolog.Event // Callback for additional log fields.
+	Logger   *log.Logger                                        // Custom logger.
 }
 
-// statusResponseWriter 包装 http.ResponseWriter 以捕获状态码和响应体
+// statusResponseWriter captures the status code and optional response body.
 type statusResponseWriter struct {
 	http.ResponseWriter
 	status int
@@ -55,7 +55,7 @@ func (w *statusResponseWriter) Flush() {
 	}
 }
 
-// clientIP 从请求中提取客户端 IP，优先读取 X-Real-IP / X-Forwarded-For
+// clientIP extracts the client address, preferring X-Real-IP and X-Forwarded-For.
 func clientIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip
@@ -72,7 +72,7 @@ func clientIP(r *http.Request) string {
 	return r.RemoteAddr
 }
 
-// Logger 创建请求日志中间件
+// Logger creates request logging middleware.
 func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 	cfg := LoggerConfig{}
 	if len(cfgs) > 0 {
@@ -127,7 +127,10 @@ func Logger(cfgs ...LoggerConfig) func(http.Handler) http.Handler {
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Dur("duration", time.Since(start)).
-				Str("client_ip", clientIP(r))
+				Str(
+					"client_ip",
+					clientIP(r),
+				)
 
 			if query := r.URL.RawQuery; query != "" {
 				event = event.Str("query", query)

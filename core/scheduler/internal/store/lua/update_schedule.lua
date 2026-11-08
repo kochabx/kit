@@ -11,7 +11,18 @@ end
 if state == 'invalid' then
   state = 'active'
 end
-redis.call('HSET', KEYS[1], 'cron', ARGV[2], 'timezone', ARGV[3], 'next_at', ARGV[4], 'state', state)
+redis.call(
+  'HSET',
+  KEYS[1],
+  'cron',
+  ARGV[2],
+  'timezone',
+  ARGV[3],
+  'next_at',
+  ARGV[4],
+  'state',
+  state
+)
 redis.call('HDEL', KEYS[1], 'finished_at', 'last_error')
 redis.call('ZREM', KEYS[3], ARGV[1])
 if state == 'active' then

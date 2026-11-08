@@ -18,7 +18,7 @@ func requireRedisIntegration(t *testing.T) {
 	}
 }
 
-// TestSingleMode 测试单机模式
+// TestSingleMode tests standalone mode.
 func TestSingleMode(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
@@ -32,12 +32,12 @@ func TestSingleMode(t *testing.T) {
 	}
 	defer client.Close()
 
-	// 测试 Ping
+	// Test Ping.
 	if err := client.Ping(ctx); err != nil {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 	}
 
-	// 测试基本操作
+	// Test basic commands.
 	key := "test:key"
 	value := "test:value"
 
@@ -54,11 +54,11 @@ func TestSingleMode(t *testing.T) {
 		t.Errorf("Expected %s, got %s", value, result)
 	}
 
-	// 清理
+	// Clean up.
 	client.UniversalClient().Del(ctx, key)
 }
 
-// TestClusterMode 测试集群模式
+// TestClusterMode tests cluster mode.
 func TestClusterMode(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
@@ -72,19 +72,19 @@ func TestClusterMode(t *testing.T) {
 	}
 	defer client.Close()
 
-	// 测试 Ping
+	// Test Ping.
 	if err := client.Ping(ctx); err != nil {
 		t.Skipf("Skipping test (Redis cluster not available): %v", err)
 	}
 
-	// 测试连接池统计
+	// Test connection pool statistics.
 	stats := client.Stats()
 	if stats == nil {
 		t.Error("Stats should not be nil")
 	}
 }
 
-// TestSentinelMode 测试哨兵模式
+// TestSentinelMode tests Sentinel mode.
 func TestSentinelMode(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
@@ -98,13 +98,13 @@ func TestSentinelMode(t *testing.T) {
 	}
 	defer client.Close()
 
-	// 测试 Ping
+	// Test Ping.
 	if err := client.Ping(ctx); err != nil {
 		t.Skipf("Skipping test (Redis sentinel not available): %v", err)
 	}
 }
 
-// TestWithMetrics 测试 Metrics
+// TestWithMetrics tests metrics instrumentation.
 func TestWithMetrics(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
@@ -122,16 +122,16 @@ func TestWithMetrics(t *testing.T) {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 	}
 
-	// 执行一些命令
+	// Execute commands.
 	for range 10 {
 		client.UniversalClient().Ping(ctx)
 	}
 
-	// OpenTelemetry Metrics 通过 exporter 导出，这里只验证客户端正常工作
+	// Exporters deliver OpenTelemetry metrics; this test only checks that client operations succeed.
 	t.Log("Metrics enabled with OpenTelemetry redisotel")
 }
 
-// TestWithSlowQuery 测试慢查询检测
+// TestWithSlowQuery tests slow-command detection.
 func TestWithSlowQuery(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
@@ -141,7 +141,7 @@ func TestWithSlowQuery(t *testing.T) {
 	cfg := Single("localhost:6379")
 	cfg.Password = "12345678"
 	client, err := New(cfg,
-		WithDebug(1*time.Microsecond), // 设置极小的阈值
+		WithDebug(1*time.Microsecond), // Use a very low threshold.
 		WithLogger(logger),
 	)
 	if err != nil {
@@ -154,11 +154,11 @@ func TestWithSlowQuery(t *testing.T) {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 	}
 
-	// 执行命令（应该触发慢查询日志）
+	// Execute a command that should trigger slow-command logging.
 	client.UniversalClient().Ping(ctx)
 }
 
-// TestClose 测试关闭客户端
+// TestClose tests client shutdown.
 func TestClose(t *testing.T) {
 	cfg := Single("localhost:6379")
 	cfg.Password = "12345678"
@@ -168,18 +168,18 @@ func TestClose(t *testing.T) {
 		return
 	}
 
-	// 关闭客户端
+	// Close the client.
 	if err := client.Close(); err != nil {
 		t.Errorf("Close failed: %v", err)
 	}
 
-	// 再次关闭应该不报错 (Go-Redis default behavior might return error or not, but we removed our own mutex/atomic check)
+	// Exercise a second Close using the underlying client's behavior.
 	// If underlying client.Close() is safe to call twice, this is fine.
 	// Usually go-redis client.Close() is safe-ish but might return error.
 	// Our new Close just calls client.Close().
 }
 
-// TestConcurrentAccess 测试并发访问
+// TestConcurrentAccess tests concurrent operations.
 func TestConcurrentAccess(t *testing.T) {
 	requireRedisIntegration(t)
 	ctx := context.Background()
@@ -198,7 +198,7 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Skipf("Skipping test (Redis not available): %v", err)
 	}
 
-	// 并发执行命令
+	// Execute commands concurrently.
 	const goroutines = 50
 	const commands = 10
 
@@ -214,12 +214,12 @@ func TestConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 
-	// 等待所有 goroutine 完成
+	// Wait for all goroutines.
 	for range goroutines {
 		<-done
 	}
 
-	// 验证结果
+	// Verify the results.
 	result, err := client.UniversalClient().Get(ctx, "test:concurrent").Int()
 	if err != nil {
 		t.Errorf("Get failed: %v", err)
@@ -230,7 +230,7 @@ func TestConcurrentAccess(t *testing.T) {
 		t.Errorf("Expected %d, got %d", expected, result)
 	}
 
-	// 清理
+	// Clean up.
 	client.UniversalClient().Del(ctx, "test:concurrent")
 }
 

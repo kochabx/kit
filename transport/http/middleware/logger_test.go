@@ -9,13 +9,13 @@ import (
 )
 
 // ============================================================================
-// Logger 中间件测试
-// Logger 的主要功能是记录日志，测试重点验证：
-//   - 中间件不影响响应状态码和响应体（透明代理行为）
-//   - SkipPaths / SkipFunc 正常工作（跳过时逻辑完全一致）
-//   - 请求体在记录后仍可被下游读取（不消耗 Body）
+// Logger middleware tests.
+// The request logger tests verify:
+//   - Response status codes and bodies pass through unchanged
+//   - Skip.Paths and Skip.Func bypass middleware consistently
+//   - Downstream handlers can still read the request body after logging
 //
-// 展示：stdlib net/http 与 Gin 两种框架下的一致行为
+// Verify consistent behavior with net/http and Gin.
 // ============================================================================
 
 func TestLogger_PassesThrough(t *testing.T) {
@@ -62,7 +62,7 @@ func TestLogger_SkipFunc(t *testing.T) {
 }
 
 func TestLogger_RequestBodyPassedToNext(t *testing.T) {
-	// 开启 RequestBody 记录时，Body 被读取后需复原，下游仍能读取
+	// Request body logging must restore Body for downstream readers.
 	var downstreamBody string
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
@@ -81,7 +81,7 @@ func TestLogger_RequestBodyPassedToNext(t *testing.T) {
 }
 
 func TestLogger_ResponseBodyCapture(t *testing.T) {
-	// 开启 ResponseBody 记录时，响应体应正常返回给客户端
+	// Response body logging must preserve the response delivered to the client.
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("response data"))
@@ -97,7 +97,7 @@ func TestLogger_ResponseBodyCapture(t *testing.T) {
 }
 
 func TestLogger_DefaultStatus200(t *testing.T) {
-	// 未调用 WriteHeader 时，状态码应默认为 200
+	// The status defaults to HTTP 200 when WriteHeader is not called.
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok"))
 	})
@@ -108,7 +108,7 @@ func TestLogger_DefaultStatus200(t *testing.T) {
 }
 
 func TestLogger_ClientIP_XRealIP(t *testing.T) {
-	// clientIP 函数本身可以直接测试
+	// Test clientIP directly.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Real-IP", "1.2.3.4")
 	capturedIP := clientIP(req)
@@ -136,7 +136,7 @@ func TestLogger_ClientIP_RemoteAddr(t *testing.T) {
 }
 
 // ============================================================================
-// Gin 集成测试
+// Gin integration test.
 // ============================================================================
 
 func TestLogger_Gin(t *testing.T) {

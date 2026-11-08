@@ -2,20 +2,20 @@ package wsx
 
 import "errors"
 
-// Sentinel errors. 调用方可使用 errors.Is 判断。
+// Sentinel errors that callers can match with errors.Is.
 var (
-	// ErrClientClosed 客户端已被关闭，不能再使用。
+	// ErrClientClosed indicates that the client is closed and cannot be reused.
 	ErrClientClosed = errors.New("client closed")
-	// ErrAlreadyConnected 连接已建立，重复连接被拒绝。
+	// ErrAlreadyConnected indicates an active session, including a pending connection or reconnect.
 	ErrAlreadyConnected = errors.New("already connected")
-	// ErrNotConnected 当前未连接到服务器。
+	// ErrNotConnected indicates that no server connection is established.
 	ErrNotConnected = errors.New("not connected")
-	// ErrInvalidScheme URL scheme 非 ws/wss。
+	// ErrInvalidScheme indicates a URL scheme other than ws or wss.
 	ErrInvalidScheme = errors.New("invalid websocket scheme")
-	// ErrInvalidURL URL 解析失败。
+	// ErrInvalidURL indicates a URL parsing failure.
 	ErrInvalidURL = errors.New("invalid websocket url")
-	// ErrSendTimeout 发送队列阻塞超时。
+	// ErrSendTimeout indicates a timeout while enqueueing a message.
 	ErrSendTimeout = errors.New("send timeout")
-	// ErrMaxRetriesExceeded 已达到最大重连次数。
+	// ErrMaxRetriesExceeded indicates that the reconnect limit has been reached.
 	ErrMaxRetriesExceeded = errors.New("max reconnection attempts reached")
 )

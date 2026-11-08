@@ -12,13 +12,13 @@ import (
 	"github.com/kochabx/kit/log"
 )
 
-// RecoveryConfig Recovery 中间件配置
+// RecoveryConfig configures panic recovery middleware.
 type RecoveryConfig struct {
-	StackTrace bool        // 是否记录堆栈信息
-	Logger     *log.Logger // 自定义日志记录器
+	StackTrace bool        // Whether to log a stack trace.
+	Logger     *log.Logger // Custom logger.
 }
 
-// Recovery 创建 panic 恢复中间件
+// Recovery creates panic recovery middleware.
 func Recovery(cfgs ...RecoveryConfig) func(http.Handler) http.Handler {
 	cfg := RecoveryConfig{
 		StackTrace: true,
@@ -62,7 +62,7 @@ func Recovery(cfgs ...RecoveryConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// isBrokenPipe 检查是否为断开的连接错误
+// isBrokenPipe detects errors caused by a broken connection.
 func isBrokenPipe(err any) bool {
 	if ne, ok := err.(*net.OpError); ok {
 		if se, ok := ne.Err.(*os.SyscallError); ok {

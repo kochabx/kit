@@ -1,6 +1,6 @@
 # wsx — WebSocket 客户端
 
-一个生产级 Go WebSocket 客户端：自动重连、事件驱动、心跳保活，命名风格对齐 [`httpx`](../httpx/)。
+Go WebSocket 客户端：自动重连、事件驱动、心跳保活，命名风格对齐 [`httpx`](../httpx/)。
 
 `wsx` 属于 `core` 通用能力：它是出站客户端工具，不承担 `transport` 服务端协议接入职责。
 
@@ -51,7 +51,7 @@ func main() {
 
     ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
     defer cancel()
-    if err := client.Connect(ctx, "wss://ws.postman-echo.com/raw"); err != nil {
+    if err := client.Connect(ctx, "ws://127.0.0.1:8080/ws"); err != nil {
         log.Fatal(err)
     }
 
@@ -130,17 +130,16 @@ func New(opts ...Option) *Client
 
 可使用 `errors.Is` 判断：
 
-```go
-var (
-    ErrClientClosed       // 客户端已 Close
-    ErrAlreadyConnected   // 已建立连接
-    ErrNotConnected       // 当前未连接
-    ErrInvalidScheme      // scheme 非 ws/wss
-    ErrInvalidURL         // URL 解析失败
-    ErrSendTimeout        // Send 入队超时
-    ErrMaxRetriesExceeded // 触达最大重连次数
-)
-```
+| 错误 | 含义 |
+|---|---|
+| `ErrClientClosed` | 客户端已经关闭 |
+| `ErrAlreadyConnected` | 已连接或正在重连 |
+| `ErrNotConnected` | 尚未连接 |
+| `ErrInvalidScheme` | URL scheme 不是 ws/wss |
+| `ErrInvalidURL` | URL 解析失败 |
+| `ErrSendTimeout` | 发送入队超时 |
+| `ErrMaxRetriesExceeded` | 已达重连次数上限 |
+
 
 ## 配置项
 
@@ -169,26 +168,18 @@ var (
 | `MaxInterval` | `30s` | 间隔上限 |
 | `BackoffMultiplier` | `2.0` | 指数退避倍数 |
 
-## 设计要点（v2 重构说明）
+## 生命周期与回调
 
-- **接口/实现分离**：导出 `*Client` 实现 + `Clienter` 接口，对齐 `httpx`。
-- **死锁修复**：v1 的 `Disconnect/scheduleReconnect` 在持锁状态下调用 `emitEvent` / `connect`，与 `emitEvent` 内的 `RLock` 互斥导致死锁；v2 改为复制必要状态后释放锁再回调。
-- **conn 所有权**：每条连接的 `readLoop/writeLoop/pingLoop` 通过参数持有自己的 `*websocket.Conn` 与 `context`，重连后旧 conn 不会被新循环误用。
-- **ping 独立通道**：心跳通过 `WriteControl` 直接发送，不再与业务消息共用 `writeChan`。
-- **资源安全**：`Close` 用 `sync.Once` 守护可重复调用；`Send` 用 `time.NewTimer + defer Stop` 避免 timer 泄漏。
-- **状态机**：新增 `intentionalDisconnect` 标志，`Disconnect` 不会触发自动重连。
+`Disconnect` 主动断开且不触发自动重连；`Close` 终止客户端并可重复调用，关闭后不能复用为新客户端。`Connect` 的 Context 控制整个连接会话：握手、已建立连接和自动重连。取消或到期会关闭连接并终止重连；客户端本身仍可通过新的 Context 再次 `Connect`。`HandshakeTimeout` 单独限制握手耗时，不必为了握手超时给整个会话设置短期限。
 
-## 旧版迁移指引
+读、写和心跳循环持有各自连接及 Context，避免重连后旧循环误操作新连接。心跳使用控制帧，不占业务写队列。事件回调应快速返回，业务侧自行同步共享状态；不要在回调内执行阻塞的生命周期等待。
 
-| v1 | v2 |
-|---|---|
-| `NewClient(...)` | `New(...)` |
-| `wsClientOption` | `Option` |
-| `client.(*wsClient).dialer.TLSClientConfig = ...` | `WithTLSConfig(...)` |
-| `WithConnectTimeout` | `WithHandshakeTimeout` |
-| `WithReconnectConfig` | `WithReconnect` |
-| `Config.ConnectTimeout` | `Config.HandshakeTimeout` |
-| `Config.ReconnectConfig` | `Config.Reconnect` |
-| `Client.GetConfig()` | `Client.Config()` |
-| 实现类型 `wsClient`（未导出） | 实现类型 `Client`（导出） |
-| 接口名 `Client` | 接口名 `Clienter` |
+`WithConfig` 替换整份配置，建议从 `wsx.DefaultConfig()` 修改后传入。`WithHeaders`、自定义 Dialer 和 TLS 配置应在连接前固定，运行中不要并发修改它们。自定义拨号使用 `NetDialContext` 或 `NetDialTLSContext`，不再调用旧 `NetDial` 字段。
+
+## 验证
+
+```bash
+go test -race -short ./core/wsx -count=1
+```
+
+`-short` 运行本地 WebSocket 回归测试，覆盖握手取消、连接取消、重连等待取消、会话隔离和客户端复用，需要允许监听本地端口。去掉 `-short` 还会执行依赖外部 Postman Echo 的网络测试。

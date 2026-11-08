@@ -30,7 +30,12 @@ func TestObserverCollectsBoundedOutcomes(t *testing.T) {
 		event.JobID = "unique-job"
 		observer.Observe(context.Background(), event)
 	}
-	observer.SetQueueStats("mail", scheduler.Stats{Ready: 4, Pending: 2, DispatchLag: time.Second, PendingHeadIdle: 2 * time.Second})
+	observer.SetQueueStats("mail", scheduler.Stats{
+		Ready:           4,
+		Pending:         2,
+		DispatchLag:     time.Second,
+		PendingHeadIdle: 2 * time.Second,
+	})
 	observer.SetObserverDropped(3)
 	families, err := registry.Gather()
 	if err != nil {

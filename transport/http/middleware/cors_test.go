@@ -7,8 +7,8 @@ import (
 )
 
 // ============================================================================
-// CORS 中间件测试
-// 展示：stdlib net/http 与 Gin 两种框架下的一致行为
+// CORS middleware tests.
+// Verify consistent behavior with net/http and Gin.
 // ============================================================================
 
 func TestCors_AllowAllOrigins(t *testing.T) {
@@ -56,7 +56,7 @@ func TestCors_SpecificOrigin(t *testing.T) {
 func TestCors_NoOriginHeader(t *testing.T) {
 	handler := Cors()(okHandler)
 
-	// 没有 Origin 头时，不设置 CORS 响应头，直接通过
+	// Requests without Origin pass through without CORS response headers.
 	w := do(handler, http.MethodGet, "/test", nil)
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -94,7 +94,7 @@ func TestCors_SkipPaths(t *testing.T) {
 		r.Header.Set("Origin", "http://example.com")
 	})
 
-	// 跳过的路径不设置 CORS 响应头
+	// Skipped paths do not receive CORS response headers.
 	if got := w.Header().Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("skipped path should not have CORS headers, got %q", got)
 	}
@@ -117,7 +117,7 @@ func TestCors_WildcardSubdomain(t *testing.T) {
 }
 
 // ============================================================================
-// Gin 集成测试 — 同一中间件通过 gin.WrapH 在 Gin 框架下运行
+// Gin integration uses the same middleware through the framework adapter.
 // ============================================================================
 
 func TestCors_Gin(t *testing.T) {

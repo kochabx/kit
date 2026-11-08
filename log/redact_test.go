@@ -87,7 +87,9 @@ func TestWriterReportsInputLength(t *testing.T) {
 
 type shortWriter struct{}
 
-func (shortWriter) Write(p []byte) (int, error) { return len(p) - 1, nil }
+func (shortWriter) Write(p []byte) (int, error) {
+	return len(p) - 1, nil
+}
 
 func TestWriterRejectsShortWrite(t *testing.T) {
 	r, _ := redact.New(redact.Content("secret", `secret`, redact.Replace("***")))

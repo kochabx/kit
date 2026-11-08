@@ -35,4 +35,6 @@ type Event struct {
 type Observer interface{ Observe(context.Context, Event) }
 type ObserverFunc func(context.Context, Event)
 
-func (f ObserverFunc) Observe(ctx context.Context, event Event) { f(ctx, event) }
+func (f ObserverFunc) Observe(ctx context.Context, event Event) {
+	f(ctx, event)
+}

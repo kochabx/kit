@@ -16,25 +16,25 @@ var (
 	ErrDecryptFailed = errors.Internal("decrypt request body failed")
 )
 
-// Decryptor 解密器接口
+// Decryptor decrypts a request payload.
 type Decryptor interface {
 	Decrypt(ciphertext []byte) ([]byte, error)
 }
 
-// DecryptorFunc 解密器函数适配器
+// DecryptorFunc adapts a function to Decryptor.
 type DecryptorFunc func(ciphertext []byte) ([]byte, error)
 
 func (f DecryptorFunc) Decrypt(ciphertext []byte) ([]byte, error) {
 	return f(ciphertext)
 }
 
-// CryptoConfig 加解密中间件配置
+// CryptoConfig configures request decryption middleware.
 type CryptoConfig struct {
-	Skip           SkipConfig                                      // 跳过配置
-	Decryptor      Decryptor                                       // 解密器（必需）
-	SuccessHandler func(http.ResponseWriter, *http.Request)        // 成功回调
-	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理函数
-	Logger         *log.Logger                                     // 自定义日志记录器
+	Skip           SkipConfig                                      // Skip rules.
+	Decryptor      Decryptor                                       // Required decryptor.
+	SuccessHandler func(http.ResponseWriter, *http.Request)        // Success callback.
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // Error handler.
+	Logger         *log.Logger                                     // Custom logger.
 }
 
 // HPKEDecryptor creates a decryptor for JSON-encoded HPKE messages. The info
@@ -51,7 +51,7 @@ func HPKEDecryptor(suite ecies.Suite, privateKey *ecies.PrivateKey, info []byte)
 	})
 }
 
-// Crypto 创建请求体解密中间件
+// Crypto creates request body decryption middleware.
 func Crypto(cfgs ...CryptoConfig) func(http.Handler) http.Handler {
 	cfg := CryptoConfig{}
 	if len(cfgs) > 0 {

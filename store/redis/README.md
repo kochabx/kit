@@ -230,4 +230,15 @@ errors.Is(err, redis.ErrNil)
 
 ## JSON
 
-所有普通配置字段都提供 JSON tag；`TLSConfig` 不参与 JSON 序列化。时间字段使用 `time.Duration`，通过 Go 标准 JSON 解码时对应纳秒整数。如需使用 `"5s"` 形式，应由上层配置系统提供 duration 解码能力。
+所有普通配置字段都提供 JSON tag；`TLSConfig` 不参与 JSON 序列化。
+
+## 验证
+
+```bash
+go test -race ./store/redis -count=1
+KIT_REDIS_INTEGRATION=1 go test -race ./store/redis -count=1
+```
+
+外部 Redis 场景默认跳过；启用后需要与 `client_test.go` 中地址和认证一致的单机、Cluster、Sentinel 测试部署，并非只启动一个 Redis 就能覆盖全部场景。
+
+`WithTracing` / `WithMetrics` 只安装 instrumentation，不能代替应用初始化 OTel Provider 和 Exporter。单机、Cluster 和 Sentinel 客户端统一启用 `ContextTimeoutEnabled=true`，命令会遵守 Context 截止时间。`UniversalClient()` 可直接提供给 Scheduler；客户端仍由应用负责关闭。

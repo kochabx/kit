@@ -1,22 +1,14 @@
 # Kit
 
-[![Go Version](https://img.shields.io/badge/Go-1.27.0+-00ADD8?style=flat&logo=go)](https://go.dev/)
+Go 服务基础工具包，提供应用生命周期、配置、依赖注入、日志、校验、认证、加密、网络客户端、存储接入和 Redis 任务调度能力。模块可按需组合使用。
 
-Go 1.27 泛型方法与 API 迁移说明见 [GO127_MIGRATION.md](GO127_MIGRATION.md)。
-[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kochabx/kit)](https://goreportcard.com/report/github.com/kochabx/kit)
-
-Kit 是一个面向企业级场景的 Go 微服务工具包，覆盖应用生命周期、配置管理、依赖注入、认证安全、网络传输、数据存储、分布式任务、日志与可观测性等常见基础能力。
-
-它的定位不是强绑定的大框架，而是一组可独立使用、自由组合的基础模块。每个模块边界清晰，可按需引入，帮助你在构建现代 Go 服务时减少重复的基础设施代码。
-
-## 快速开始
-
-### 安装
+## 安装与使用
 
 ```bash
 go get github.com/kochabx/kit
 ```
+
+以下完整示例可直接作为 `main.go` 编译。模块 README 中未包含 `package main` 的代码块为用法片段，`ctx`、配置和业务函数由应用提供。
 
 ### 最小示例：启动一个 HTTP 服务（标准库）
 
@@ -26,12 +18,10 @@ HTTP 服务封装只需传入任意 `http.Handler`（原生 `mux`、`gin`、`chi
 package main
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/kochabx/kit/app"
 	kithttp "github.com/kochabx/kit/transport/http"
-	"github.com/spf13/viper"
 )
 
 func main() {
@@ -40,9 +30,13 @@ func main() {
 		w.Write([]byte(`{"message":"pong"}`))
 	})
 
-	application := app.New(
+	application, err := app.New(
 		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
 	)
+
+	if err != nil {
+		panic(err)
+	}
 
 	if err := application.Run(); err != nil {
 		panic(err)
@@ -68,128 +62,53 @@ func main() {
 		c.JSON(200, gin.H{"message": "pong"})
 	})
 
-	application := app.New(
+	application, err := app.New(
 		app.WithServer(kithttp.NewServer(r, kithttp.WithAddr(":8080"))),
 	)
 
+	if err != nil {
+		panic(err)
+	}
+
 	if err := application.Run(); err != nil {
 		panic(err)
 	}
 }
 ```
 
-### 生产化示例：配置 + 日志 + 数据库 + Redis + HTTP 服务
+## HTTP 指标
 
 ```go
-package main
-
-import (
-	"context"
-	"net/http"
-	"strconv"
-	"time"
-
-	"github.com/kochabx/kit/app"
-	"github.com/kochabx/kit/config"
-	"github.com/kochabx/kit/log"
-	"github.com/kochabx/kit/store/db"
-	"github.com/kochabx/kit/store/redis"
-	kithttp "github.com/kochabx/kit/transport/http"
+server := kithttp.NewServer(handler,
+    kithttp.WithMetrics(kithttp.MetricsOption{}),
 )
-
-type AppConfig struct {
-	DB struct {
-		Host     string `json:"host" default:"localhost"`
-		Port     int    `json:"port" default:"3306"`
-		User     string `json:"user" default:"root"`
-		Password string `json:"password"`
-		Database string `json:"database" default:"mydb"`
-	} `json:"db"`
-	Redis struct {
-		Host     string `json:"host" default:"localhost"`
-		Port     int    `json:"port" default:"6379"`
-		Password string `json:"password"`
-	} `json:"redis"`
-}
-
-func main() {
-	ctx := context.Background()
-	configuration, err := config.New[AppConfig]()
-	if err != nil {
-		panic(err)
-	}
-	cfg, err := configuration.Load(ctx)
-	if err != nil {
-		panic(err)
-	}
-
-	logger := log.New()
-	log.SetGlobal(logger)
-
-	dbClient, err := db.New(db.Config{
-		Driver: db.MySQLConfig{
-			Host:     cfg.DB.Host,
-			Port:     cfg.DB.Port,
-			User:     cfg.DB.User,
-			Password: cfg.DB.Password,
-			Database: cfg.DB.Database,
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	rdb, err := redis.New(&redis.Config{
-		Addrs:    []string{cfg.Redis.Host + ":" + strconv.Itoa(cfg.Redis.Port)},
-		Password: cfg.Redis.Password,
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"status":"ok"}`))
-	})
-
-	// db.Client 和 redis.Client 均实现 cx.Starter/Stopper/HealthChecker，
-	// 由 app 统一管理启动（Ping 验证连通性）和关闭。
-	application := app.New(
-		app.WithServer(kithttp.NewServer(mux, kithttp.WithAddr(":8080"))),
-		app.WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
-		app.WithComponent(cx.NewKey[*redis.Client]("redis"), rdb),
-		app.WithShutdownTimeout(30*time.Second),
-	)
-
-	if err := application.Run(); err != nil {
-		log.Fatal().Err(err).Msg("application exited with error")
-	}
-}
 ```
+
+默认在 `/metrics` 导出独立 Registry 中的 Go Runtime 和 BuildInfo 指标。传入 `MetricsOption.Registry` 时使用该实例，不复制，也不自动向它注入默认 Collector；自定义指标由应用注册。Scheduler 的 Prometheus Observer 可以注册到同一个 Registry。
 
 ## 开发命令
 
+以下目标以 [Makefile](Makefile) 为准：
+
 ```bash
-make all          # 完整本地校验（fmt + vet + test）
-make fmt          # 代码格式化
-make vet          # 静态检查
-make test         # 全量测试（含 race detector）
-make build        # 编译验证
-
-make install      # 安装工具依赖
-make upgrade      # 升级依赖
-make mod-tidy     # 整理并校验 Go 模块依赖
-
-make generate     # 生成所有代码（proto + wire + swag）
-make proto        # 生成 protobuf 代码
-make wire         # 运行 wire 依赖注入代码生成
-make swag         # 生成 Swagger 文档
-
-make clean        # 清理生成物
-make info         # 显示项目信息
-make help         # 查看所有命令
+make help          # 列出目标
+make info          # 模块与工具链信息
+make fmt           # 格式化 Go 源码
+make fmt-check     # 检查格式
+make vet           # 静态检查
+make test          # 竞态测试，默认超时 120s
+make check         # fmt-check + vet + test
+make build         # 编译所有 Go 包
+make deps          # 下载依赖
+make tidy          # 整理 go.mod / go.sum
+make deps-upgrade  # 升级依赖并整理模块
 ```
 
-## 许可证
+可通过 `PKGS`、`TEST_TIMEOUT` 和 `GO` 限定范围或工具链，例如：
 
-本项目基于 [MIT License](LICENSE) 发布。
+```bash
+make test PKGS=./core/validator TEST_TIMEOUT=60s
+go test ./... -run '^$' # 只编译包和测试，不执行测试
+```
+
+全量测试包含本地监听端口、进程信号及外部服务场景。集成环境要求和跳过条件以各模块测试及 README 为准；不将“编译通过”等同于完整生产环境验证。

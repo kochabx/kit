@@ -15,7 +15,9 @@ type Exponential = model.Exponential
 
 type NoRetry struct{}
 
-func (NoRetry) NextDelay(int, error) (time.Duration, bool) { return 0, false }
+func (NoRetry) NextDelay(int, error) (time.Duration, bool) {
+	return 0, false
+}
 
 func attemptLimit(policy RetryPolicy) int {
 	switch p := policy.(type) {

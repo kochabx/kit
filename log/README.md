@@ -1,12 +1,10 @@
 # log
 
-要求 Go 1.27.0 或更高版本。
-
 基于 [zerolog](https://github.com/rs/zerolog) 的结构化日志库，提供文件轮转、多路输出和敏感数据脱敏能力。
 
 ## 特性
 
-- 基于 zerolog，零分配 JSON 输出
+- 基于 zerolog，支持结构化字段和链式日志事件
 - 支持按时间（rotatelogs）或按大小（lumberjack）滚动日志文件
 - 支持控制台与文件同时输出
 - 内置敏感数据脱敏，基于原子快照的无锁读取
@@ -90,6 +88,8 @@ type FileConfig struct {
 }
 ```
 
+`RotateMode` 必须显式选择，零值不会自动选择轮转策略。
+
 ### 轮转模式
 
 ```go
@@ -122,7 +122,7 @@ type SizeRotateConfig struct {
 ```go
 log.WithLevel(zerolog.InfoLevel)  // 设置日志级别
 log.WithCaller()                  // 记录调用位置
-log.WithCallerSkip(skip int)      // 记录调用位置，跳过 skip 层封装
+log.WithCallerSkip(1)      // 记录调用位置，跳过 skip 层封装
 log.WithRedactor(redactor)         // 绑定脱敏 Redactor
 ```
 
@@ -176,12 +176,16 @@ redactor.RemoveRule("phone")
 
 ```go
 // 替换全局日志器
-logger, _ := log.NewFile(config, log.WithCaller(), log.WithLevel(zerolog.InfoLevel))
+logger, err := log.NewFile(config, log.WithCaller(), log.WithLevel(zerolog.InfoLevel))
+if err != nil { return err }
+defer logger.Close()
 old := log.SetGlobal(logger)
-defer old.Close()
+defer log.SetGlobal(old)
 ```
 
-全局函数返回 `*zerolog.Event`，支持链式调用：
+`SetGlobal` 只替换指针，不会关闭旧实例；恢复旧实例后再关闭当前日志器，避免全局指针仍引用已关闭的输出。
+
+全局函数返回 `*zerolog.Event`，必须调用 `Msg`、`Msgf` 等方法才会写出日志：
 
 ```go
 log.Debug().Str("k", "v").Msg("debug")
@@ -235,7 +239,7 @@ if err != nil {
 defer logger.Close()
 
 old := log.SetGlobal(logger)
-defer old.Close()
+defer log.SetGlobal(old)
 ```
 
 ### 开发环境
@@ -248,7 +252,7 @@ logger := log.New(
     log.WithLevel(zerolog.DebugLevel),
 )
 old := log.SetGlobal(logger)
-defer old.Close()
+defer log.SetGlobal(old)
 ```
 
 ### 结构化日志
@@ -342,3 +346,11 @@ log/
 - [github.com/rs/zerolog](https://github.com/rs/zerolog)：核心日志库
 - [github.com/lestrrat-go/file-rotatelogs](https://github.com/lestrrat-go/file-rotatelogs)：按时间轮转
 - [gopkg.in/natefinch/lumberjack.v2](https://gopkg.in/natefinch/lumberjack.v2)：按大小轮转
+
+## 验证
+
+```bash
+go test -race ./log/... -count=1
+```
+
+本包不负责初始化 OpenTelemetry SDK。HTTP 日志的 trace/span 关联由中间件从 Context 读取，详见 [HTTP 中间件](../transport/http/middleware/README.md)。

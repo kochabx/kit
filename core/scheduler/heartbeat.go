@@ -60,7 +60,12 @@ func (b *heartbeatBatch) poll(s *workerRuntime, ctx context.Context, now time.Ti
 			next = earliest(next, execution.nextRenew, execution.nextCheck)
 			return true
 		}
-		requests = append(requests, store.LeaseRequest{JobID: key.(string), Token: execution.token, Lease: s.config.Execution.LeaseDuration, Renew: renew})
+		requests = append(requests, store.LeaseRequest{
+			JobID: key.(string),
+			Token: execution.token,
+			Lease: s.config.Execution.LeaseDuration,
+			Renew: renew,
+		})
 		executions = append(executions, execution)
 		return true
 	})

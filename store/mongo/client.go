@@ -87,10 +87,16 @@ func (c *Client) disconnect(ctx context.Context) error {
 }
 
 // Start verifies the connection when Client is used as an application component.
-func (c *Client) Start(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
 
 // Stop disconnects the client using the application shutdown context.
-func (c *Client) Stop(ctx context.Context) error { return c.disconnect(ctx) }
+func (c *Client) Stop(ctx context.Context) error {
+	return c.disconnect(ctx)
+}
 
 // HealthCheck reports whether the primary MongoDB server is reachable.
-func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) HealthCheck(ctx context.Context) error {
+	return c.Ping(ctx)
+}

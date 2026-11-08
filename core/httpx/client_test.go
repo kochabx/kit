@@ -38,6 +38,7 @@ func newEchoServer(t *testing.T) *httptest.Server {
 		_ = json.MarshalWrite(w, resp)
 	}))
 }
+
 func TestClient_GetWithInto(t *testing.T) {
 	srv := newEchoServer(t)
 	defer srv.Close()
@@ -106,7 +107,7 @@ func TestClient_PostForm_AutoContentType(t *testing.T) {
 }
 
 func TestClient_GetNoContentType(t *testing.T) {
-	// GET 无 body 时不应自动带 Content-Type
+	// GET requests without bodies should not acquire a Content-Type header.
 	srv := newEchoServer(t)
 	defer srv.Close()
 

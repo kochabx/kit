@@ -14,7 +14,13 @@ func TestJanitorCleansIndexesInBoundedBatches(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Maintenance: MaintenanceConfig{Batch: 2, DrainLimit: 4}})
+	s, err := newWorkerRuntime(client, WorkerConfig{
+		Namespace: namespace,
+		Maintenance: MaintenanceConfig{
+			Batch:      2,
+			DrainLimit: 4,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,13 +36,35 @@ func TestJanitorCleansIndexesInBoundedBatches(t *testing.T) {
 	).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.Scheduled(), redis.Z{Score: float64(now.Add(time.Hour).UnixMilli()), Member: "orphan-job"}).Err(); err != nil {
+	if err := client.ZAdd(
+		ctx,
+		s.queues[DefaultQueue].store.Keys.Scheduled(),
+		redis.Z{
+			Score: float64(now.Add(time.Hour).
+				UnixMilli()),
+			Member: "orphan-job",
+		},
+	).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.Schedules(), redis.Z{Score: float64(now.Add(time.Hour).UnixMilli()), Member: "orphan-cron"}).Err(); err != nil {
+	if err := client.ZAdd(
+		ctx,
+		s.queues[DefaultQueue].store.Keys.Schedules(),
+		redis.Z{
+			Score: float64(now.Add(time.Hour).
+				UnixMilli()),
+			Member: "orphan-cron",
+		},
+	).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.ScheduleCatalog(), redis.Z{Score: float64(now.UnixMilli()), Member: "orphan-cron"}).Err(); err != nil {
+	if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.ScheduleCatalog(), redis.Z{
+		Score:  float64(now.UnixMilli()),
+		Member: "orphan-cron",
+	}).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
 

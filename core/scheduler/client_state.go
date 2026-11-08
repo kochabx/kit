@@ -54,9 +54,18 @@ func newClientState(client redis.UniversalClient, config ClientConfig, cacheSize
 	if config.Observability.Logger == nil {
 		config.Observability.Logger = log.Global()
 	}
-	state := &clientState{namespace: store.New(client, config.Namespace, config.OperationTimeout), config: config, queueStores: make(map[string]*queueView), cronCache: newCronCache(cacheSize)}
+	state := &clientState{
+		namespace:   store.New(client, config.Namespace, config.OperationTimeout),
+		config:      config,
+		queueStores: make(map[string]*queueView),
+		cronCache:   newCronCache(cacheSize),
+	}
 	for _, name := range config.Queues {
-		options := store.QueueOptions{DeadRetention: config.Retention.Dead, SubmissionRetention: config.Retention.Submission, CompletionRetention: config.Retention.Completion}
+		options := store.QueueOptions{
+			DeadRetention:       config.Retention.Dead,
+			SubmissionRetention: config.Retention.Submission,
+			CompletionRetention: config.Retention.Completion,
+		}
 		if configured, ok := workerQueues[name]; ok {
 			options = configured
 		}
@@ -67,13 +76,18 @@ func newClientState(client redis.UniversalClient, config ClientConfig, cacheSize
 	state.events = newEventBus(config.Observability, config.OperationTimeout)
 	return state, nil
 }
+
 func (s *clientState) Close() error {
 	if !s.closed.Swap(true) {
 		s.events.close()
 	}
 	return nil
 }
-func (s *clientState) Ping(ctx context.Context) error { return s.namespace.Ping(ctx) }
+
+func (s *clientState) Ping(ctx context.Context) error {
+	return s.namespace.Ping(ctx)
+}
+
 func (s *clientState) lookupQueue(name string) (*queueView, error) {
 	q, ok := s.queueStores[name]
 	if !ok {
@@ -81,6 +95,7 @@ func (s *clientState) lookupQueue(name string) (*queueView, error) {
 	}
 	return q, nil
 }
+
 func (s *clientState) lookupJobQueue(ctx context.Context, id string) (*queueView, error) {
 	name, err := s.namespace.JobQueue(ctx, id)
 	if err != nil {
@@ -88,6 +103,7 @@ func (s *clientState) lookupJobQueue(ctx context.Context, id string) (*queueView
 	}
 	return s.persistedQueue(name)
 }
+
 func (s *clientState) lookupScheduleQueue(ctx context.Context, id string) (*queueView, error) {
 	name, err := s.namespace.ScheduleQueue(ctx, id)
 	if err != nil {
@@ -95,6 +111,7 @@ func (s *clientState) lookupScheduleQueue(ctx context.Context, id string) (*queu
 	}
 	return s.persistedQueue(name)
 }
+
 func (s *clientState) persistedQueue(name string) (*queueView, error) {
 	if !validName.MatchString(name) {
 		return nil, ErrInvalidState

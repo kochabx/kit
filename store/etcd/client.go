@@ -53,7 +53,9 @@ func New(cfg *Config) (*Client, error) {
 }
 
 // Client returns the underlying official etcd client.
-func (c *Client) Client() *clientv3.Client { return c.client }
+func (c *Client) Client() *clientv3.Client {
+	return c.client
+}
 
 // Ping verifies that one configured endpoint is reachable using ctx.
 func (c *Client) Ping(ctx context.Context) error {
@@ -77,6 +79,14 @@ func (c *Client) Close() error {
 	return c.close()
 }
 
-func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }
-func (c *Client) Stop(context.Context) error            { return c.Close() }
-func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
+func (c *Client) Stop(context.Context) error {
+	return c.Close()
+}
+
+func (c *Client) HealthCheck(ctx context.Context) error {
+	return c.Ping(ctx)
+}

@@ -14,7 +14,13 @@ func TestRecoveryResumesAfterEmptyPage(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("recovery-cursor-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Execution: ExecutionConfig{RecoveryBatch: 1, RecoveryLimit: 1}})
+	s, err := newWorkerRuntime(client, WorkerConfig{
+		Namespace: namespace,
+		Execution: ExecutionConfig{
+			RecoveryBatch: 1,
+			RecoveryLimit: 1,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +31,11 @@ func TestRecoveryResumesAfterEmptyPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for i := range 11 {
-		if _, err := client.XAdd(ctx, &redis.XAddArgs{Stream: q.store.Keys.Ready(), Values: map[string]any{"job_id": fmt.Sprintf("job-%d", i)}}).Result(); err != nil {
+		if _, err := client.XAdd(ctx, &redis.XAddArgs{
+			Stream: q.store.Keys.Ready(),
+			Values: map[string]any{"job_id": fmt.Sprintf("job-%d", i)},
+		}).
+			Result(); err != nil {
 			t.Fatal(err)
 		}
 	}

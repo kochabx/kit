@@ -17,17 +17,17 @@ var (
 	tokenBucketLuaScript = redis.NewScript(tokenBucketLua)
 )
 
-// TokenBucket 是分布式令牌桶限流器。
+// TokenBucket is a distributed token-bucket limiter.
 type TokenBucket struct {
 	client    redis.UniversalClient
-	rate      float64 // 每秒补充的令牌数
-	burst     int64   // 最大突发容量
+	rate      float64 // Tokens replenished per second.
+	burst     int64   // Maximum burst capacity.
 	keyPrefix string
 }
 
 var _ Limiter = (*TokenBucket)(nil)
 
-// NewTokenBucket 创建指定补充速率和最大突发容量的令牌桶限流器。
+// NewTokenBucket creates a limiter with the specified refill rate and burst capacity.
 func NewTokenBucket(client redis.UniversalClient, rate float64, burst int64, opts ...Option) (*TokenBucket, error) {
 	if client == nil {
 		return nil, ErrNilClient
@@ -50,12 +50,12 @@ func NewTokenBucket(client redis.UniversalClient, rate float64, burst int64, opt
 	}, nil
 }
 
-// Allow 申请一个配额。
+// Allow requests one quota unit.
 func (l *TokenBucket) Allow(ctx context.Context, key string) (Result, error) {
 	return l.AllowN(ctx, key, 1)
 }
 
-// AllowN 申请 n 个配额。
+// AllowN requests n quota units.
 func (l *TokenBucket) AllowN(ctx context.Context, key string, n int64) (Result, error) {
 	if err := validateN(n, l.burst); err != nil {
 		return Result{}, err

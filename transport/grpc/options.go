@@ -20,10 +20,14 @@ type options struct {
 type Option func(*options)
 
 // WithAddr sets the TCP address the server listens on (e.g. ":50051").
-func WithAddr(addr string) Option { return func(o *options) { o.addr = addr } }
+func WithAddr(addr string) Option {
+	return func(o *options) { o.addr = addr }
+}
 
 // WithName sets the server name, used in log output.
-func WithName(name string) Option { return func(o *options) { o.name = name } }
+func WithName(name string) Option {
+	return func(o *options) { o.name = name }
+}
 
 // WithTLSConfig enables TLS using the provided *tls.Config.
 func WithTLSConfig(tlsCfg *tls.Config) Option {

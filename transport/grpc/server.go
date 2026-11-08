@@ -56,7 +56,9 @@ func NewServer(opts ...Option) *Server {
 }
 
 // Srv returns the underlying *grpc.Server for service registration.
-func (s *Server) Srv() *grpc.Server { return s.srv }
+func (s *Server) Srv() *grpc.Server {
+	return s.srv
+}
 
 // Start implements cx.Starter, starting the gRPC server in the background and returning immediately.
 func (s *Server) Start(_ context.Context) error {

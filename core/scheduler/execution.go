@@ -68,7 +68,12 @@ func (s *queueRuntime) execute(parent context.Context, worker string, d store.De
 		return
 	}
 	if d.Recovered {
-		s.scheduler.observe(EventRecovered, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt})
+		s.scheduler.observe(EventRecovered, parent, Event{
+			Queue:    s.settings.Name,
+			JobID:    j.ID,
+			TaskName: j.TaskName,
+			Attempt:  j.Attempt,
+		})
 	}
 	h, ok := s.scheduler.lookupHandler(s.settings.Name, j.TaskName, j.Version)
 	if !ok {
@@ -84,7 +89,12 @@ func (s *queueRuntime) execute(parent context.Context, worker string, d store.De
 		s.rejectJob(parent, d, j, token, policyErr)
 		return
 	}
-	s.scheduler.observe(EventStarted, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt})
+	s.scheduler.observe(EventStarted, parent, Event{
+		Queue:    s.settings.Name,
+		JobID:    j.ID,
+		TaskName: j.TaskName,
+		Attempt:  j.Attempt,
+	})
 	started := time.Now()
 	executionCtx, stopExecution := context.WithCancelCause(context.WithoutCancel(parent))
 	timeoutCtx, timeoutCancel := context.WithTimeout(executionCtx, j.Policy.Timeout)
@@ -92,8 +102,15 @@ func (s *queueRuntime) execute(parent context.Context, worker string, d store.De
 	defer stopExecution(nil)
 	defer timeoutCancel()
 	defer cancel(nil)
-	execution := &activeExecution{queue: s.settings.Name, taskName: j.TaskName, token: token, ctx: execCtx, cancel: stopExecution,
-		nextRenew: started.Add(s.scheduler.config.Execution.LeaseRenewInterval), nextCheck: started.Add(s.scheduler.config.Execution.CancellationCheckInterval)}
+	execution := &activeExecution{
+		queue:     s.settings.Name,
+		taskName:  j.TaskName,
+		token:     token,
+		ctx:       execCtx,
+		cancel:    stopExecution,
+		nextRenew: started.Add(s.scheduler.config.Execution.LeaseRenewInterval),
+		nextCheck: started.Add(s.scheduler.config.Execution.CancellationCheckInterval),
+	}
 	s.scheduler.active.Store(j.ID, execution)
 	defer s.scheduler.active.CompareAndDelete(j.ID, execution)
 	result := make(chan error, 1)
@@ -123,7 +140,17 @@ func (s *queueRuntime) execute(parent context.Context, worker string, d store.De
 		execErr = cause
 	}
 	if errors.Is(execErr, ErrLeaseLost) {
-		s.scheduler.observe(EventLeaseLost, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt, Err: execErr})
+		s.scheduler.observe(
+			EventLeaseLost,
+			parent,
+			Event{
+				Queue:    s.settings.Name,
+				JobID:    j.ID,
+				TaskName: j.TaskName,
+				Attempt:  j.Attempt,
+				Err:      execErr,
+			},
+		)
 	}
 	duration := time.Since(started)
 	opCtx, opCancel := s.scheduler.operationContext(parent)
@@ -143,11 +170,23 @@ func (s *queueRuntime) execute(parent context.Context, worker string, d store.De
 			CancelledRetention: s.scheduler.config.Retention.Cancelled,
 		})
 		if err == nil && retry {
-			s.scheduler.observe(EventRetried, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt, Err: execErr})
+			s.scheduler.observe(EventRetried, parent, Event{
+				Queue:    s.settings.Name,
+				JobID:    j.ID,
+				TaskName: j.TaskName,
+				Attempt:  j.Attempt,
+				Err:      execErr,
+			})
 		}
 	}
 	if errors.Is(err, ErrLeaseLost) && !errors.Is(execErr, ErrLeaseLost) {
-		s.scheduler.observe(EventLeaseLost, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt, Err: err})
+		s.scheduler.observe(EventLeaseLost, parent, Event{
+			Queue:    s.settings.Name,
+			JobID:    j.ID,
+			TaskName: j.TaskName,
+			Attempt:  j.Attempt,
+			Err:      err,
+		})
 	}
 	if errors.Is(err, ErrJobCancelled) {
 		execErr = ErrJobCancelled
@@ -187,16 +226,42 @@ func (s *queueRuntime) releaseUnstarted(parent context.Context, batch []store.De
 func (s *queueRuntime) rejectJob(parent context.Context, d store.Delivery, j *Job, token string, cause error) {
 	ctx, cancel := s.scheduler.operationContext(parent)
 	defer cancel()
-	err := s.store.FailJob(ctx, d, token, store.FailureCommand{Message: cause.Error(), DeadRetention: s.scheduler.config.Retention.Dead, CancelledRetention: s.scheduler.config.Retention.Cancelled})
+	err := s.store.FailJob(
+		ctx,
+		d,
+		token,
+		store.FailureCommand{
+			Message:            cause.Error(),
+			DeadRetention:      s.scheduler.config.Retention.Dead,
+			CancelledRetention: s.scheduler.config.Retention.Cancelled,
+		},
+	)
 	if errors.Is(err, ErrJobCancelled) {
 		cause = ErrJobCancelled
 		err = nil
 	}
 	if errors.Is(err, ErrLeaseLost) {
-		s.scheduler.observe(EventLeaseLost, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt, Err: err})
+		s.scheduler.observe(EventLeaseLost, parent, Event{
+			Queue:    s.settings.Name,
+			JobID:    j.ID,
+			TaskName: j.TaskName,
+			Attempt:  j.Attempt,
+			Err:      err,
+		})
 	}
 	if err != nil {
 		s.scheduler.config.Observability.Logger.Error().Err(err).Str("queue", s.settings.Name).Str("job_id", j.ID).Msg("commit rejected job failed")
 	}
-	s.scheduler.observe(EventFinished, parent, Event{Queue: s.settings.Name, JobID: j.ID, TaskName: j.TaskName, Attempt: j.Attempt, Err: cause, CommitErr: err})
+	s.scheduler.observe(
+		EventFinished,
+		parent,
+		Event{
+			Queue:     s.settings.Name,
+			JobID:     j.ID,
+			TaskName:  j.TaskName,
+			Attempt:   j.Attempt,
+			Err:       cause,
+			CommitErr: err,
+		},
+	)
 }

@@ -77,7 +77,10 @@ func BenchmarkCronDispatch32(b *testing.B) {
 	b.Cleanup(func() { _ = s.Close() })
 	ids := make([]string, 32)
 	for i := range ids {
-		schedule, err := mustBind(s, mustTask[string]("cron")).Schedule(ctx, "payload", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+		schedule, err := mustBind(s, mustTask[string]("cron")).Schedule(ctx, "payload", CronSpec{
+			Expression: "@every 1h",
+			TimeZone:   "UTC",
+		})
 		if err != nil {
 			b.Fatal(err)
 		}

@@ -31,7 +31,19 @@ func (s *Namespace) Attempts(ctx context.Context, id string) ([]model.Attempt, e
 		if err := json.Unmarshal([]byte(row), &r); err != nil {
 			return nil, fmt.Errorf("decode attempt history: %w", err)
 		}
-		out = append(out, model.Attempt{JobID: r.JobID, Token: r.Token, WorkerID: r.WorkerID, Number: r.Number, StartedAt: time.UnixMilli(r.StartedAt), FinishedAt: time.UnixMilli(r.FinishedAt), Outcome: r.Outcome, Error: r.Error})
+		out = append(
+			out,
+			model.Attempt{
+				JobID:      r.JobID,
+				Token:      r.Token,
+				WorkerID:   r.WorkerID,
+				Number:     r.Number,
+				StartedAt:  time.UnixMilli(r.StartedAt),
+				FinishedAt: time.UnixMilli(r.FinishedAt),
+				Outcome:    r.Outcome,
+				Error:      r.Error,
+			},
+		)
 	}
 	return out, nil
 }

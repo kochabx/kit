@@ -27,7 +27,9 @@ func requireIntegration(t *testing.T) {
 	}
 }
 
-func testConfig() *Config { return &Config{Endpoints: []string{testEndpoint()}} }
+func testConfig() *Config {
+	return &Config{Endpoints: []string{testEndpoint()}}
+}
 
 func TestResolveConfigDefaultsWithoutMutation(t *testing.T) {
 	input := Config{}

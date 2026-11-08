@@ -199,3 +199,11 @@ case errors.Is(err, envelope.ErrDecryptionFailed):
 - 不要在解密失败后回退为明文读取。
 - Go 无法保证垃圾回收内存中的秘密立即清零，高安全场景应由 KMS/HSM 执行
   数据密钥解封或加解密操作。
+
+## JSON 与验证
+
+本页的 `json` 指 `encoding/json/v2`。凭证结构的编码应在应用协议中保持明确；数据库字段加密不承担密码登录校验职责，用户登录密码应使用专用密码哈希。
+
+```bash
+go test -race ./core/crypto/envelope -count=1
+```

@@ -47,10 +47,14 @@ func TestDeadQueryFiltersScannedItems(t *testing.T) {
 	ctx := context.Background()
 	for i, taskName := range []string{"a", "b", "a", "b", "a"} {
 		id := fmt.Sprintf("dead-%d", i)
-		if err := client.HSet(ctx, s.queues[DefaultQueue].store.Keys.Job(id), "id", id, "queue", DefaultQueue, "task", taskName, "state", string(JobDead)).Err(); err != nil {
+		if err := client.HSet(ctx, s.queues[DefaultQueue].store.Keys.Job(id), "id", id, "queue", DefaultQueue, "task", taskName, "state", string(JobDead)).
+			Err(); err != nil {
 			t.Fatal(err)
 		}
-		if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.Dead(), redis.Z{Score: float64(i), Member: id}).Err(); err != nil {
+		if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.Dead(), redis.Z{
+			Score:  float64(i),
+			Member: id,
+		}).Err(); err != nil {
 			t.Fatal(err)
 		}
 	}

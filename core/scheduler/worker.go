@@ -17,6 +17,7 @@ func NewWorker(redisClient redis.UniversalClient, config WorkerConfig) (*Worker,
 	}
 	return &Worker{runtime: e}, nil
 }
+
 func (worker *Worker) Register[T any](task Task[T], fn Handler[T]) error {
 	if worker == nil || worker.runtime == nil || task.fingerprint == "" {
 		return ErrInvalidArgument
@@ -26,6 +27,7 @@ func (worker *Worker) Register[T any](task Task[T], fn Handler[T]) error {
 	}
 	return worker.runtime.registerTaskHandler(task, fn)
 }
+
 func (w *Worker) Run(ctx context.Context) error {
 	if w == nil || w.runtime == nil {
 		return ErrInvalidArgument

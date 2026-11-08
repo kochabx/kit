@@ -19,11 +19,17 @@ type taskClient[T any] struct {
 	store     *store.Queue
 }
 
-func (t Task[T]) Fingerprint() string { return t.fingerprint }
+func (t Task[T]) Fingerprint() string {
+	return t.fingerprint
+}
 
-func (t Task[T]) Name() string { return t.name }
+func (t Task[T]) Name() string {
+	return t.name
+}
 
-func (t Task[T]) Queue() string { return t.queue }
+func (t Task[T]) Queue() string {
+	return t.queue
+}
 
 func (t Task[T]) bind(s *clientState) (*taskClient[T], error) {
 	if s == nil || t.fingerprint == "" {

@@ -137,10 +137,14 @@ func (r *Redactor) RemoveRule(name string) bool {
 }
 
 // EnableRule atomically enables a rule.
-func (r *Redactor) EnableRule(name string) bool { return r.setEnabled(name, true) }
+func (r *Redactor) EnableRule(name string) bool {
+	return r.setEnabled(name, true)
+}
 
 // DisableRule atomically disables a rule.
-func (r *Redactor) DisableRule(name string) bool { return r.setEnabled(name, false) }
+func (r *Redactor) DisableRule(name string) bool {
+	return r.setEnabled(name, false)
+}
 
 // IsEnabled reports whether a rule exists and is enabled.
 func (r *Redactor) IsEnabled(name string) bool {

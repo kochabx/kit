@@ -273,3 +273,11 @@ cfg := db.Config{
 | 2 | Error |
 | 3 | Warn |
 | 4 | Info |
+
+## 验证
+
+```bash
+go test -race ./store/db -count=1
+```
+
+使用 `DB().WithContext(ctx)` 将请求取消传递给数据库操作。

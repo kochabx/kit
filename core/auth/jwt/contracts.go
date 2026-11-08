@@ -48,7 +48,9 @@ type Clock interface {
 
 type systemClock struct{}
 
-func (systemClock) Now() time.Time { return time.Now() }
+func (systemClock) Now() time.Time {
+	return time.Now()
+}
 
 type IssueOptions struct {
 	DeviceID string

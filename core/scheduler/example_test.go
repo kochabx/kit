@@ -34,7 +34,10 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
-	_, err = c.Schedules().Create(ctx, task, Payload{ID: "daily"}, scheduler.CronSpec{Expression: "0 9 * * *", TimeZone: "Asia/Shanghai"})
+	_, err = c.Schedules().Create(ctx, task, Payload{ID: "daily"}, scheduler.CronSpec{
+		Expression: "0 9 * * *",
+		TimeZone:   "Asia/Shanghai",
+	})
 	if err != nil {
 		panic(err)
 	}

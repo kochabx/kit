@@ -12,8 +12,14 @@ import (
 
 type prefixCodec struct{ prefix string }
 
-func (c prefixCodec) Identity() string                 { return "prefix:" + c.prefix }
-func (c prefixCodec) Marshal(v string) ([]byte, error) { return []byte(c.prefix + v), nil }
+func (c prefixCodec) Identity() string {
+	return "prefix:" + c.prefix
+}
+
+func (c prefixCodec) Marshal(v string) ([]byte, error) {
+	return []byte(c.prefix + v), nil
+}
+
 func (c prefixCodec) Unmarshal(v []byte) (string, error) {
 	if !strings.HasPrefix(string(v), c.prefix) {
 		return "", errors.New("wrong encoding")
@@ -46,7 +52,11 @@ func TestFingerprintIncludesCodecIdentityAndVersion(t *testing.T) {
 }
 
 func TestConfigOwnsSlices(t *testing.T) {
-	input := WorkerConfig{Queues: []QueueConfig{{Name: "a"}}, Execution: ExecutionConfig{Queues: []string{"a"}}, Dispatch: DispatchConfig{Queues: []string{"a"}}}
+	input := WorkerConfig{
+		Queues:    []QueueConfig{{Name: "a"}},
+		Execution: ExecutionConfig{Queues: []string{"a"}},
+		Dispatch:  DispatchConfig{Queues: []string{"a"}},
+	}
 	resolved, err := prepareConfig(input)
 	if err != nil {
 		t.Fatal(err)
@@ -64,15 +74,20 @@ func TestConfigOwnsSlices(t *testing.T) {
 
 func TestObserverTimeoutAllowsFollowingEvents(t *testing.T) {
 	handled := make(chan EventKind, 2)
-	bus := newEventBus(ObservabilityConfig{Buffer: 2, Logger: log.Global(), ObserverTimeout: 20 * time.Millisecond, Observer: ObserverFunc(func(ctx context.Context, event Event) {
-		if event.Kind == EventStarted {
-			<-ctx.Done()
-			if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				panic("missing callback deadline")
+	bus := newEventBus(ObservabilityConfig{
+		Buffer:          2,
+		Logger:          log.Global(),
+		ObserverTimeout: 20 * time.Millisecond,
+		Observer: ObserverFunc(func(ctx context.Context, event Event) {
+			if event.Kind == EventStarted {
+				<-ctx.Done()
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					panic("missing callback deadline")
+				}
 			}
-		}
-		handled <- event.Kind
-	})}, time.Second)
+			handled <- event.Kind
+		}),
+	}, time.Second)
 	defer bus.close()
 	bus.publish(context.Background(), Event{Kind: EventStarted})
 	bus.publish(context.Background(), Event{Kind: EventFinished})

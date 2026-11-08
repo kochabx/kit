@@ -13,7 +13,18 @@ import (
 func (s *Queue) RecoverDeliveries(ctx context.Context, consumer string, idle time.Duration, cursor string, count int64) ([]Delivery, string, error) {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	messages, next, err := s.Client.XAutoClaim(ctx, &redis.XAutoClaimArgs{Stream: s.Keys.Ready(), Group: s.Keys.Group(), Consumer: consumer, MinIdle: idle, Start: cursor, Count: count}).Result()
+	messages, next, err := s.Client.XAutoClaim(
+		ctx,
+		&redis.XAutoClaimArgs{
+			Stream:   s.Keys.Ready(),
+			Group:    s.Keys.Group(),
+			Consumer: consumer,
+			MinIdle:  idle,
+			Start:    cursor,
+			Count:    count,
+		},
+	).
+		Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return nil, cursor, err
 	}
@@ -64,7 +75,20 @@ func (s *Queue) ReadDeliveries(ctx context.Context, consumer string, block time.
 	ctx, cancelRead := context.WithTimeout(ctx, block+s.Timeout+time.Second)
 	defer cancelRead()
 	streams := []string{s.Keys.Ready(), ">"}
-	result, err := s.Client.XReadGroup(ctx, &redis.XReadGroupArgs{Group: s.Keys.Group(), Consumer: consumer, Streams: streams, Count: count, MaxCount: count, MaxSize: s.ReadMaxBytes, Claim: s.ClaimIdle, Block: block}).Result()
+	result, err := s.Client.XReadGroup(
+		ctx,
+		&redis.XReadGroupArgs{
+			Group:    s.Keys.Group(),
+			Consumer: consumer,
+			Streams:  streams,
+			Count:    count,
+			MaxCount: count,
+			MaxSize:  s.ReadMaxBytes,
+			Claim:    s.ClaimIdle,
+			Block:    block,
+		},
+	).
+		Result()
 	if errors.Is(err, redis.Nil) {
 		return nil, nil
 	}
@@ -79,7 +103,12 @@ func (s *Queue) ReadDeliveries(ctx context.Context, consumer string, block time.
 		for _, message := range stream.Messages {
 			id, _ := message.Values["job_id"].(string)
 			if id != "" {
-				deliveries = append(deliveries, Delivery{JobID: id, MessageID: message.ID, Consumer: consumer, Recovered: message.DeliveredCount > 1})
+				deliveries = append(deliveries, Delivery{
+					JobID:     id,
+					MessageID: message.ID,
+					Consumer:  consumer,
+					Recovered: message.DeliveredCount > 1,
+				})
 			}
 		}
 	}

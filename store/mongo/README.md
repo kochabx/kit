@@ -147,8 +147,14 @@ if errors.Is(err, mongo.ErrInvalidConfig) {
 }
 ```
 
-MongoDB Driver 返回的错误通过 `%w` 保留，可以继续使用 `errors.Is` 和 `errors.As` 检查底层错误。错误信息不会包含密码或手工构造的连接 URI。
+MongoDB Driver 返回的错误通过 `%w` 保留，可以继续使用 `errors.Is` 和 `errors.AsType` 检查底层错误。错误信息不会包含密码或手工构造的连接 URI。
 
-## JSON
 
-所有配置字段都提供 JSON tag。时间字段使用 `time.Duration`，通过 Go 标准 JSON 解码时对应纳秒整数；如需使用 `"3s"` 形式，应由上层配置系统提供 duration 解码能力。
+## 验证
+
+```bash
+go test -race ./store/mongo -count=1
+KIT_MONGO_INTEGRATION=1 go test -race ./store/mongo -count=1
+```
+
+外部 MongoDB 测试默认跳过，测试连接地址见 `client_test.go`。

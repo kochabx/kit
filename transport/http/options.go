@@ -2,13 +2,14 @@ package http
 
 import (
 	"crypto/tls"
+	"regexp"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/collectors"
 
 	"github.com/kochabx/kit/core/defaults"
 	"github.com/kochabx/kit/log"
-	"github.com/kochabx/kit/observability/metrics"
 )
 
 // options contains the settings applied while constructing a Server.
@@ -31,10 +32,14 @@ type options struct {
 type Option func(*options)
 
 // WithAddr sets the TCP address the server listens on (e.g. ":8080").
-func WithAddr(addr string) Option { return func(o *options) { o.addr = addr } }
+func WithAddr(addr string) Option {
+	return func(o *options) { o.addr = addr }
+}
 
 // WithName sets the server name, used in log output.
-func WithName(name string) Option { return func(o *options) { o.name = name } }
+func WithName(name string) Option {
+	return func(o *options) { o.name = name }
+}
 
 // WithTimeout overrides the HTTP server read, write, and idle timeouts.
 func WithTimeout(read, write, idle time.Duration) Option {
@@ -62,10 +67,7 @@ func WithTLSConfig(tlsCfg *tls.Config) Option {
 // WithMetrics enables the Prometheus metrics endpoint.
 func WithMetrics(opt MetricsOption) Option {
 	return func(o *options) {
-		if err := opt.init(); err != nil {
-			log.Error().Err(err).Msg("WithMetrics: init defaults failed")
-			return
-		}
+		opt.init()
 		o.metrics = &opt
 	}
 }
@@ -105,23 +107,26 @@ func WithHealth(opt HealthOption) Option {
 
 // MetricsOption configures the Prometheus metrics endpoint.
 type MetricsOption struct {
-	Path     string `default:"/metrics"` // Path defaults to "/metrics".
+	Path     string // Path defaults to "/metrics".
 	Registry *prometheus.Registry
 }
 
-func (c *MetricsOption) init() error {
-	if err := defaults.Apply(c); err != nil {
-		return err
+func (c *MetricsOption) init() {
+	// Apply the path default directly to preserve caller-owned registry identity.
+	if c.Path == "" {
+		c.Path = "/metrics"
 	}
 
 	if c.Registry != nil {
-		return nil
+		return
 	}
-	c.Registry = metrics.New(
-		metrics.WithGoCollectorRuntimeMetrics(),
-		metrics.WithBuildInfoCollector(),
-	).Registry()
-	return nil
+	c.Registry = prometheus.NewRegistry()
+	c.Registry.MustRegister(
+		collectors.NewGoCollector(collectors.WithGoCollectorRuntimeMetrics(
+			collectors.GoRuntimeMetricsRule{Matcher: regexp.MustCompile("/.*")},
+		)),
+		collectors.NewBuildInfoCollector(),
+	)
 }
 
 // SwaggerOption configures the Swagger UI endpoint.

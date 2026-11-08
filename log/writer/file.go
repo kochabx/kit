@@ -12,7 +12,7 @@ import (
 	"github.com/kochabx/kit/core/validator"
 )
 
-// FileConfig 文件日志配置。
+// FileConfig configures file logging.
 type FileConfig struct {
 	Path       string           `json:"path" default:"log/app.log" validate:"required"`
 	RotateMode RotateMode       `json:"rotate_mode" validate:"oneof=1 2"`
@@ -20,21 +20,21 @@ type FileConfig struct {
 	SizeRotate SizeRotateConfig `json:"size_rotate"`
 }
 
-// TimeRotateConfig 按时间轮转配置。
+// TimeRotateConfig configures time-based rotation.
 type TimeRotateConfig struct {
 	MaxAge   time.Duration `json:"max_age" default:"24h" validate:"gt=0"`
 	Interval time.Duration `json:"interval" default:"1h" validate:"gt=0"`
 }
 
-// SizeRotateConfig 按大小轮转配置。
+// SizeRotateConfig configures size-based rotation.
 type SizeRotateConfig struct {
-	MaxSize    int  `json:"max_size" default:"100" validate:"gt=0"`   // 单个日志文件最大大小（MB）
-	MaxBackups int  `json:"max_backups" default:"5" validate:"gte=0"` // 保留的旧日志文件数量
-	MaxAge     int  `json:"max_age" default:"30" validate:"gte=0"`    // 日志文件保留天数
-	Compress   bool `json:"compress" default:"false"`                 // 是否压缩旧日志文件
+	MaxSize    int  `json:"max_size" default:"100" validate:"gt=0"`   // Maximum size of one log file in MB.
+	MaxBackups int  `json:"max_backups" default:"5" validate:"gte=0"` // Number of old log files to retain.
+	MaxAge     int  `json:"max_age" default:"30" validate:"gte=0"`    // Retention period in days.
+	Compress   bool `json:"compress" default:"false"`                 // Whether to compress old log files.
 }
 
-// File 创建文件输出 writer
+// NewFile creates a file output writer.
 func NewFile(config FileConfig) (io.Writer, error) {
 	if err := defaults.Apply(&config); err != nil {
 		return nil, err

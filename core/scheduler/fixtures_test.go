@@ -27,6 +27,7 @@ type testProducer[T any] struct {
 func (t *testProducer[T]) Handle(fn Handler[T]) error {
 	return t.worker.registerTaskHandler(t.task, fn)
 }
+
 func mustBind[T any](s *workerRuntime, t Task[T]) *testProducer[T] {
 	client, err := t.bind(s.clientState)
 	if err != nil {
@@ -141,7 +142,12 @@ func (h *commandCounter) ProcessPipelineHook(next redis.ProcessPipelineHook) red
 	}
 }
 
-func (h *commandCounter) reset() { h.mu.Lock(); defer h.mu.Unlock(); h.commands = nil; h.pipelines = 0 }
+func (h *commandCounter) reset() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.commands = nil
+	h.pipelines = 0
+}
 
 func queueTestScheduler(t *testing.T, client redis.UniversalClient, namespace string, role Role, names ...string) *workerRuntime {
 	t.Helper()

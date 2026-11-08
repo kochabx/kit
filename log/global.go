@@ -12,13 +12,13 @@ func init() {
 	global.Store(New())
 }
 
-// Global 返回当前全局日志记录器。
+// Global returns the current global logger.
 func Global() *Logger {
 	return global.Load()
 }
 
-// SetGlobal 原子替换全局日志记录器并返回旧实例。
-// 调用方负责决定是否关闭返回的旧实例。
+// SetGlobal atomically replaces the global logger and returns the previous instance.
+// The caller decides whether and when to close the previous instance.
 func SetGlobal(logger *Logger) *Logger {
 	if logger == nil {
 		panic("log: nil global logger")
@@ -26,32 +26,32 @@ func SetGlobal(logger *Logger) *Logger {
 	return global.Swap(logger)
 }
 
-// Debug 返回 debug 级别的日志事件
+// Debug creates a debug-level event.
 func Debug() *zerolog.Event {
 	return Global().Debug()
 }
 
-// Info 返回 info 级别的日志事件
+// Info creates an info-level event.
 func Info() *zerolog.Event {
 	return Global().Info()
 }
 
-// Warn 返回 warn 级别的日志事件
+// Warn creates a warning-level event.
 func Warn() *zerolog.Event {
 	return Global().Warn()
 }
 
-// Error 返回 error 级别的日志事件
+// Error creates an error-level event.
 func Error() *zerolog.Event {
 	return Global().Error()
 }
 
-// Fatal 返回 fatal 级别的日志事件
+// Fatal creates a fatal-level event.
 func Fatal() *zerolog.Event {
 	return Global().Fatal()
 }
 
-// Panic 返回 panic 级别的日志事件
+// Panic creates a panic-level event.
 func Panic() *zerolog.Event {
 	return Global().Panic()
 }

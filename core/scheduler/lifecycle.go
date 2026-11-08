@@ -90,7 +90,11 @@ func (s *workerRuntime) Run(ctx context.Context) error {
 			s.active.Range(func(key, value any) bool {
 				jobID, _ := key.(string)
 				execution, _ := value.(*activeExecution)
-				s.config.Observability.Logger.Error().Str("queue", execution.queue).Str("job_id", jobID).Str("task", execution.taskName).Msg("job still running at shutdown")
+				s.config.Observability.Logger.Error().
+					Str("queue", execution.queue).
+					Str("job_id", jobID).
+					Str("task", execution.taskName).
+					Msg("job still running at shutdown")
 				execution.cancel(ErrShutdownTimeout)
 				return true
 			})

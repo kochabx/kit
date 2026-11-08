@@ -22,7 +22,17 @@ func BenchmarkConcurrentRoundTrip(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer c.Close()
-	w, err := NewWorker(r, WorkerConfig{Namespace: ns, Queues: []QueueConfig{{Name: DefaultQueue, Concurrency: 16}}, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond}})
+	w, err := NewWorker(
+		r,
+		WorkerConfig{
+			Namespace: ns,
+			Queues: []QueueConfig{{
+				Name:        DefaultQueue,
+				Concurrency: 16,
+			}},
+			Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond},
+		},
+	)
 	if err != nil {
 		b.Fatal(err)
 	}

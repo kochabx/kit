@@ -20,7 +20,10 @@ func TestCronCreatesIndependentJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := mustTask[string]("cron.job")
-	schedule, err := mustBind(s, d).Schedule(context.Background(), "payload", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, d).Schedule(context.Background(), "payload", CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -30,7 +33,11 @@ func TestCronCreatesIndependentJob(t *testing.T) {
 	if err := client.HSet(context.Background(), s.queues[DefaultQueue].store.Keys.Schedule(schedule.ID), "next_at", due).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(context.Background(), s.queues[DefaultQueue].store.Keys.Schedules(), redis.Z{Score: float64(due), Member: schedule.ID}).Err(); err != nil {
+	if err := client.ZAdd(context.Background(), s.queues[DefaultQueue].store.Keys.Schedules(), redis.Z{
+		Score:  float64(due),
+		Member: schedule.ID,
+	}).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.queues[DefaultQueue].dispatchSchedules(context.Background()); err != nil {
@@ -61,7 +68,10 @@ func TestCronManagement(t *testing.T) {
 	}
 	defer s.Close()
 	d := mustTask[string]("cron.manage")
-	schedule, err := mustBind(s, d).Schedule(context.Background(), "payload", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, d).Schedule(context.Background(), "payload", CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +85,10 @@ func TestCronManagement(t *testing.T) {
 	if err := s.Schedules().Resume(context.Background(), schedule.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Schedules().UpdateCron(context.Background(), schedule.ID, CronSpec{Expression: "@every 2h", TimeZone: "UTC"}); err != nil {
+	if err := s.Schedules().UpdateCron(context.Background(), schedule.ID, CronSpec{
+		Expression: "@every 2h",
+		TimeZone:   "UTC",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	items, err := mustQueue(s, DefaultQueue).Schedules(context.Background(), ScheduleQuery{Count: 10})
@@ -98,7 +111,10 @@ func TestInvalidAndOrphanedSchedulesAreQuarantined(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schedule, err := mustBind(s, mustTask[string]("cron.invalid")).Schedule(context.Background(), "payload", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, mustTask[string]("cron.invalid")).Schedule(context.Background(), "payload", CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +122,19 @@ func TestInvalidAndOrphanedSchedulesAreQuarantined(t *testing.T) {
 	if err := client.HSet(context.Background(), s.queues[DefaultQueue].store.Keys.Schedule(schedule.ID), "cron", "invalid", "next_at", due).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(context.Background(), s.queues[DefaultQueue].store.Keys.Schedules(), redis.Z{Score: float64(due), Member: schedule.ID}, redis.Z{Score: float64(due), Member: "orphan"}).Err(); err != nil {
+	if err := client.ZAdd(
+		context.Background(),
+		s.queues[DefaultQueue].store.Keys.Schedules(),
+		redis.Z{
+			Score:  float64(due),
+			Member: schedule.ID,
+		},
+		redis.Z{
+			Score:  float64(due),
+			Member: "orphan",
+		},
+	).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.queues[DefaultQueue].dispatchSchedules(context.Background()); err != nil {
@@ -127,11 +155,17 @@ func TestCancelledScheduleExpiresFromCatalog(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Retention: RetentionConfig{Schedule: 5 * time.Millisecond}})
+	s, err := newWorkerRuntime(client, WorkerConfig{
+		Namespace: namespace,
+		Retention: RetentionConfig{Schedule: 5 * time.Millisecond},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	schedule, err := mustBind(s, mustTask[string]("cron.expires")).Schedule(context.Background(), "payload", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, mustTask[string]("cron.expires")).Schedule(context.Background(), "payload", CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +191,10 @@ func TestScheduleCatalogIncludesInactiveStates(t *testing.T) {
 	}
 	d := mustTask[string]("cron.catalog")
 	paused, _ := mustBind(s, d).Schedule(context.Background(), "one", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
-	cancelled, _ := mustBind(s, d).Schedule(context.Background(), "two", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	cancelled, _ := mustBind(s, d).Schedule(context.Background(), "two", CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err := s.Schedules().Pause(context.Background(), paused.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +205,10 @@ func TestScheduleCatalogIncludesInactiveStates(t *testing.T) {
 	if err != nil || len(all.Items) != 2 {
 		t.Fatalf("all=%+v err=%v", all, err)
 	}
-	items, err := mustQueue(s, DefaultQueue).Schedules(context.Background(), ScheduleQuery{Count: 10, State: SchedulePaused})
+	items, err := mustQueue(s, DefaultQueue).Schedules(context.Background(), ScheduleQuery{
+		Count: 10,
+		State: SchedulePaused,
+	})
 	if err != nil || len(items.Items) != 1 || items.Items[0].ID != paused.ID {
 		t.Fatalf("paused=%+v err=%v", items, err)
 	}
@@ -191,7 +231,10 @@ func TestCronBatchConcurrentDispatch(t *testing.T) {
 	due := now - 1000
 	const count = 32
 	for range count {
-		schedule, err := mustBind(s, mustTask[string]("batch")).Schedule(ctx, strings.Repeat("x", 4096), CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+		schedule, err := mustBind(s, mustTask[string]("batch")).Schedule(ctx, strings.Repeat("x", 4096), CronSpec{
+			Expression: "@every 1h",
+			TimeZone:   "UTC",
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,12 +280,21 @@ func TestCronOrphansDoNotConsumeDrainProgress(t *testing.T) {
 	ctx := context.Background()
 	namespace := fmt.Sprintf("cron-orphans-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Dispatch: DispatchConfig{Batch: 2, CronDrainLimit: 4}})
+	s, err := newWorkerRuntime(client, WorkerConfig{
+		Namespace: namespace,
+		Dispatch: DispatchConfig{
+			Batch:          2,
+			CronDrainLimit: 4,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	schedule, err := mustBind(s, mustTask[string]("valid")).Schedule(ctx, "payload", CronSpec{Expression: "@every 1h", TimeZone: "UTC"})
+	schedule, err := mustBind(s, mustTask[string]("valid")).Schedule(ctx, "payload", CronSpec{
+		Expression: "@every 1h",
+		TimeZone:   "UTC",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +305,23 @@ func TestCronOrphansDoNotConsumeDrainProgress(t *testing.T) {
 	if err := client.HSet(ctx, s.queues[DefaultQueue].store.Keys.Schedule(schedule.ID), "next_at", now-1).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, s.queues[DefaultQueue].store.Keys.Schedules(), redis.Z{Score: float64(now - 3), Member: "orphan1"}, redis.Z{Score: float64(now - 2), Member: "orphan2"}, redis.Z{Score: float64(now - 1), Member: schedule.ID}).Err(); err != nil {
+	if err := client.ZAdd(
+		ctx,
+		s.queues[DefaultQueue].store.Keys.Schedules(),
+		redis.Z{
+			Score:  float64(now - 3),
+			Member: "orphan1",
+		},
+		redis.Z{
+			Score:  float64(now - 2),
+			Member: "orphan2",
+		},
+		redis.Z{
+			Score:  float64(now - 1),
+			Member: schedule.ID,
+		},
+	).
+		Err(); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.queues[DefaultQueue].dispatchSchedules(ctx); err != nil {

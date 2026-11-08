@@ -71,13 +71,16 @@ func TestServer_HealthEndpoint_DefaultPath(t *testing.T) {
 func TestServer_MetricsEndpoint(t *testing.T) {
 	s := NewServer(
 		http.NotFoundHandler(),
-		WithMetrics(MetricsOption{Path: "/metrics"}),
+		WithMetrics(MetricsOption{}),
 	)
 
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Contains(t, w.Body.String(), "go_build_info")
+	assert.Contains(t, w.Body.String(), "go_goroutines")
+	assert.Contains(t, w.Body.String(), "go_sched_goroutines_goroutines")
 }
 
 func TestServer_MetricsEndpointUsesConfiguredRegistry(t *testing.T) {
@@ -380,4 +383,15 @@ func TestServer_FrameworkAgnostic_HandlerFuncAsHandler(t *testing.T) {
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/anything", nil))
 	assert.Equal(t, http.StatusNoContent, w.Code)
 	assert.Equal(t, "yes", w.Header().Get("X-Custom"))
+}
+
+func TestMetricsOptionPreservesRegistry(t *testing.T) {
+	registry := prometheus.NewRegistry()
+	option := MetricsOption{Registry: registry}
+	option.init()
+	require.Same(t, registry, option.Registry)
+	require.Equal(t, "/metrics", option.Path)
+	families, err := registry.Gather()
+	require.NoError(t, err)
+	require.Empty(t, families)
 }

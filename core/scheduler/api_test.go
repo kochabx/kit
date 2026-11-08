@@ -197,12 +197,16 @@ func TestObserverConcurrentPublishAndCloseAccountsForEvents(t *testing.T) {
 
 func TestObserverPanicDoesNotStopLaterEvents(t *testing.T) {
 	var received atomic.Uint64
-	bus := newEventBus(ObservabilityConfig{Buffer: 4, Logger: log.Global(), Observer: ObserverFunc(func(_ context.Context, event Event) {
-		if event.Kind == EventStarted {
-			panic("observer failure")
-		}
-		received.Add(1)
-	})}, time.Second)
+	bus := newEventBus(ObservabilityConfig{
+		Buffer: 4,
+		Logger: log.Global(),
+		Observer: ObserverFunc(func(_ context.Context, event Event) {
+			if event.Kind == EventStarted {
+				panic("observer failure")
+			}
+			received.Add(1)
+		}),
+	}, time.Second)
 	bus.publish(context.Background(), Event{Kind: EventStarted})
 	bus.publish(context.Background(), Event{Kind: EventFinished})
 	bus.close()
@@ -265,7 +269,10 @@ func TestDeadQueryPropagatesCorruptStorageErrors(t *testing.T) {
 	if err := client.Set(ctx, s.namespace.Keys.Job("corrupt"), "not-a-hash", 0).Err(); err != nil {
 		t.Fatal(err)
 	}
-	if err := client.ZAdd(ctx, q.store.Keys.Dead(), redis.Z{Score: float64(time.Now().UnixMilli()), Member: "corrupt"}).Err(); err != nil {
+	if err := client.ZAdd(ctx, q.store.Keys.Dead(), redis.Z{
+		Score:  float64(time.Now().UnixMilli()),
+		Member: "corrupt",
+	}).Err(); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mustQueue(s, DefaultQueue).DeadJobs(ctx, DeadQuery{Count: 10}); err == nil {

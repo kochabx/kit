@@ -2,23 +2,23 @@ package wsx
 
 import "time"
 
-// EventType WebSocket 事件类型。
+// EventType identifies a WebSocket event.
 type EventType string
 
 const (
-	// EventConnected 连接成功
+	// EventConnected indicates a successful connection.
 	EventConnected EventType = "connected"
-	// EventDisconnected 连接断开
+	// EventDisconnected indicates a disconnected connection.
 	EventDisconnected EventType = "disconnected"
-	// EventMessage 收到消息
+	// EventMessage indicates an incoming message.
 	EventMessage EventType = "message"
-	// EventError 发生错误
+	// EventError indicates an error.
 	EventError EventType = "error"
-	// EventReconnecting 正在重连
+	// EventReconnecting indicates a reconnect attempt.
 	EventReconnecting EventType = "reconnecting"
 )
 
-// Event WebSocket 事件结构。
+// Event describes a WebSocket event.
 type Event struct {
 	Type      EventType `json:"type"`
 	Data      any       `json:"data,omitempty"`
@@ -26,5 +26,5 @@ type Event struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// EventHandler 事件处理回调。
+// EventHandler handles a WebSocket event.
 type EventHandler func(event Event)

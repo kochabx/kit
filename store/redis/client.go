@@ -50,9 +50,10 @@ func universalOptions(cfg Config) *redis.UniversalOptions {
 		DB:         cfg.DB,
 		Protocol:   cfg.Protocol,
 
-		DialTimeout:  cfg.DialTimeout,
-		ReadTimeout:  cfg.ReadTimeout,
-		WriteTimeout: cfg.WriteTimeout,
+		ContextTimeoutEnabled: true,
+		DialTimeout:           cfg.DialTimeout,
+		ReadTimeout:           cfg.ReadTimeout,
+		WriteTimeout:          cfg.WriteTimeout,
 
 		PoolSize:        cfg.PoolSize,
 		MinIdleConns:    cfg.MinIdleConns,
@@ -99,7 +100,9 @@ func installHooks(client redis.UniversalClient, opts options) error {
 
 // UniversalClient returns the underlying go-redis client for Redis commands,
 // pipelines, transactions, and scripts.
-func (c *Client) UniversalClient() redis.UniversalClient { return c.client }
+func (c *Client) UniversalClient() redis.UniversalClient {
+	return c.client
+}
 
 // Ping verifies that Redis is reachable using ctx.
 func (c *Client) Ping(ctx context.Context) error {
@@ -118,13 +121,21 @@ func (c *Client) Close() error {
 }
 
 // Stats returns a snapshot of connection pool statistics.
-func (c *Client) Stats() *redis.PoolStats { return c.client.PoolStats() }
+func (c *Client) Stats() *redis.PoolStats {
+	return c.client.PoolStats()
+}
 
 // Start verifies the connection when Client is used as an application component.
-func (c *Client) Start(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
 
 // Stop closes the client when it is used as an application component.
-func (c *Client) Stop(context.Context) error { return c.Close() }
+func (c *Client) Stop(context.Context) error {
+	return c.Close()
+}
 
 // HealthCheck reports whether Redis is reachable.
-func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) HealthCheck(ctx context.Context) error {
+	return c.Ping(ctx)
+}

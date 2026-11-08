@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	contextKey          = "claims"        // 默认上下文键
+	contextKey          = "claims"        // Default context key.
 	headerAuthorization = "Authorization" // Authorization Header
-	bearerPrefix        = "Bearer "       // Bearer Token 前缀
+	bearerPrefix        = "Bearer "       // Bearer token prefix.
 )
 
 var (
@@ -21,22 +21,22 @@ var (
 	ErrAuthenticatorNil = errors.Unauthorized("authenticator missing")
 )
 
-// Authenticator 认证器接口
+// Authenticator authenticates a token.
 type Authenticator[T any] interface {
 	Authenticate(ctx context.Context, token string) (T, error)
 }
 
-// AuthenticatorFunc 函数适配器
+// AuthenticatorFunc adapts a function to Authenticator.
 type AuthenticatorFunc[T any] func(ctx context.Context, token string) (T, error)
 
 func (f AuthenticatorFunc[T]) Authenticate(ctx context.Context, token string) (T, error) {
 	return f(ctx, token)
 }
 
-// TokenExtractor 从 HTTP 请求提取 Token
+// TokenExtractor extracts a token from an HTTP request.
 type TokenExtractor func(r *http.Request) (string, error)
 
-// BearerExtractor 从 Authorization: Bearer <token> 提取
+// BearerExtractor reads Authorization: Bearer <token>.
 func BearerExtractor() TokenExtractor {
 	return func(r *http.Request) (string, error) {
 		auth := r.Header.Get(headerAuthorization)
@@ -50,7 +50,7 @@ func BearerExtractor() TokenExtractor {
 	}
 }
 
-// HeaderExtractor 从指定 Header 提取
+// HeaderExtractor reads a token from the specified header.
 func HeaderExtractor(header string) TokenExtractor {
 	return func(r *http.Request) (string, error) {
 		if token := r.Header.Get(header); token != "" {
@@ -60,7 +60,7 @@ func HeaderExtractor(header string) TokenExtractor {
 	}
 }
 
-// QueryExtractor 从 URL Query 参数提取
+// QueryExtractor reads a token from a URL query parameter.
 func QueryExtractor(param string) TokenExtractor {
 	return func(r *http.Request) (string, error) {
 		if token := r.URL.Query().Get(param); token != "" {
@@ -70,7 +70,7 @@ func QueryExtractor(param string) TokenExtractor {
 	}
 }
 
-// CookieExtractor 从 Cookie 提取
+// CookieExtractor reads a token from the specified cookie.
 func CookieExtractor(name string) TokenExtractor {
 	return func(r *http.Request) (string, error) {
 		c, err := r.Cookie(name)
@@ -81,7 +81,7 @@ func CookieExtractor(name string) TokenExtractor {
 	}
 }
 
-// ChainExtractor 链式提取器，依次尝试直到成功
+// ChainExtractor tries extractors in order until one succeeds.
 func ChainExtractor(extractors ...TokenExtractor) TokenExtractor {
 	return func(r *http.Request) (string, error) {
 		for _, extract := range extractors {
@@ -93,17 +93,17 @@ func ChainExtractor(extractors ...TokenExtractor) TokenExtractor {
 	}
 }
 
-// AuthConfig 认证中间件配置
+// AuthConfig configures authentication middleware.
 type AuthConfig[T any] struct {
-	Skip           SkipConfig                                      // 跳过配置
-	Authenticator  Authenticator[T]                                // 认证器（必需）
-	Extractor      TokenExtractor                                  // Token 提取器，默认 BearerExtractor
-	ContextKey     string                                          // 上下文键，默认 "claims"
-	SuccessHandler func(http.ResponseWriter, *http.Request, T)     // 成功回调
-	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // 错误处理，默认返回 401
+	Skip           SkipConfig                                      // Skip rules.
+	Authenticator  Authenticator[T]                                // Required authenticator.
+	Extractor      TokenExtractor                                  // Token extractor; defaults to BearerExtractor.
+	ContextKey     string                                          // Context key; defaults to "claims".
+	SuccessHandler func(http.ResponseWriter, *http.Request, T)     // Success callback.
+	ErrorHandler   func(http.ResponseWriter, *http.Request, error) // Error handler; defaults to an HTTP 401 response.
 }
 
-// Auth 创建认证中间件
+// Auth creates authentication middleware.
 func Auth[T any](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 	if cfg.Extractor == nil {
 		cfg.Extractor = BearerExtractor()
@@ -154,7 +154,7 @@ func Auth[T any](cfg AuthConfig[T]) func(http.Handler) http.Handler {
 	}
 }
 
-// GetClaims 从 Context 获取 claims
+// GetClaims retrieves claims from context.
 func GetClaims[T any](ctx context.Context, key ...string) (T, bool) {
 	var zero T
 	k := contextKey

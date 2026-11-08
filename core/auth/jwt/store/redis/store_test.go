@@ -37,13 +37,30 @@ func TestRotateIsAtomicAndReuseRevokes(t *testing.T) {
 	store := redisStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	session := kitjwt.Session{ID: "s1", Subject: "u1", RefreshJTI: "old", CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}
+	session := kitjwt.Session{
+		ID:         "s1",
+		Subject:    "u1",
+		RefreshJTI: "old",
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+	}
 	require.NoError(t, store.Create(ctx, session, 3))
 	var success, rejected atomic.Int32
 	var wg sync.WaitGroup
 	for i := range 32 {
 		wg.Go(func() {
-			err := store.Rotate(ctx, kitjwt.Rotation{Subject: "u1", SessionID: "s1", OldJTI: "old", NewJTI: "new-" + string(rune(i)), Now: now.Add(time.Second), ExpiresAt: now.Add(time.Hour)})
+			err := store.Rotate(
+				ctx,
+				kitjwt.Rotation{
+					Subject:   "u1",
+					SessionID: "s1",
+					OldJTI:    "old",
+					NewJTI:    "new-" + string(rune(i)),
+					Now:       now.Add(time.Second),
+					ExpiresAt: now.Add(time.Hour),
+				},
+			)
 			if err == nil {
 				success.Add(1)
 			} else if errors.Is(err, kitjwt.ErrRefreshReused) || errors.Is(err, kitjwt.ErrSessionRevoked) {
@@ -65,7 +82,14 @@ func TestSessionLimitAndRevokeAll(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	for i := range 3 {
-		s := kitjwt.Session{ID: string(rune('a' + i)), Subject: "u", RefreshJTI: string(rune('x' + i)), CreatedAt: now.Add(time.Duration(i) * time.Second), LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}
+		s := kitjwt.Session{
+			ID:         string(rune('a' + i)),
+			Subject:    "u",
+			RefreshJTI: string(rune('x' + i)),
+			CreatedAt:  now.Add(time.Duration(i) * time.Second),
+			LastSeenAt: now,
+			ExpiresAt:  now.Add(time.Hour),
+		}
 		require.NoError(t, store.Create(ctx, s, 2))
 	}
 	page, err := store.List(ctx, "u", kitjwt.SessionQuery{})
@@ -77,7 +101,14 @@ func TestSessionLimitAndRevokeAll(t *testing.T) {
 	for _, s := range page.Sessions {
 		require.NotNil(t, s.RevokedAt)
 	}
-	newSession := kitjwt.Session{ID: "new", Subject: "u", RefreshJTI: "new-jti", CreatedAt: now.Add(10 * time.Second), LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}
+	newSession := kitjwt.Session{
+		ID:         "new",
+		Subject:    "u",
+		RefreshJTI: "new-jti",
+		CreatedAt:  now.Add(10 * time.Second),
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+	}
 	require.NoError(t, store.Create(ctx, newSession, 2))
 	page, err = store.List(ctx, "u", kitjwt.SessionQuery{Status: kitjwt.SessionActive})
 	require.NoError(t, err)
@@ -89,7 +120,15 @@ func TestRevokeDevice(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	for i, device := range []string{"phone", "tablet"} {
-		s := kitjwt.Session{ID: string(rune('a' + i)), Subject: "u-device", DeviceID: device, RefreshJTI: string(rune('x' + i)), CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}
+		s := kitjwt.Session{
+			ID:         string(rune('a' + i)),
+			Subject:    "u-device",
+			DeviceID:   device,
+			RefreshJTI: string(rune('x' + i)),
+			CreatedAt:  now,
+			LastSeenAt: now,
+			ExpiresAt:  now.Add(time.Hour),
+		}
 		require.NoError(t, store.Create(ctx, s, 3))
 	}
 	require.NoError(t, store.RevokeDevice(ctx, "u-device", "phone", now))
@@ -106,7 +145,15 @@ func TestDeviceReplacementAndPagination(t *testing.T) {
 	store := redisStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	first := kitjwt.Session{ID: "first", Subject: "paged", DeviceID: "phone", RefreshJTI: "j1", CreatedAt: now, LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}
+	first := kitjwt.Session{
+		ID:         "first",
+		Subject:    "paged",
+		DeviceID:   "phone",
+		RefreshJTI: "j1",
+		CreatedAt:  now,
+		LastSeenAt: now,
+		ExpiresAt:  now.Add(time.Hour),
+	}
 	second := first
 	second.ID = "second"
 	second.RefreshJTI = "j2"
@@ -116,7 +163,14 @@ func TestDeviceReplacementAndPagination(t *testing.T) {
 	_, err := store.Get(ctx, "paged", "first")
 	require.ErrorIs(t, err, kitjwt.ErrSessionNotFound)
 	for i := range 2 {
-		s := kitjwt.Session{ID: fmt.Sprintf("extra-%d", i), Subject: "paged", RefreshJTI: fmt.Sprintf("e-%d", i), CreatedAt: now.Add(time.Duration(i+2) * time.Second), LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}
+		s := kitjwt.Session{
+			ID:         fmt.Sprintf("extra-%d", i),
+			Subject:    "paged",
+			RefreshJTI: fmt.Sprintf("e-%d", i),
+			CreatedAt:  now.Add(time.Duration(i+2) * time.Second),
+			LastSeenAt: now,
+			ExpiresAt:  now.Add(time.Hour),
+		}
 		require.NoError(t, store.Create(ctx, s, 10))
 	}
 	page, err := store.List(ctx, "paged", kitjwt.SessionQuery{Limit: 2})

@@ -38,13 +38,40 @@ func newWorkerRuntime(client redis.UniversalClient, config WorkerConfig) (*worke
 	names := make([]string, 0, len(config.Queues))
 	for _, q := range config.Queues {
 		names = append(names, q.Name)
-		options[q.Name] = store.QueueOptions{ReadMaxBytes: q.ReadMaxBytes, ClaimIdle: config.Execution.LeaseDuration, DeadRetention: config.Retention.Dead, SubmissionRetention: config.Retention.Submission, CompletionRetention: config.Retention.Completion, HistoryLimit: config.History.MaxEntries, HistoryTTL: config.History.TTL}
+		options[q.Name] = store.QueueOptions{
+			ReadMaxBytes:        q.ReadMaxBytes,
+			ClaimIdle:           config.Execution.LeaseDuration,
+			DeadRetention:       config.Retention.Dead,
+			SubmissionRetention: config.Retention.Submission,
+			CompletionRetention: config.Retention.Completion,
+			HistoryLimit:        config.History.MaxEntries,
+			HistoryTTL:          config.History.TTL,
+		}
 	}
-	state, err := newClientState(client, ClientConfig{Namespace: config.Namespace, Queues: names, MaxPayloadBytes: config.MaxPayloadBytes, OperationTimeout: config.OperationTimeout, ReplayInterval: config.ReplayInterval, Retention: config.Retention, Observability: config.Observability}, config.Dispatch.CronCacheSize, options)
+	state, err := newClientState(
+		client,
+		ClientConfig{
+			Namespace:        config.Namespace,
+			Queues:           names,
+			MaxPayloadBytes:  config.MaxPayloadBytes,
+			OperationTimeout: config.OperationTimeout,
+			ReplayInterval:   config.ReplayInterval,
+			Retention:        config.Retention,
+			Observability:    config.Observability,
+		},
+		config.Dispatch.CronCacheSize,
+		options,
+	)
 	if err != nil {
 		return nil, err
 	}
-	s := &workerRuntime{clientState: state, config: config, consumerID: uuid.NewString(), handlers: make(map[handlerKey]handler), forceStop: make(chan struct{})}
+	s := &workerRuntime{
+		clientState: state,
+		config:      config,
+		consumerID:  uuid.NewString(),
+		handlers:    make(map[handlerKey]handler),
+		forceStop:   make(chan struct{}),
+	}
 
 	s.queues = make(map[string]*queueRuntime, len(config.Queues))
 	for _, settings := range config.Queues {

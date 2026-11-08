@@ -18,7 +18,7 @@ type testUser struct {
 	Username string `json:"username" validate:"required,min=3,max=20"`
 }
 
-// mustNew 测试辅助：构造 Validator，失败时使测试失败。
+// mustNew creates a validator and fails the test if construction fails.
 func mustNew(t testing.TB, opts ...Option) Validator {
 	t.Helper()
 	v, err := New(opts...)
@@ -26,7 +26,7 @@ func mustNew(t testing.TB, opts ...Option) Validator {
 	return v
 }
 
-// ---- 构造 ----
+// ---- Construction ----
 
 func TestNew(t *testing.T) {
 	v, err := New()
@@ -35,14 +35,14 @@ func TestNew(t *testing.T) {
 }
 
 func TestNew_InvalidOptions(t *testing.T) {
-	// 空 locales → defaultLocale 找不到 translator
+	// An empty locale map cannot provide the default translator.
 	_, err := New(func(o *options) { o.locales = map[Locale]LocaleEntry{} })
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not in enabled locales")
 }
 
 func TestNew_DefaultLocaleNotInEnabled(t *testing.T) {
-	// defaultLocale 设为一个不在 locales 中的值
+	// Select a default locale that is not enabled.
 	_, err := New(func(o *options) {
 		delete(o.locales, LocaleZH)
 		o.defaultLocale = LocaleZH
@@ -66,7 +66,7 @@ func TestNew_NilCustomValidationFunc(t *testing.T) {
 func TestDefault(t *testing.T) {
 	v := Validate
 	assert.NotNil(t, v)
-	assert.Same(t, v, Validate) // 同一实例
+	assert.Same(t, v, Validate) // The same shared instance.
 }
 
 func TestNewWithOptions(t *testing.T) {
@@ -112,7 +112,7 @@ func TestStruct_ErrorMessage_NotEmpty(t *testing.T) {
 	assert.NotEmpty(t, err.Error())
 }
 
-// ---- 字段名映射 ----
+// ---- Field name mapping ----
 
 func TestFieldName_JSONTag(t *testing.T) {
 	v := mustNew(t)
@@ -148,7 +148,7 @@ func TestFieldName_GoStructField(t *testing.T) {
 	t.Fatal("未找到 required violation")
 }
 
-// ---- Locale / 翻译 ----
+// ---- Locales and translations ----
 
 func TestStruct_DefaultLocaleEN(t *testing.T) {
 	v := mustNew(t)
@@ -192,7 +192,7 @@ func TestLocaleExtractor_UsesContext(t *testing.T) {
 }
 
 func TestLocaleExtractor_FallbackToDefault(t *testing.T) {
-	// localeExtractor 返回 false → 回退到 defaultLocale (EN)
+	// An extractor returning false falls back to the default locale (English).
 	v := mustNew(t, WithLocaleExtractor(func(ctx context.Context) (Locale, bool) {
 		return "", false
 	}))
@@ -203,14 +203,14 @@ func TestLocaleExtractor_FallbackToDefault(t *testing.T) {
 }
 
 func TestLocaleExtractor_UnsupportedLocaleFallback(t *testing.T) {
-	// localeExtractor 返回不在 locales 中的 locale → 退回 defaultLocale
+	// An unsupported extracted locale falls back to the default locale.
 	v := mustNew(t, WithLocaleExtractor(func(_ context.Context) (Locale, bool) {
 		return Locale("fr"), true
 	}))
 
 	err := v.Struct(context.Background(), &testUser{Name: ""})
 	require.Error(t, err)
-	// 回退到默认 EN，应包含英文 required 消息
+	// The English fallback should contain the English required message.
 	assert.Contains(t, err.Error(), "required")
 }
 
@@ -234,7 +234,7 @@ func TestVar_WithLocale(t *testing.T) {
 	assert.Contains(t, err.Error(), "required")
 }
 
-// ---- Violation 属性 ----
+// ---- Violation attributes ----
 
 func TestViolation_Attributes(t *testing.T) {
 	v := mustNew(t)
@@ -254,7 +254,7 @@ func TestViolation_Attributes(t *testing.T) {
 	}
 }
 
-// ---- 自定义校验（通过选项注册） ----
+// ---- Custom validation options ----
 
 func TestWithValidation(t *testing.T) {
 	v := mustNew(t, WithValidation("nonempty_str", func(fl gv.FieldLevel) bool {
@@ -287,7 +287,7 @@ func TestWithStructValidation(t *testing.T) {
 	assert.Error(t, v.Struct(ctx, &dateRange{Start: 10, End: 1}))
 }
 
-// ---- 错误工具 ----
+// ---- Error helpers ----
 
 func TestAsError(t *testing.T) {
 	v := mustNew(t)
@@ -297,7 +297,7 @@ func TestAsError(t *testing.T) {
 	assert.False(t, AsError(errors.New("plain")))
 }
 
-// ---- 并发安全 ----
+// ---- Concurrent use ----
 
 func TestConcurrentValidation(t *testing.T) {
 	v := mustNew(t)
@@ -319,7 +319,7 @@ func TestConcurrentValidation(t *testing.T) {
 	}
 }
 
-// ---- 基准 ----
+// ---- Benchmarks ----
 
 func BenchmarkStruct_Valid(b *testing.B) {
 	v := mustNew(b)

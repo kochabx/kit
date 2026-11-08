@@ -32,7 +32,18 @@ func TestHeartbeatIsolatesPipelineErrors(t *testing.T) {
 		}
 		executions[id] = execution
 		s.active.Store(id, execution)
-		if err := client.HSet(ctx, s.queues[DefaultQueue].store.Keys.Job(id), "lease_token", "token", "lease_until", now.Add(time.Minute).UnixMilli(), "cancel_requested", 0).Err(); err != nil {
+		if err := client.HSet(
+			ctx,
+			s.queues[DefaultQueue].store.Keys.Job(id),
+			"lease_token",
+			"token",
+			"lease_until",
+			now.Add(time.Minute).
+				UnixMilli(),
+			"cancel_requested",
+			0,
+		).
+			Err(); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -56,7 +67,9 @@ func TestHeartbeatIsolatesPipelineErrors(t *testing.T) {
 	if executions["healthy"].ctx.Err() != nil {
 		t.Fatalf("healthy execution cancelled by another job's Redis error: %v", context.Cause(executions["healthy"].ctx))
 	}
-	if !errors.Is(context.Cause(executions["cancelled"].ctx), ErrJobCancelled) || !errors.Is(context.Cause(executions["lost"].ctx), ErrLeaseLost) || executions["broken"].ctx.Err() == nil {
+	if !errors.Is(context.Cause(executions["cancelled"].ctx), ErrJobCancelled) ||
+		!errors.Is(context.Cause(executions["lost"].ctx), ErrLeaseLost) ||
+		executions["broken"].ctx.Err() == nil {
 		t.Fatal("heartbeat did not isolate cancellation/lease/error results")
 	}
 	if executions["finished"].ctx.Err() != nil {

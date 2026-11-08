@@ -4,15 +4,17 @@ import "slices"
 
 import "net/http"
 
-// RoundTripFunc 把函数适配为 http.RoundTripper。
+// RoundTripFunc adapts a function to http.RoundTripper.
 type RoundTripFunc func(*http.Request) (*http.Response, error)
 
-// RoundTrip 实现 http.RoundTripper。
-func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+// RoundTrip implements http.RoundTripper.
+func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
-// Middleware 用于在请求被发送之前 / 响应返回之后做拦截。
+// Middleware intercepts outgoing requests and incoming responses.
 //
-// 典型用法：
+// Example usage:
 //
 //	logMW := func(next httpx.RoundTripFunc) httpx.RoundTripFunc {
 //	    return func(req *http.Request) (*http.Response, error) {
@@ -24,13 +26,13 @@ func (f RoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { re
 //	}
 type Middleware func(next RoundTripFunc) RoundTripFunc
 
-// chain 把一组中间件按声明顺序包装到 base 之外，先声明的位于最外层。
+// chain wraps base in declaration order, with the first middleware outermost.
 func chain(base http.RoundTripper, mws []Middleware) http.RoundTripper {
 	if base == nil {
 		base = http.DefaultTransport
 	}
 	final := RoundTripFunc(base.RoundTrip)
-	// 反向迭代，使第一个中间件位于最外层。
+	// Iterate backward so the first middleware is outermost.
 	for _, mw := range slices.Backward(mws) {
 		final = mw(final)
 	}

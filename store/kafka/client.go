@@ -209,7 +209,9 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Close flushes and closes all producers and consumers. It is safe to call
 // more than once.
-func (c *Client) Close() error { return c.close() }
+func (c *Client) Close() error {
+	return c.close()
+}
 
 func (c *Client) closeResources() error {
 	c.mu.Lock()
@@ -250,6 +252,14 @@ func (c *Client) closeResources() error {
 	return nil
 }
 
-func (c *Client) Start(ctx context.Context) error       { return c.Ping(ctx) }
-func (c *Client) Stop(context.Context) error            { return c.Close() }
-func (c *Client) HealthCheck(ctx context.Context) error { return c.Ping(ctx) }
+func (c *Client) Start(ctx context.Context) error {
+	return c.Ping(ctx)
+}
+
+func (c *Client) Stop(context.Context) error {
+	return c.Close()
+}
+
+func (c *Client) HealthCheck(ctx context.Context) error {
+	return c.Ping(ctx)
+}

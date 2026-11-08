@@ -26,7 +26,11 @@ func TestRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := mustTask[string]("retry.job", WithRetry(Exponential{MaxAttempts: 2, Initial: 10 * time.Millisecond, Max: 10 * time.Millisecond}))
+	d := mustTask[string]("retry.job", WithRetry(Exponential{
+		MaxAttempts: 2,
+		Initial:     10 * time.Millisecond,
+		Max:         10 * time.Millisecond,
+	}))
 	var calls atomic.Int32
 	if err := mustBind(s, d).Handle(func(context.Context, string) error {
 		if calls.Add(1) == 1 {
@@ -66,7 +70,9 @@ func TestPermanentFailureAndDeadRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := mustTask[string]("dead.job")
-	if err := mustBind(s, d).Handle(func(context.Context, string) error { return Permanent(errors.New("bad input")) }); err != nil {
+	if err := mustBind(s, d).Handle(func(context.Context, string) error {
+		return Permanent(errors.New("bad input"))
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,7 +104,10 @@ func TestActiveLeaseCannotBeRecoveredOrAcknowledged(t *testing.T) {
 	client := testRedis(t)
 	namespace := fmt.Sprintf("scheduler-test-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, client, namespace) })
-	s, err := newWorkerRuntime(client, WorkerConfig{Namespace: namespace, Execution: ExecutionConfig{LeaseDuration: 3 * time.Second}})
+	s, err := newWorkerRuntime(client, WorkerConfig{
+		Namespace: namespace,
+		Execution: ExecutionConfig{LeaseDuration: 3 * time.Second},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -172,7 +181,10 @@ func TestSucceededJobIsDeletedByDefault(t *testing.T) {
 	}
 	d := mustTask[string]("success.delete", WithRetry(NoRetry{}))
 	handled := make(chan struct{}, 1)
-	if err := mustBind(s, d).Handle(func(context.Context, string) error { handled <- struct{}{}; return nil }); err != nil {
+	if err := mustBind(s, d).Handle(func(context.Context, string) error {
+		handled <- struct{}{}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -217,7 +229,11 @@ func TestRunningJobCancellation(t *testing.T) {
 	}
 	d := mustTask[string]("cancel.running", WithTimeout(10*time.Second), WithRetry(NoRetry{}))
 	started := make(chan struct{})
-	if err := mustBind(s, d).Handle(func(ctx context.Context, _ string) error { close(started); <-ctx.Done(); return ctx.Err() }); err != nil {
+	if err := mustBind(s, d).Handle(func(ctx context.Context, _ string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -253,7 +269,12 @@ func TestRemoteRunningJobCancellation(t *testing.T) {
 		Namespace: namespace,
 		Role:      RoleWorker,
 		Queues:    []QueueConfig{{Name: DefaultQueue, Concurrency: 1}},
-		Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: time.Second, CancellationCheckInterval: 20 * time.Millisecond},
+		Execution: ExecutionConfig{
+			PollTimeout:               20 * time.Millisecond,
+			LeaseDuration:             3 * time.Second,
+			LeaseRenewInterval:        time.Second,
+			CancellationCheckInterval: 20 * time.Millisecond,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)

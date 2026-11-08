@@ -27,7 +27,10 @@ func TestSchedulerLifecycle(t *testing.T) {
 	}
 	definition := mustTask[payload]("test.job", WithTimeout(time.Second), WithRetry(NoRetry{}))
 	result := make(chan string, 1)
-	if err := mustBind(s, definition).Handle(func(_ context.Context, p payload) error { result <- p.Value; return nil }); err != nil {
+	if err := mustBind(s, definition).Handle(func(_ context.Context, p payload) error {
+		result <- p.Value
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,7 +88,10 @@ func TestSeparateDispatcherAndWorkerRoles(t *testing.T) {
 	}
 	d := mustTask[string]("roles.job", WithRetry(NoRetry{}))
 	handled := make(chan struct{}, 1)
-	if err := mustBind(worker, d).Handle(func(context.Context, string) error { handled <- struct{}{}; return nil }); err != nil {
+	if err := mustBind(worker, d).Handle(func(context.Context, string) error {
+		handled <- struct{}{}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -117,7 +123,13 @@ func TestGracefulShutdownKeepsActiveJobLeasedUntilCompletion(t *testing.T) {
 	s, err := newWorkerRuntime(client, WorkerConfig{
 		Namespace: namespace,
 		Queues:    []QueueConfig{{Name: DefaultQueue, Concurrency: 1}},
-		Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond, CancellationCheckInterval: 50 * time.Millisecond, ShutdownTimeout: 2 * time.Second},
+		Execution: ExecutionConfig{
+			PollTimeout:               20 * time.Millisecond,
+			LeaseDuration:             3 * time.Second,
+			LeaseRenewInterval:        100 * time.Millisecond,
+			CancellationCheckInterval: 50 * time.Millisecond,
+			ShutdownTimeout:           2 * time.Second,
+		},
 		Retention: RetentionConfig{Succeeded: time.Minute},
 	})
 	if err != nil {
@@ -125,7 +137,11 @@ func TestGracefulShutdownKeepsActiveJobLeasedUntilCompletion(t *testing.T) {
 	}
 	d := mustTask[string]("shutdown.complete", WithTimeout(5*time.Second), WithRetry(NoRetry{}))
 	started, release := make(chan struct{}), make(chan struct{})
-	if err := mustBind(s, d).Handle(func(context.Context, string) error { close(started); <-release; return nil }); err != nil {
+	if err := mustBind(s, d).Handle(func(context.Context, string) error {
+		close(started)
+		<-release
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -155,14 +171,24 @@ func TestShutdownTimeoutLeavesJobRecoverable(t *testing.T) {
 	s, err := newWorkerRuntime(client, WorkerConfig{
 		Namespace: namespace,
 		Queues:    []QueueConfig{{Name: DefaultQueue, Concurrency: 1}},
-		Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond, LeaseDuration: 3 * time.Second, LeaseRenewInterval: 100 * time.Millisecond, CancellationCheckInterval: 50 * time.Millisecond, ShutdownTimeout: 50 * time.Millisecond},
+		Execution: ExecutionConfig{
+			PollTimeout:               20 * time.Millisecond,
+			LeaseDuration:             3 * time.Second,
+			LeaseRenewInterval:        100 * time.Millisecond,
+			CancellationCheckInterval: 50 * time.Millisecond,
+			ShutdownTimeout:           50 * time.Millisecond,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	d := mustTask[string]("shutdown.timeout", WithTimeout(5*time.Second), WithRetry(NoRetry{}))
 	started, release := make(chan struct{}), make(chan struct{})
-	if err := mustBind(s, d).Handle(func(context.Context, string) error { close(started); <-release; return nil }); err != nil {
+	if err := mustBind(s, d).Handle(func(context.Context, string) error {
+		close(started)
+		<-release
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

@@ -7,8 +7,8 @@ import (
 )
 
 // ============================================================================
-// Recovery 中间件测试
-// 展示：stdlib net/http 与 Gin 两种框架下的一致行为
+// Recovery middleware tests.
+// Verify consistent behavior with net/http and Gin.
 // ============================================================================
 
 func TestRecovery_NoPanic(t *testing.T) {
@@ -52,7 +52,7 @@ func TestRecovery_PanicWithError(t *testing.T) {
 }
 
 func TestRecovery_NoStackTrace(t *testing.T) {
-	// StackTrace: false 时也应正确恢复，不影响状态码
+	// Recovery should preserve the response status when StackTrace is false.
 	mw := Recovery(RecoveryConfig{StackTrace: false})
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("no stack")
@@ -65,14 +65,14 @@ func TestRecovery_NoStackTrace(t *testing.T) {
 }
 
 func TestRecovery_PanicAfterWriteHeader(t *testing.T) {
-	// 写入状态头后 panic，不能再次写入（不崩溃即通过）
+	// Recovering after headers were sent must not panic.
 	mw := Recovery()
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		panic("panic after write")
 	})
 
-	// 不应崩溃
+	// The handler must not panic.
 	defer func() {
 		if r := recover(); r != nil {
 			t.Errorf("Recovery middleware should have caught panic: %v", r)
@@ -82,7 +82,7 @@ func TestRecovery_PanicAfterWriteHeader(t *testing.T) {
 }
 
 // ============================================================================
-// Gin 集成测试
+// Gin integration test.
 // ============================================================================
 
 func TestRecovery_Gin(t *testing.T) {

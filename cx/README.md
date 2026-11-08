@@ -114,3 +114,11 @@ report, err := c.HealthCheck(ctx)
 | `Wait` | 监督后台任务退出 |
 | `HealthCheck` | 状态化并发健康检查 |
 | `DependencyGraph` | 返回最近一次构建的依赖图 |
+
+## 与应用组合
+
+简单配置使用 `app.WithComponent`，基础组件先于 Server 启动。使用 `app.WithContainer(c)` 时，Server、组件和钩子都应在 c 中配置，应用负责容器的启停，不再混用 app 的注册选项。
+
+```bash
+go test -race ./cx -count=1
+```

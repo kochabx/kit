@@ -59,7 +59,10 @@ func typeHasDefaults(typ reflect.Type, tagName string, visiting map[reflect.Type
 	defer delete(visiting, typ)
 
 	for _, field := range metadataFor(typ, tagName).fields {
-		if field.hasDefault && field.value != "-" {
+		if field.hasDefault && field.value == "-" {
+			continue
+		}
+		if field.hasDefault {
 			return true
 		}
 		if typeHasDefaults(field.field.Type, tagName, visiting) {

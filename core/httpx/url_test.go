@@ -131,13 +131,13 @@ func TestURLBuilder_Path(t *testing.T) {
 		t.Errorf("path = %v, want /api/v1", builder.path.String())
 	}
 
-	// 测试覆盖路径
+	// Test path replacement.
 	builder.Path("/new/path")
 	if builder.path.String() != "/new/path" {
 		t.Errorf("path = %v, want /new/path", builder.path.String())
 	}
 
-	// 测试空路径
+	// Test an empty path.
 	builder.Path("")
 	if builder.path.String() != "" {
 		t.Errorf("path = %v, want empty", builder.path.String())
@@ -205,7 +205,7 @@ func TestURLBuilder_Query(t *testing.T) {
 		t.Errorf("query key1 = %v, want value1", values)
 	}
 
-	// 测试同一键多个值
+	// Test multiple values for the same key.
 	builder.Query("key1", "value2")
 	allValues := builder.query["key1"]
 	if len(allValues) != 2 {
@@ -322,7 +322,10 @@ func TestURLBuilder_Build(t *testing.T) {
 					Port("8080").
 					Path("/api/v1").
 					Query("param1", "value1").
-					Query("param2", "value2").
+					Query(
+						"param2",
+						"value2",
+					).
 					Fragment("section")
 			},
 			expected: "https://example.com:8080/api/v1?param1=value1&param2=value2#section",
@@ -432,12 +435,15 @@ func TestURLBuilder_Clone(t *testing.T) {
 		Port("8080").
 		Path("/api").
 		Query("key1", "value1").
-		Query("key1", "value2").
+		Query(
+			"key1",
+			"value2",
+		).
 		Fragment("section")
 
 	clone := original.Clone()
 
-	// 验证克隆的值
+	// Verify the cloned values.
 	if clone.scheme != original.scheme {
 		t.Errorf("clone.scheme = %v, want %v", clone.scheme, original.scheme)
 	}
@@ -454,14 +460,14 @@ func TestURLBuilder_Clone(t *testing.T) {
 		t.Errorf("clone.fragment = %v, want %v", clone.fragment, original.fragment)
 	}
 
-	// 验证查询参数深拷贝
+	// Verify that query parameters are deep-copied.
 	originalValues := original.query["key1"]
 	cloneValues := clone.query["key1"]
 	if len(cloneValues) != len(originalValues) {
 		t.Errorf("clone query values count = %v, want %v", len(cloneValues), len(originalValues))
 	}
 
-	// 修改克隆不应影响原始
+	// Changing the clone must not affect the original.
 	clone.Query("key1", "newvalue")
 	if len(original.query["key1"]) != 2 {
 		t.Error("修改克隆影响了原始对象")
@@ -587,7 +593,7 @@ func TestJoin(t *testing.T) {
 	}
 }
 
-// 基准测试
+// Benchmarks.
 func BenchmarkURLBuilder_Build(b *testing.B) {
 	builder := NewURLBuilder().
 		Scheme("https").
@@ -595,7 +601,10 @@ func BenchmarkURLBuilder_Build(b *testing.B) {
 		Port("8080").
 		Path("/api/v1").
 		Query("param1", "value1").
-		Query("param2", "value2").
+		Query(
+			"param2",
+			"value2",
+		).
 		Fragment("section")
 
 	b.ResetTimer()
@@ -624,16 +633,19 @@ func BenchmarkFromURL(b *testing.B) {
 	}
 }
 
-// 示例测试
+// Examples.
 func ExampleURLBuilder() {
-	// 构建一个完整的API URL
+	// Build a complete API URL.
 	url, _ := NewURLBuilder().
 		Scheme("https").
 		Host("api.example.com").
 		Port("443").
 		AppendPath("v1", "users").
 		Query("page", "1").
-		Query("limit", "10").
+		Query(
+			"limit",
+			"10",
+		).
 		Fragment("results").
 		Build()
 
@@ -642,7 +654,7 @@ func ExampleURLBuilder() {
 }
 
 func ExampleBuildHTTPS() {
-	// 快速构建HTTPS URL
+	// Build an HTTPS URL.
 	url, _ := BuildHTTPS("api.example.com", "v1", "users").
 		Query("active", "true").
 		Build()
@@ -652,10 +664,10 @@ func ExampleBuildHTTPS() {
 }
 
 func ExampleFromURL() {
-	// 从现有URL创建构建器并修改
+	// Create a builder from an existing URL and modify it.
 	builder, _ := FromURL("https://example.com/old/path?old=param")
 
-	// 清空查询参数并设置新的
+	// Clear query parameters and set new ones.
 	builder.query = make(url.Values)
 	newURL, _ := builder.
 		Path("/new/path").

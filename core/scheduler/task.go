@@ -21,9 +21,13 @@ type Codec[T any] interface {
 
 type jsonCodec[T any] struct{}
 
-func (jsonCodec[T]) Identity() string { return "json:v1" }
+func (jsonCodec[T]) Identity() string {
+	return "json:v1"
+}
 
-func (jsonCodec[T]) Marshal(v T) ([]byte, error) { return json.Marshal(v) }
+func (jsonCodec[T]) Marshal(v T) ([]byte, error) {
+	return json.Marshal(v)
+}
 
 func (jsonCodec[T]) Unmarshal(b []byte) (T, error) {
 	var v T
@@ -72,7 +76,14 @@ func NewTaskWithCodec[T any](name string, codec Codec[T], opts ...TaskOption) (T
 			opt(&c)
 		}
 	}
-	if !validName.MatchString(name) || !validName.MatchString(c.queue) || isNilInterface(codec) || isNilInterface(c.retry) || c.maxRecoveries < 0 || c.maxExecutions < 1 || c.timeout <= 0 || !validName.MatchString(c.version) {
+	if !validName.MatchString(name) ||
+		!validName.MatchString(c.queue) ||
+		isNilInterface(codec) ||
+		isNilInterface(c.retry) ||
+		c.maxRecoveries < 0 ||
+		c.maxExecutions < 1 ||
+		c.timeout <= 0 ||
+		!validName.MatchString(c.version) {
 		return Task[T]{}, fmt.Errorf("invalid task %q: %w", name, ErrInvalidArgument)
 	}
 	policy, err := snapshotPolicy(c.timeout, c.retry, c.maxRecoveries, c.maxExecutions)
@@ -89,18 +100,26 @@ func NewTaskWithCodec[T any](name string, codec Codec[T], opts ...TaskOption) (T
 }
 
 // WithVersion identifies the payload contract; change it when its schema changes.
-func WithVersion(version string) TaskOption { return func(c *taskConfig) { c.version = version } }
+func WithVersion(version string) TaskOption {
+	return func(c *taskConfig) { c.version = version }
+}
 
-func (t Task[T]) Version() string { return t.version }
+func (t Task[T]) Version() string {
+	return t.version
+}
 
 // WithQueue permanently binds a task definition to its execution queue.
-func WithQueue(name string) TaskOption { return func(c *taskConfig) { c.queue = name } }
+func WithQueue(name string) TaskOption {
+	return func(c *taskConfig) { c.queue = name }
+}
 
 func WithTimeout(v time.Duration) TaskOption {
 	return func(c *taskConfig) { c.timeout = v }
 }
 
-func WithRetry(v RetryPolicy) TaskOption { return func(c *taskConfig) { c.retry = v } }
+func WithRetry(v RetryPolicy) TaskOption {
+	return func(c *taskConfig) { c.retry = v }
+}
 
 type Handler[T any] func(context.Context, T) error
 
@@ -157,7 +176,11 @@ func isNilInterface(value any) bool {
 }
 
 // WithRecoveryLimit limits lease-expiration recoveries independently of business retries.
-func WithRecoveryLimit(n int) TaskOption { return func(c *taskConfig) { c.maxRecoveries = n } }
+func WithRecoveryLimit(n int) TaskOption {
+	return func(c *taskConfig) { c.maxRecoveries = n }
+}
 
 // WithExecutionLimit is the absolute number of executions in one job generation.
-func WithExecutionLimit(n int) TaskOption { return func(c *taskConfig) { c.maxExecutions = n } }
+func WithExecutionLimit(n int) TaskOption {
+	return func(c *taskConfig) { c.maxExecutions = n }
+}

@@ -119,3 +119,11 @@ case errors.Is(err, hmac.ErrInvalidSignature):
 - 使用 `hmac.Equal` 做常量时间摘要比较。
 - `Signer` 复制传入的密钥并支持并发使用。
 - HMAC 使用共享密钥，签名方和验证方都能生成合法签名。
+
+## HTTP 接入与验证
+
+请求级规范化、Header 编码和防重放可使用 [HTTP Signature 中间件](../../../transport/http/middleware/README.md)。签名、传输与验证必须使用相同的原始 payload 字节；JSON 重新编码可能改变字节顺序，不能直接替代原文。
+
+```bash
+go test -race ./core/crypto/hmac -count=1
+```

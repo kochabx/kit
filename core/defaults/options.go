@@ -8,9 +8,11 @@ import (
 
 const defaultMaxDepth = 64
 
+// FieldFilter must be safe for concurrent use when its Applier is shared.
 type FieldFilter func(reflect.StructField) bool
 
-// Decoder converts a tag string into a settable value.
+// Decoder converts a tag string into a settable value. Implementations must
+// be safe for concurrent use when their Applier is shared.
 type Decoder interface {
 	Decode(reflect.Value, string) error
 }

@@ -16,7 +16,12 @@ import (
 func TestKeySetSeparatesSigningAndVerificationKeys(t *testing.T) {
 	private, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-	set, err := kitjwt.NewKeySet(kitjwt.KeyPair{ID: "rsa-1", Method: gojwt.SigningMethodRS256, SignKey: private, VerifyKey: &private.PublicKey})
+	set, err := kitjwt.NewKeySet(kitjwt.KeyPair{
+		ID:        "rsa-1",
+		Method:    gojwt.SigningMethodRS256,
+		SignKey:   private,
+		VerifyKey: &private.PublicKey,
+	})
 	require.NoError(t, err)
 	signing, err := set.SigningKey(context.Background())
 	require.NoError(t, err)
@@ -26,7 +31,12 @@ func TestKeySetSeparatesSigningAndVerificationKeys(t *testing.T) {
 	require.Same(t, &private.PublicKey, verification.Key)
 	next, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
-	require.NoError(t, set.Rotate(kitjwt.KeyPair{ID: "ec-1", Method: gojwt.SigningMethodES256, SignKey: next, VerifyKey: &next.PublicKey}))
+	require.NoError(t, set.Rotate(kitjwt.KeyPair{
+		ID:        "ec-1",
+		Method:    gojwt.SigningMethodES256,
+		SignKey:   next,
+		VerifyKey: &next.PublicKey,
+	}))
 	_, err = set.VerificationKey(context.Background(), "rsa-1", "RS256")
 	require.NoError(t, err)
 }
@@ -36,7 +46,12 @@ func TestKeySetRejectsMismatchedPair(t *testing.T) {
 	require.NoError(t, err)
 	second, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
-	_, err = kitjwt.NewKeySet(kitjwt.KeyPair{ID: "bad", Method: gojwt.SigningMethodRS256, SignKey: first, VerifyKey: &second.PublicKey})
+	_, err = kitjwt.NewKeySet(kitjwt.KeyPair{
+		ID:        "bad",
+		Method:    gojwt.SigningMethodRS256,
+		SignKey:   first,
+		VerifyKey: &second.PublicKey,
+	})
 	require.ErrorIs(t, err, kitjwt.ErrConfigInvalid)
 }
 

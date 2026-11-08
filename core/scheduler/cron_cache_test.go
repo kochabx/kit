@@ -10,7 +10,20 @@ import (
 func TestCronCacheEvictionAndTimezone(t *testing.T) {
 	cache := newCronCache(2)
 	from := time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC).UnixMilli()
-	records := []store.ScheduleRecord{{Expression: "0 9 * * *", TimeZone: "Asia/Shanghai"}, {Expression: "0 9 * * *", TimeZone: "UTC"}, {Expression: "0 10 * * *", TimeZone: "UTC"}}
+	records := []store.ScheduleRecord{
+		{
+			Expression: "0 9 * * *",
+			TimeZone:   "Asia/Shanghai",
+		},
+		{
+			Expression: "0 9 * * *",
+			TimeZone:   "UTC",
+		},
+		{
+			Expression: "0 10 * * *",
+			TimeZone:   "UTC",
+		},
+	}
 	for _, record := range records {
 		want, err := nextCronFrom(record, from)
 		if err != nil {
@@ -27,7 +40,13 @@ func TestCronCacheEvictionAndTimezone(t *testing.T) {
 	if _, ok := cache.entries[cronCacheKey{records[0].Expression, records[0].TimeZone}]; ok {
 		t.Fatal("oldest entry not evicted")
 	}
-	for _, record := range []store.ScheduleRecord{{Expression: "invalid", TimeZone: "UTC"}, {Expression: "@every 1h", TimeZone: "invalid/zone"}} {
+	for _, record := range []store.ScheduleRecord{{
+		Expression: "invalid",
+		TimeZone:   "UTC",
+	}, {
+		Expression: "@every 1h",
+		TimeZone:   "invalid/zone",
+	}} {
 		if _, err := cache.nextRunMillis(record, from); err == nil {
 			t.Fatal("invalid schedule cached")
 		}
@@ -65,7 +84,10 @@ func TestCronNextCalculationDoesNotHoldCacheLock(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_, _ = cache.nextRunMillis(store.ScheduleRecord{Expression: key.expression, TimeZone: key.location}, time.Now().UnixMilli())
+		_, _ = cache.nextRunMillis(store.ScheduleRecord{
+			Expression: key.expression,
+			TimeZone:   key.location,
+		}, time.Now().UnixMilli())
 	}()
 	select {
 	case <-blocker.entered:

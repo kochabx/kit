@@ -29,13 +29,48 @@ func TestNewRejectsInvalidConfig(t *testing.T) {
 		{name: "missing driver", cfg: Config{}, err: ErrInvalidConfig},
 		{name: "typed nil driver", cfg: Config{Driver: nilSQLite}, err: ErrInvalidConfig},
 		{name: "missing mysql database", cfg: Config{Driver: MySQLConfig{}}, err: ErrInvalidConfig},
-		{name: "invalid mysql port", cfg: Config{Driver: MySQLConfig{Database: "app", Port: 70000}}, err: ErrInvalidConfig},
+		{
+			name: "invalid mysql port",
+			cfg:  Config{Driver: MySQLConfig{Database: "app", Port: 70000}},
+			err:  ErrInvalidConfig,
+		},
 		{name: "missing postgres database", cfg: Config{Driver: PostgresConfig{}}, err: ErrInvalidConfig},
 		{name: "missing sqlite path", cfg: Config{Driver: SQLiteConfig{}}, err: ErrInvalidConfig},
-		{name: "invalid log level", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Log: &LogConfig{Level: logger.LogLevel(99)}}, err: ErrInvalidConfig},
-		{name: "negative slow threshold", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Log: &LogConfig{SlowQueryThreshold: -1}}, err: ErrInvalidConfig},
-		{name: "negative pool", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Pool: &PoolConfig{MaxOpenConns: -1}}, err: ErrInvalidConfig},
-		{name: "idle exceeds open", cfg: Config{Driver: SQLiteConfig{Path: ":memory:"}, Pool: &PoolConfig{MaxIdleConns: 2, MaxOpenConns: 1}}, err: ErrInvalidConfig},
+		{
+			name: "invalid log level",
+			cfg: Config{
+				Driver: SQLiteConfig{Path: ":memory:"},
+				Log:    &LogConfig{Level: logger.LogLevel(99)},
+			},
+			err: ErrInvalidConfig,
+		},
+		{
+			name: "negative slow threshold",
+			cfg: Config{
+				Driver: SQLiteConfig{Path: ":memory:"},
+				Log:    &LogConfig{SlowQueryThreshold: -1},
+			},
+			err: ErrInvalidConfig,
+		},
+		{
+			name: "negative pool",
+			cfg: Config{
+				Driver: SQLiteConfig{Path: ":memory:"},
+				Pool:   &PoolConfig{MaxOpenConns: -1},
+			},
+			err: ErrInvalidConfig,
+		},
+		{
+			name: "idle exceeds open",
+			cfg: Config{
+				Driver: SQLiteConfig{Path: ":memory:"},
+				Pool: &PoolConfig{
+					MaxIdleConns: 2,
+					MaxOpenConns: 1,
+				},
+			},
+			err: ErrInvalidConfig,
+		},
 	}
 
 	for _, tt := range tests {
@@ -217,16 +252,22 @@ func TestWithLogger(t *testing.T) {
 
 type failingPlugin struct{ err error }
 
-func (failingPlugin) Name() string { return "failing" }
+func (failingPlugin) Name() string {
+	return "failing"
+}
 
-func (plugin failingPlugin) Initialize(*gorm.DB) error { return plugin.err }
+func (plugin failingPlugin) Initialize(*gorm.DB) error {
+	return plugin.err
+}
 
 type countingPlugin struct {
 	name  string
 	count *int
 }
 
-func (plugin countingPlugin) Name() string { return plugin.name }
+func (plugin countingPlugin) Name() string {
+	return plugin.name
+}
 
 func (plugin countingPlugin) Initialize(*gorm.DB) error {
 	(*plugin.count)++

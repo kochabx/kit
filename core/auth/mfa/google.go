@@ -19,30 +19,30 @@ import (
 )
 
 const (
-	// 默认配置值
-	DefaultSecretSize   = 16  // 默认密钥长度
-	DefaultExpireSecond = 30  // 默认过期时间（秒）
-	DefaultDigits       = 6   // 默认验证码位数
-	DefaultQRCodeSize   = 256 // 默认二维码尺寸
-	DefaultTimeWindow   = 1   // 默认时间窗口容错值，用于处理时钟偏移
+	// Default configuration values.
+	DefaultSecretSize   = 16  // Default secret length in bytes.
+	DefaultExpireSecond = 30  // Default code lifetime in seconds.
+	DefaultDigits       = 6   // Default number of code digits.
+	DefaultQRCodeSize   = 256 // Default QR code size in pixels.
+	DefaultTimeWindow   = 1   // Default number of adjacent time windows accepted for clock skew.
 
-	// TOTP算法常量
-	HashOffset     = 0x0F       // 哈希偏移掩码
-	DynamicCodeLen = 4          // 动态码长度
-	MaxUint32      = 0x7FFFFFFF // 最大32位无符号整数
+	// TOTP algorithm constants.
+	HashOffset     = 0x0F       // Dynamic truncation offset mask.
+	DynamicCodeLen = 4          // Dynamic binary code length in bytes.
+	MaxUint32      = 0x7FFFFFFF // Mask that clears the sign bit of a 32-bit value.
 
-	// 验证相关常量
-	MinSecretSize = 8   // 最小密钥长度
-	MaxSecretSize = 128 // 最大密钥长度
-	MinDigits     = 4   // 最小验证码位数
-	MaxDigits     = 10  // 最大验证码位数
-	MaxTimeWindow = 10  // 最大时间窗口
+	// Validation bounds.
+	MinSecretSize = 8   // Minimum secret length in bytes.
+	MaxSecretSize = 128 // Maximum secret length in bytes.
+	MinDigits     = 4   // Minimum number of code digits.
+	MaxDigits     = 10  // Maximum number of code digits.
+	MaxTimeWindow = 10  // Maximum number of adjacent time windows.
 )
 
-// TOTP URI 协议
+// TOTPScheme is the URI prefix for TOTP provisioning.
 const TOTPScheme = "otpauth://totp/"
 
-// 错误常量定义
+// Error values.
 var (
 	ErrEmptySecret       = errors.New("secret cannot be empty")
 	ErrEmptyCode         = errors.New("code cannot be empty")
@@ -58,7 +58,7 @@ var (
 	ErrBase32Decode      = errors.New("failed to decode base32")
 )
 
-// GoogleAuthenticatorer 定义了Google身份验证器操作的接口
+// GoogleAuthenticatorer defines the Google Authenticator operations.
 type GoogleAuthenticatorer interface {
 	GenerateSecret() string
 	GenerateCode(secret string) (string, error)
@@ -66,29 +66,29 @@ type GoogleAuthenticatorer interface {
 	ValidateCode(secret, code string) (bool, error)
 }
 
-// 全局实例
+// GA is the shared authenticator instance.
 var GA GoogleAuthenticatorer
 
 func init() {
 	GA = NewGoogleAuthenticator()
 }
 
-// GoogleAuthenticator 实现基于时间的一次性密码(TOTP)算法
+// GoogleAuthenticator implements time-based one-time passwords (TOTP).
 type GoogleAuthenticator struct {
-	SecretSize   int `json:"secret_size"`   // 生成密钥的长度
-	ExpireSecond int `json:"expire_second"` // 时间窗口（秒）
-	Digits       int `json:"digits"`        // 生成验证码的位数
-	QrCodeSize   int `json:"qr_code_size"`  // 二维码图像尺寸（像素）
-	TimeWindow   int `json:"time_window"`   // 时间同步问题的容错值
+	SecretSize   int `json:"secret_size"`   // Length of generated secrets in bytes.
+	ExpireSecond int `json:"expire_second"` // Time step in seconds.
+	Digits       int `json:"digits"`        // Number of digits in generated codes.
+	QrCodeSize   int `json:"qr_code_size"`  // QR code image size in pixels.
+	TimeWindow   int `json:"time_window"`   // Number of adjacent time steps accepted for clock skew.
 
-	digitsMod uint32           // 10^digits，用于模运算
-	encoder   *base32.Encoding // 复用的base32编码器
+	digitsMod uint32           // Precomputed modulus, 10^digits.
+	encoder   *base32.Encoding // Reusable Base32 encoder.
 }
 
-// 配置GoogleAuthenticator的选项函数
+// Option configures a GoogleAuthenticator.
 type Option func(*GoogleAuthenticator)
 
-// WithSecretSize 设置密钥大小
+// WithSecretSize sets the secret length in bytes.
 func WithSecretSize(secretSize int) Option {
 	return func(ga *GoogleAuthenticator) {
 		if secretSize >= MinSecretSize && secretSize <= MaxSecretSize {
@@ -97,7 +97,7 @@ func WithSecretSize(secretSize int) Option {
 	}
 }
 
-// WithExpireSecond 设置时间窗口持续时间
+// WithExpireSecond sets the time step in seconds.
 func WithExpireSecond(expireSecond int) Option {
 	return func(ga *GoogleAuthenticator) {
 		if expireSecond > 0 {
@@ -106,7 +106,7 @@ func WithExpireSecond(expireSecond int) Option {
 	}
 }
 
-// WithDigits 设置生成验证码的位数
+// WithDigits sets the number of digits in generated codes.
 func WithDigits(digits int) Option {
 	return func(ga *GoogleAuthenticator) {
 		if digits >= MinDigits && digits <= MaxDigits {
@@ -116,7 +116,7 @@ func WithDigits(digits int) Option {
 	}
 }
 
-// WithQrCodeSize 设置二维码图像尺寸
+// WithQrCodeSize sets the QR code image size in pixels.
 func WithQrCodeSize(qrCodeSize int) Option {
 	return func(ga *GoogleAuthenticator) {
 		if qrCodeSize > 0 {
@@ -125,7 +125,7 @@ func WithQrCodeSize(qrCodeSize int) Option {
 	}
 }
 
-// WithTimeWindow 设置时间同步的容错值
+// WithTimeWindow sets the number of adjacent time steps accepted for clock skew.
 func WithTimeWindow(timeWindow int) Option {
 	return func(ga *GoogleAuthenticator) {
 		if timeWindow >= 0 && timeWindow <= MaxTimeWindow {
@@ -134,7 +134,7 @@ func WithTimeWindow(timeWindow int) Option {
 	}
 }
 
-// NewGoogleAuthenticator 创建一个具有默认设置的新GoogleAuthenticator
+// NewGoogleAuthenticator creates an authenticator with defaults and the supplied options.
 func NewGoogleAuthenticator(opts ...Option) GoogleAuthenticatorer {
 	ga := &GoogleAuthenticator{
 		SecretSize:   DefaultSecretSize,
@@ -142,8 +142,8 @@ func NewGoogleAuthenticator(opts ...Option) GoogleAuthenticatorer {
 		Digits:       DefaultDigits,
 		QrCodeSize:   DefaultQRCodeSize,
 		TimeWindow:   DefaultTimeWindow,
-		digitsMod:    uint32(math.Pow10(DefaultDigits)),                // 预计算模数
-		encoder:      base32.StdEncoding.WithPadding(base32.NoPadding), // 复用编码器
+		digitsMod:    uint32(math.Pow10(DefaultDigits)),                // Precompute the modulus.
+		encoder:      base32.StdEncoding.WithPadding(base32.NoPadding), // Reuse the encoder.
 	}
 
 	for _, opt := range opts {
@@ -153,31 +153,31 @@ func NewGoogleAuthenticator(opts ...Option) GoogleAuthenticatorer {
 	return ga
 }
 
-// GenerateSecret 生成加密安全的随机密钥
+// GenerateSecret returns a Base32-encoded secret.
 func (ga *GoogleAuthenticator) GenerateSecret() string {
-	// 使用 crypto/rand 获得更好的随机性
+	// Read secret bytes from crypto/rand.
 	secret := make([]byte, ga.SecretSize)
 	if _, err := rand.Read(secret); err != nil {
-		// 如果 crypto/rand 失败，回退到基于时间的生成
+		// Fall back to timestamp-based generation if the random read fails.
 		return ga.generateTimeBasedSecret()
 	}
 
-	// 使用base32编码器编码密钥
+	// Encode the secret as Base32.
 	return strings.ToUpper(ga.encoder.EncodeToString(secret))
 }
 
-// generateTimeBasedSecret 生成基于时间的密钥作为回退方案
+// generateTimeBasedSecret generates a timestamp-based fallback secret.
 func (ga *GoogleAuthenticator) generateTimeBasedSecret() string {
 	timeBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(timeBytes, uint64(time.Now().UnixNano()))
 
-	// 添加一些额外的熵
+	// Mix the timestamp with a fixed seed.
 	hash := ga.hmacSha1(timeBytes, []byte("fallback-seed"))
 	secretLen := min(len(hash), ga.SecretSize)
 	return strings.ToUpper(ga.encoder.EncodeToString(hash[:secretLen]))
 }
 
-// GenerateCode 为给定密钥在当前时间生成TOTP验证码
+// GenerateCode generates a TOTP code for the secret at the current time.
 func (ga *GoogleAuthenticator) GenerateCode(secret string) (string, error) {
 	if secret == "" {
 		return "", ErrEmptySecret
@@ -185,55 +185,55 @@ func (ga *GoogleAuthenticator) GenerateCode(secret string) (string, error) {
 	return ga.generateCodeAtTime(secret, time.Now().Unix())
 }
 
-// generateCodeAtTime 为给定密钥在特定时间戳生成TOTP验证码
+// generateCodeAtTime generates a TOTP code for the given Unix timestamp.
 func (ga *GoogleAuthenticator) generateCodeAtTime(secret string, timestamp int64) (string, error) {
-	// 解码base32密钥
+	// Decode the Base32 secret.
 	secretBytes, err := ga.base32decode(strings.ToUpper(secret))
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrSecretDecode, err)
 	}
 
-	// 计算时间计数器
+	// Calculate the time counter.
 	timeCounter := uint64(timestamp) / uint64(ga.ExpireSecond)
 
-	// 生成HMAC-SHA-1哈希
+	// Generate the HMAC-SHA-1 digest.
 	hash := ga.generateHMAC(secretBytes, timeCounter)
 
-	// 提取动态二进制码
+	// Extract the dynamic binary code.
 	code := ga.extractDynamicCode(hash)
 
-	// 格式化为带前导零的字符串
+	// Format the code with leading zeros.
 	return fmt.Sprintf(fmt.Sprintf("%%0%dd", ga.Digits), code), nil
 }
 
-// generateHMAC 为给定密钥和计数器生成HMAC-SHA-1哈希
+// generateHMAC computes HMAC-SHA-1 for the secret and counter.
 func (ga *GoogleAuthenticator) generateHMAC(secret []byte, counter uint64) []byte {
-	// 将计数器转换为8字节数组
+	// Encode the counter as eight big-endian bytes.
 	counterBytes := make([]byte, 8)
 	binary.BigEndian.PutUint64(counterBytes, counter)
 
-	// 生成HMAC-SHA-1
+	// Compute HMAC-SHA-1.
 	mac := hmac.New(sha1.New, secret)
 	mac.Write(counterBytes)
 	return mac.Sum(nil)
 }
 
-// extractDynamicCode 从HMAC哈希中提取动态码
+// extractDynamicCode extracts the truncated code from an HMAC digest.
 func (ga *GoogleAuthenticator) extractDynamicCode(hash []byte) uint32 {
-	// 从哈希的最后4位获取偏移量
+	// Use the last four bits of the digest as the offset.
 	offset := hash[len(hash)-1] & HashOffset
 
-	// 提取4字节动态二进制码
+	// Extract the four-byte dynamic binary code.
 	dynamicBinaryCode := binary.BigEndian.Uint32(hash[offset : offset+DynamicCodeLen])
 
-	// 清除最高位以确保为正数
+	// Clear the sign bit.
 	dynamicBinaryCode &= MaxUint32
 
-	// 使用预计算的模数进行模运算
+	// Apply the precomputed modulus.
 	return dynamicBinaryCode % ga.digitsMod
 }
 
-// GenerateQRCode 为TOTP设置生成二维码
+// GenerateQRCode generates a QR code for TOTP provisioning.
 func (ga *GoogleAuthenticator) GenerateQRCode(label, issuer, secret string) (string, error) {
 	if label == "" {
 		return "", ErrEmptyLabel
@@ -261,12 +261,12 @@ func generateQRCode(content string, size int) (string, error) {
 	return base64.StdEncoding.EncodeToString(png), nil
 }
 
-// generateQRData 为二维码生成TOTP URI
+// generateQRData builds the TOTP provisioning URI.
 func (ga *GoogleAuthenticator) generateQRData(label, issuer, secret string) string {
-	// 为URI编码标签
+	// URL-encode the label.
 	encodedLabel := url.QueryEscape(label)
 
-	// 构建具有适当参数的TOTP URI
+	// Build the TOTP URI query parameters.
 	params := url.Values{}
 	params.Set("secret", secret)
 	params.Set("issuer", issuer)
@@ -277,7 +277,7 @@ func (ga *GoogleAuthenticator) generateQRData(label, issuer, secret string) stri
 	return fmt.Sprintf("%s%s?%s", TOTPScheme, encodedLabel, params.Encode())
 }
 
-// ValidateCode 验证具有时间窗口容错的TOTP验证码
+// ValidateCode checks a TOTP code within the configured time window.
 func (ga *GoogleAuthenticator) ValidateCode(secret, code string) (bool, error) {
 	if secret == "" {
 		return false, ErrEmptySecret
@@ -288,7 +288,7 @@ func (ga *GoogleAuthenticator) ValidateCode(secret, code string) (bool, error) {
 
 	currentTime := time.Now().Unix()
 
-	// 检查当前时间窗口和相邻窗口以处理时钟偏移容错
+	// Check the current and adjacent time steps to allow clock skew.
 	for i := -ga.TimeWindow; i <= ga.TimeWindow; i++ {
 		windowTime := currentTime + int64(i*ga.ExpireSecond)
 		generatedCode, err := ga.generateCodeAtTime(secret, windowTime)
@@ -304,14 +304,14 @@ func (ga *GoogleAuthenticator) ValidateCode(secret, code string) (bool, error) {
 	return false, nil
 }
 
-// base32decode 将base32字符串解码为字节数组
+// base32decode decodes a Base32 string into bytes.
 func (ga *GoogleAuthenticator) base32decode(encoded string) ([]byte, error) {
-	// 如果需要，添加填充
+	// Add padding if needed.
 	if len(encoded)%8 != 0 {
 		encoded += strings.Repeat("=", 8-len(encoded)%8)
 	}
 
-	// 使用base32解码
+	// Decode Base32.
 	decoded, err := base32.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrBase32Decode, err)
@@ -319,7 +319,7 @@ func (ga *GoogleAuthenticator) base32decode(encoded string) ([]byte, error) {
 	return decoded, nil
 }
 
-// hmacSha1 生成HMAC-SHA-1哈希
+// hmacSha1 computes HMAC-SHA-1.
 func (ga *GoogleAuthenticator) hmacSha1(key, data []byte) []byte {
 	mac := hmac.New(sha1.New, key)
 	if len(data) > 0 {

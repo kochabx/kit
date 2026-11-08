@@ -21,7 +21,9 @@ type SessionClaims struct {
 }
 
 // JWTClaims exposes the claims owned by the JWT session protocol.
-func (claims *SessionClaims) JWTClaims() *SessionClaims { return claims }
+func (claims *SessionClaims) JWTClaims() *SessionClaims {
+	return claims
+}
 
 func isNil(value any) bool {
 	if value == nil {

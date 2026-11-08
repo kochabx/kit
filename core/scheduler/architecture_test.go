@@ -48,7 +48,25 @@ func TestRedisImplementationBoundary(t *testing.T) {
 			return true
 		})
 	}
-	for _, name := range []string{"client.go", "task.go", "worker.go", "registry.go", "jobs.go", "schedules.go", "lifecycle.go", "heartbeat.go", "dispatch.go", "recovery.go", "maintenance.go", "internal/store/jobs.go", "internal/store/execution.go", "internal/store/schedules.go", "internal/store/keys.go", "internal/store/decode.go", "internal/store/lua/claim.lua"} {
+	for _, name := range []string{
+		"client.go",
+		"task.go",
+		"worker.go",
+		"registry.go",
+		"jobs.go",
+		"schedules.go",
+		"lifecycle.go",
+		"heartbeat.go",
+		"dispatch.go",
+		"recovery.go",
+		"maintenance.go",
+		"internal/store/jobs.go",
+		"internal/store/execution.go",
+		"internal/store/schedules.go",
+		"internal/store/keys.go",
+		"internal/store/decode.go",
+		"internal/store/lua/claim.lua",
+	} {
 		if _, err := os.Stat(filepath.FromSlash(name)); err != nil {
 			t.Error(err)
 		}

@@ -1,8 +1,12 @@
 -- Shared by execution transitions. Receipt replay happens before ownership checks.
 local function read_receipt(key, signature)
   local receipt = redis.call('HMGET', key, 'signature', 'result')
-  if not receipt[1] then return nil end
-  if receipt[1] ~= signature then return -3 end
+  if not receipt[1] then
+    return nil
+  end
+  if receipt[1] ~= signature then
+    return -3
+  end
   return tonumber(receipt[2])
 end
 

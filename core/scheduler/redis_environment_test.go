@@ -81,7 +81,14 @@ func TestIsolatedClusterFailover(t *testing.T) {
 	if _, err := c.Enqueue(ctx, task, 1, WithJobID("cluster-request")); !errors.Is(err, ErrDuplicate) {
 		t.Fatalf("receipt after failover: %v", err)
 	}
-	w, err := NewWorker(r, WorkerConfig{Namespace: ns, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond}, Retention: RetentionConfig{Succeeded: time.Minute}})
+	w, err := NewWorker(
+		r,
+		WorkerConfig{
+			Namespace: ns,
+			Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond},
+			Retention: RetentionConfig{Succeeded: time.Minute},
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +104,10 @@ func TestIsolatedClusterFailover(t *testing.T) {
 			t.Error(e)
 		}
 	}()
-	eventually(t, 5*time.Second, func() bool { job, e := c.Jobs().Get(ctx, j.ID); return e == nil && job.State == JobSucceeded })
+	eventually(t, 5*time.Second, func() bool {
+		job, e := c.Jobs().Get(ctx, j.ID)
+		return e == nil && job.State == JobSucceeded
+	})
 
 	// Terminate the promoted primary and verify automatic replacement, not only
 	// a coordinated role transfer. This deployment is disposable and isolated.
@@ -158,7 +168,14 @@ func TestIsolatedPersistenceAcrossRestart(t *testing.T) {
 		if _, err := c.Enqueue(ctx, task, 3, WithJobID("finished")); err != nil {
 			t.Fatal(err)
 		}
-		w, err := NewWorker(r, WorkerConfig{Namespace: ns, Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond}, History: HistoryConfig{MaxEntries: 2}})
+		w, err := NewWorker(
+			r,
+			WorkerConfig{
+				Namespace: ns,
+				Execution: ExecutionConfig{PollTimeout: 20 * time.Millisecond},
+				History:   HistoryConfig{MaxEntries: 2},
+			},
+		)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +185,10 @@ func TestIsolatedPersistenceAcrossRestart(t *testing.T) {
 		run, cancel := context.WithCancel(ctx)
 		done := make(chan error, 1)
 		go func() { done <- w.Run(run) }()
-		eventually(t, 5*time.Second, func() bool { rows, e := c.Jobs().Attempts(ctx, "finished"); return e == nil && len(rows) == 1 })
+		eventually(t, 5*time.Second, func() bool {
+			rows, e := c.Jobs().Attempts(ctx, "finished")
+			return e == nil && len(rows) == 1
+		})
 		cancel()
 		if err := <-done; err != nil {
 			t.Fatal(err)

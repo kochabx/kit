@@ -12,18 +12,18 @@ import (
 	"time"
 )
 
-// Client 是经过包装的 HTTP 客户端，提供：
-//   - body 类型驱动的 Content-Type
-//   - 基地址、默认请求头、超时
-//   - 中间件链 (RoundTripper)
-//   - 状态码错误化 (HTTPError)
-//   - 可选重试 + 退避
-//   - 链路解码 (Into / IntoJSON / IntoXML / IntoBytes / IntoString)
+// Client wraps an HTTP client and provides:
+//   - Content-Type inferred from the body type
+//   - A base URL, default headers, and timeouts
+//   - A RoundTripper middleware chain
+//   - Status-based HTTPError responses
+//   - Optional retries and backoff
+//   - Response decoding through Into, IntoJSON, IntoXML, IntoBytes, and IntoString
 //
-// Client 在配置完成后是并发安全的。
+// Client is safe for concurrent use after configuration.
 type Client struct {
 	httpClient    *http.Client
-	transport     http.RoundTripper // 用户通过 WithTransport 指定的底层 RoundTripper
+	transport     http.RoundTripper // The underlying RoundTripper supplied through WithTransport.
 	baseURL       string
 	defaultHeader http.Header
 	middlewares   []Middleware
@@ -31,23 +31,23 @@ type Client struct {
 	retry         retryConfig
 }
 
-// retryConfig 重试配置。MaxAttempts <= 1 表示不重试。
+// retryConfig controls retries. MaxAttempts <= 1 disables retries.
 type retryConfig struct {
 	MaxAttempts int
 	Backoff     BackoffFunc
 	RetryOn     func(resp *http.Response, err error) bool
 }
 
-// BackoffFunc 返回第 attempt 次失败后 (attempt 从 1 开始) 应等待的时长。
+// BackoffFunc returns the delay after a failed attempt, numbered from one.
 type BackoffFunc func(attempt int) time.Duration
 
-// ClientOption 配置 Client。
+// ClientOption configures a Client.
 type ClientOption func(*Client)
 
-// WithHTTPClient 注入自定义 *http.Client。
+// WithHTTPClient supplies a custom *http.Client.
 //
-// 注意：如果同时使用了 WithTransport / WithTimeout / 中间件，
-// 它们将作用在这个 client 上 (替换其 Transport / Timeout)。
+// WithTransport, WithTimeout, and middleware options also apply to this client,
+// replacing its Transport or Timeout as configured.
 func WithHTTPClient(c *http.Client) ClientOption {
 	return func(cli *Client) {
 		if c != nil {
@@ -56,43 +56,43 @@ func WithHTTPClient(c *http.Client) ClientOption {
 	}
 }
 
-// WithTransport 设置底层 RoundTripper (在中间件链的最内层)。
+// WithTransport sets the innermost RoundTripper beneath the middleware chain.
 func WithTransport(rt http.RoundTripper) ClientOption {
 	return func(cli *Client) { cli.transport = rt }
 }
 
-// WithTimeout 设置请求超时 (整个 Do 调用，包括 body 读取)。
+// WithTimeout sets the request timeout, including response body reads.
 func WithTimeout(d time.Duration) ClientOption {
 	return func(cli *Client) { cli.httpClient.Timeout = d }
 }
 
-// WithBaseURL 设置基地址，调用时的相对路径会基于此地址解析。
+// WithBaseURL sets the base URL used to resolve relative request targets.
 func WithBaseURL(base string) ClientOption {
 	return func(cli *Client) { cli.baseURL = strings.TrimRight(base, "/") }
 }
 
-// WithDefaultHeader 设置一个默认请求头，发起请求时会被附加 (调用方的 Header 选项会覆盖同名值)。
+// WithDefaultHeader sets a default header; request-specific headers override matching names.
 func WithDefaultHeader(key, value string) ClientOption {
 	return func(cli *Client) { cli.defaultHeader.Set(key, value) }
 }
 
-// WithMiddleware 注册一个或多个中间件。先注册的位于最外层。
+// WithMiddleware adds middleware in order, with the first one outermost.
 func WithMiddleware(mw ...Middleware) ClientOption {
 	return func(cli *Client) { cli.middlewares = append(cli.middlewares, mw...) }
 }
 
-// WithErrorOnStatus 自定义"哪些状态码视为错误"。默认 code >= 400。
-// 传入 nil 表示禁用状态码错误化，所有响应都不会转成 HTTPError。
+// WithErrorOnStatus defines which status codes produce errors; the default is code >= 400.
+// A nil function disables status-based errors for all responses.
 func WithErrorOnStatus(fn func(int) bool) ClientOption {
 	return func(cli *Client) { cli.errorOnStatus = fn }
 }
 
-// WithRetry 启用重试。maxAttempts 包含首次尝试在内 (即 3 表示最多 3 次)。
-// backoff 为 nil 时不等待。retryOn 决定何时重试，nil 时使用默认策略
-// (网络错误或 5xx / 429)。
+// WithRetry enables retries. maxAttempts includes the initial request.
+// A nil backoff disables waiting. retryOn selects retryable results; nil uses the default
+// policy for network errors, 5xx responses, and status 429.
 //
-// 重试要求请求 body 可以重放。本库提供的 Body 构造器 (JSON/XML/Form/Raw/Text/ReadAll)
-// 均会先把 body 完整缓存，因此天然支持重试。
+// Retries require a replayable body. The provided JSON, XML, Form, Raw, Text, and ReadAll
+// bodies buffer their data during encoding so retries can replay it.
 func WithRetry(maxAttempts int, backoff BackoffFunc, retryOn func(*http.Response, error) bool) ClientOption {
 	return func(cli *Client) {
 		cli.retry = retryConfig{
@@ -103,7 +103,7 @@ func WithRetry(maxAttempts int, backoff BackoffFunc, retryOn func(*http.Response
 	}
 }
 
-// ExpBackoff 返回指数退避函数：base, 2*base, 4*base, ...
+// ExpBackoff returns an exponential backoff sequence: base, 2*base, 4*base, and so on.
 func ExpBackoff(base time.Duration) BackoffFunc {
 	return func(attempt int) time.Duration {
 		if attempt < 1 {
@@ -113,7 +113,7 @@ func ExpBackoff(base time.Duration) BackoffFunc {
 	}
 }
 
-// New 创建一个 Client。
+// New creates a Client.
 func New(opts ...ClientOption) *Client {
 	c := &Client{
 		httpClient:    &http.Client{},
@@ -123,18 +123,20 @@ func New(opts ...ClientOption) *Client {
 	for _, opt := range opts {
 		opt(c)
 	}
-	// 装配 transport + 中间件
+	// Assemble the transport and middleware chain.
 	c.httpClient.Transport = chain(c.transport, c.middlewares)
 	return c
 }
 
-// defaultErrorOnStatus 默认错误判定：4xx / 5xx。
-func defaultErrorOnStatus(code int) bool { return code >= 400 }
+// defaultErrorOnStatus selects 4xx and 5xx responses.
+func defaultErrorOnStatus(code int) bool {
+	return code >= 400
+}
 
-// defaultRetryOn 默认重试判定：网络错误，或 5xx，或 429。
+// defaultRetryOn selects network errors, 5xx responses, and status 429.
 func defaultRetryOn(resp *http.Response, err error) bool {
 	if err != nil {
-		// context 错误不重试
+		// Do not retry context errors.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return false
 		}
@@ -146,10 +148,10 @@ func defaultRetryOn(resp *http.Response, err error) bool {
 	return resp.StatusCode >= 500 || resp.StatusCode == http.StatusTooManyRequests
 }
 
-// Do 执行一次 HTTP 请求。
+// Do executes an HTTP request.
 //
-// target 可以是绝对 URL，也可以是相对路径 (此时会基于 WithBaseURL 解析)。
-// body 为 nil 表示无请求体；否则使用 Body 构造器 (JSON/Form/Raw 等)。
+// target may be an absolute URL or a relative path resolved against WithBaseURL.
+// A nil body sends no payload; otherwise use a Body constructor such as JSON or Form.
 func (c *Client) Do(ctx context.Context, method, target string, body Body, opts ...RequestOption) (*http.Response, error) {
 	if ctx == nil {
 		return nil, errors.New("nil Context")
@@ -163,13 +165,13 @@ func (c *Client) Do(ctx context.Context, method, target string, body Body, opts 
 		opt(cfg)
 	}
 
-	// 1. 解析 URL
+	// 1. Resolve the URL.
 	fullURL, err := c.resolveURL(target, cfg.query)
 	if err != nil {
 		return nil, err
 	}
 
-	// 2. 编码 body
+	// 2. Encode the body.
 	var bodyBytes []byte
 	var bodyContentType string
 	if body != nil {
@@ -179,7 +181,7 @@ func (c *Client) Do(ctx context.Context, method, target string, body Body, opts 
 		}
 	}
 
-	// 3. 合并 header (默认 < body 推断 < 用户显式)
+	// 3. Merge headers: defaults, inferred body headers, then explicit request headers.
 	header := make(http.Header, len(c.defaultHeader)+len(cfg.header)+1)
 	for k, vs := range c.defaultHeader {
 		header[k] = append([]string(nil), vs...)
@@ -191,18 +193,18 @@ func (c *Client) Do(ctx context.Context, method, target string, body Body, opts 
 		header[k] = append([]string(nil), vs...)
 	}
 
-	// 4. 执行 (含重试)
+	// 4. Execute the request, including retries.
 	resp, err := c.doWithRetry(ctx, method, fullURL, header, bodyBytes)
 	if err != nil {
 		return nil, err
 	}
 
-	// 5. 状态码错误化
+	// 5. Convert configured error statuses into errors.
 	if c.errorOnStatus != nil && c.errorOnStatus(resp.StatusCode) {
 		return resp, newHTTPError(method, fullURL, resp)
 	}
 
-	// 6. 解码
+	// 6. Decode the response.
 	if cfg.decode != nil {
 		if err := cfg.decode(resp); err != nil {
 			return resp, err
@@ -211,7 +213,7 @@ func (c *Client) Do(ctx context.Context, method, target string, body Body, opts 
 	return resp, nil
 }
 
-// resolveURL 合并 baseURL + target + query。
+// resolveURL combines the base URL, target, and query parameters.
 func (c *Client) resolveURL(target string, extraQuery url.Values) (string, error) {
 	var full string
 	switch {
@@ -245,7 +247,7 @@ func (c *Client) resolveURL(target string, extraQuery url.Values) (string, error
 	return u.String(), nil
 }
 
-// doWithRetry 在需要时重试。每次重试都会重建 *http.Request 以便重放 body。
+// doWithRetry rebuilds the request for each attempt so the body can be replayed.
 func (c *Client) doWithRetry(ctx context.Context, method, fullURL string, header http.Header, bodyBytes []byte) (*http.Response, error) {
 	maxAttempts := max(c.retry.MaxAttempts, 1)
 	retryOn := c.retry.RetryOn
@@ -264,13 +266,13 @@ func (c *Client) doWithRetry(ctx context.Context, method, fullURL string, header
 		if attempt == maxAttempts || !retryOn(lastResp, lastErr) {
 			break
 		}
-		// 失败的响应必须先排空 + 关闭，才能重用连接
+		// Drain and close failed responses so their connections can be reused.
 		if lastResp != nil {
 			_, _ = io.Copy(io.Discard, lastResp.Body)
 			_ = lastResp.Body.Close()
 			lastResp = nil
 		}
-		// 退避
+		// Wait for backoff.
 		if c.retry.Backoff != nil {
 			select {
 			case <-time.After(c.retry.Backoff(attempt)):
@@ -282,7 +284,7 @@ func (c *Client) doWithRetry(ctx context.Context, method, fullURL string, header
 	return lastResp, lastErr
 }
 
-// buildRequest 构造单次 *http.Request。
+// buildRequest constructs one HTTP request.
 func (c *Client) buildRequest(ctx context.Context, method, fullURL string, header http.Header, bodyBytes []byte) (*http.Request, error) {
 	var bodyReader io.Reader
 	if bodyBytes != nil {
@@ -294,7 +296,7 @@ func (c *Client) buildRequest(ctx context.Context, method, fullURL string, heade
 	}
 	req.Header = header.Clone()
 	if bodyBytes != nil {
-		// 提供 GetBody 让 stdlib 在需要时也能重放 (如 307/308 重定向)
+		// Provide GetBody so the standard library can replay requests, such as on 307/308 redirects.
 		req.ContentLength = int64(len(bodyBytes))
 		req.GetBody = func() (io.ReadCloser, error) {
 			return io.NopCloser(bytes.NewReader(bodyBytes)), nil
@@ -303,12 +305,12 @@ func (c *Client) buildRequest(ctx context.Context, method, fullURL string, heade
 	return req, nil
 }
 
-// newHTTPError 从响应构造 HTTPError，并消费 body (限长保存)。
+// newHTTPError builds an HTTPError and consumes the response body, retaining a bounded snapshot.
 func newHTTPError(method, fullURL string, resp *http.Response) *HTTPError {
 	defer resp.Body.Close()
 	limited := io.LimitReader(resp.Body, ErrorBodyLimit)
 	data, _ := io.ReadAll(limited)
-	// 排空剩余字节以便复用连接
+	// Drain remaining bytes to allow connection reuse.
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return &HTTPError{
 		Method:     method,
@@ -320,32 +322,32 @@ func newHTTPError(method, fullURL string, resp *http.Response) *HTTPError {
 	}
 }
 
-// Get 发送 GET 请求。
+// Get sends a GET request.
 func (c *Client) Get(ctx context.Context, target string, opts ...RequestOption) (*http.Response, error) {
 	return c.Do(ctx, http.MethodGet, target, nil, opts...)
 }
 
-// Head 发送 HEAD 请求。
+// Head sends a HEAD request.
 func (c *Client) Head(ctx context.Context, target string, opts ...RequestOption) (*http.Response, error) {
 	return c.Do(ctx, http.MethodHead, target, nil, opts...)
 }
 
-// Post 发送 POST 请求。
+// Post sends a POST request.
 func (c *Client) Post(ctx context.Context, target string, body Body, opts ...RequestOption) (*http.Response, error) {
 	return c.Do(ctx, http.MethodPost, target, body, opts...)
 }
 
-// Put 发送 PUT 请求。
+// Put sends a PUT request.
 func (c *Client) Put(ctx context.Context, target string, body Body, opts ...RequestOption) (*http.Response, error) {
 	return c.Do(ctx, http.MethodPut, target, body, opts...)
 }
 
-// Patch 发送 PATCH 请求。
+// Patch sends a PATCH request.
 func (c *Client) Patch(ctx context.Context, target string, body Body, opts ...RequestOption) (*http.Response, error) {
 	return c.Do(ctx, http.MethodPatch, target, body, opts...)
 }
 
-// Delete 发送 DELETE 请求。
+// Delete sends a DELETE request.
 func (c *Client) Delete(ctx context.Context, target string, opts ...RequestOption) (*http.Response, error) {
 	return c.Do(ctx, http.MethodDelete, target, nil, opts...)
 }

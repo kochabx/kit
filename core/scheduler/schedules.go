@@ -9,7 +9,9 @@ import (
 // Schedules updates recurrence without changing its immutable queue.
 type Schedules struct{ scheduler *clientState }
 
-func (s *clientState) Schedules() Schedules { return Schedules{scheduler: s} }
+func (s *clientState) Schedules() Schedules {
+	return Schedules{scheduler: s}
+}
 
 func (c Schedules) Get(ctx context.Context, id string) (*Schedule, error) {
 	if c.scheduler == nil || id == "" {

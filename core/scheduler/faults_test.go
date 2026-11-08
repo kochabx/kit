@@ -30,6 +30,7 @@ func (h *outageHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
 		return next(ctx, cmd)
 	}
 }
+
 func (h *outageHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
 	return func(ctx context.Context, cmds []redis.Cmder) error {
 		if h.offline.Load() {
@@ -148,7 +149,17 @@ func TestFailedCompletionIsRecoveredAndOldTokenIsFenced(t *testing.T) {
 		t.Fatal("failed completion was not recoverable")
 	}
 	d := <-recovered
-	replacement, err := q.store.ClaimJob(ctx, d, store.ClaimCommand{Token: "replacement", Worker: "new-worker", Duration: time.Minute, ExpiredRetention: time.Hour, CancelledRetention: time.Hour})
+	replacement, err := q.store.ClaimJob(
+		ctx,
+		d,
+		store.ClaimCommand{
+			Token:              "replacement",
+			Worker:             "new-worker",
+			Duration:           time.Minute,
+			ExpiredRetention:   time.Hour,
+			CancelledRetention: time.Hour,
+		},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +185,15 @@ func TestFailedCompletionIsRecoveredAndOldTokenIsFenced(t *testing.T) {
 
 func TestInvalidArgumentsAreClassifiable(t *testing.T) {
 	client := testRedis(t)
-	for _, config := range []WorkerConfig{{Namespace: "bad namespace"}, {Queues: []QueueConfig{{Name: "bad queue"}}}, {Execution: ExecutionConfig{Queues: []string{"missing"}}}, {Execution: ExecutionConfig{LeaseDuration: 3 * time.Second, LeaseRenewInterval: 2 * time.Second}}} {
+	for _, config := range []WorkerConfig{
+		{Namespace: "bad namespace"},
+		{Queues: []QueueConfig{{Name: "bad queue"}}},
+		{Execution: ExecutionConfig{Queues: []string{"missing"}}},
+		{Execution: ExecutionConfig{
+			LeaseDuration:      3 * time.Second,
+			LeaseRenewInterval: 2 * time.Second,
+		}},
+	} {
 		if _, err := newWorkerRuntime(client, config); !errors.Is(err, ErrInvalidArgument) {
 			t.Fatalf("config %+v: %v", config, err)
 		}
@@ -212,12 +231,21 @@ func TestConnectionRefusalThenReconnect(t *testing.T) {
 	refused := listener.Addr().String()
 	listener.Close()
 	var restored atomic.Bool
-	client := redis.NewClient(&redis.Options{ContextTimeoutEnabled: true, Addr: base.Options().Addr, Password: base.Options().Password, MaxRetries: -1, DialTimeout: 100 * time.Millisecond, Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if !restored.Load() {
-			addr = refused
-		}
-		return (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(ctx, network, addr)
-	}})
+	client := redis.NewClient(&redis.Options{
+		ContextTimeoutEnabled: true,
+		Addr: base.Options().
+			Addr,
+		Password: base.Options().
+			Password,
+		MaxRetries:  -1,
+		DialTimeout: 100 * time.Millisecond,
+		Dialer: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if !restored.Load() {
+				addr = refused
+			}
+			return (&net.Dialer{Timeout: 100 * time.Millisecond}).DialContext(ctx, network, addr)
+		},
+	})
 	t.Cleanup(func() { _ = client.Close() })
 	namespace := fmt.Sprintf("network-reconnect-%d", time.Now().UnixNano())
 	t.Cleanup(func() { cleanup(t, base, namespace) })

@@ -19,7 +19,11 @@ type LeaseResult struct {
 	Err error
 }
 
-func encodePolicy(p ExecutionPolicy) string { b, _ := json.Marshal(p); return string(b) }
+func encodePolicy(p ExecutionPolicy) string {
+	b, _ := json.Marshal(p)
+	return string(b)
+}
+
 func decodePolicy(raw string) ExecutionPolicy {
 	var p ExecutionPolicy
 	_ = json.Unmarshal([]byte(raw), &p)
@@ -34,7 +38,23 @@ type ClaimCommand struct {
 func (s *Queue) ClaimJob(ctx context.Context, d Delivery, command ClaimCommand) (*Job, error) {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	result, err := Claim.Run(ctx, s.Client, []string{s.Keys.Job(d.JobID), s.Keys.Running(), s.Keys.Ready(), s.Keys.Dead(), s.Keys.History(d.JobID)}, command.Token, command.Worker, CeilDurationMillis(command.Duration), CeilDurationMillis(command.ExpiredRetention), s.Keys.Name, CeilDurationMillis(command.CancelledRetention), s.Keys.Group(), d.MessageID, CeilDurationMillis(s.DeadRetention), s.HistoryLimit, CeilDurationMillis(s.HistoryTTL)).Result()
+	result, err := Claim.Run(
+		ctx,
+		s.Client,
+		[]string{s.Keys.Job(d.JobID), s.Keys.Running(), s.Keys.Ready(), s.Keys.Dead(), s.Keys.History(d.JobID)},
+		command.Token,
+		command.Worker,
+		CeilDurationMillis(command.Duration),
+		CeilDurationMillis(command.ExpiredRetention),
+		s.Keys.Name,
+		CeilDurationMillis(command.CancelledRetention),
+		s.Keys.Group(),
+		d.MessageID,
+		CeilDurationMillis(s.DeadRetention),
+		s.HistoryLimit,
+		CeilDurationMillis(s.HistoryTTL),
+	).
+		Result()
 	if err != nil {
 		return nil, err
 	}
@@ -57,19 +77,52 @@ func (s *Queue) ClaimJob(ctx context.Context, d Delivery, command ClaimCommand) 
 		values[i] = value
 	}
 	return &Job{
-		Version: values[14], Policy: decodePolicy(values[15]), RecoveryCount: parseInt(values[16]), FailureCount: parseInt(values[17]),
-		Queue: values[13], ID: d.JobID, TaskName: values[0], Payload: []byte(values[1]), State: JobState(values[2]),
-		Attempt: parseInt(values[3]), MaxAttempts: parseInt(values[4]),
-		RunAt: ParseTimeMillis(values[5]), CreatedAt: ParseTimeMillis(values[6]), StartedAt: ParseTimeMillis(values[7]),
-		FinishedAt: ParseTimeMillis(values[8]), ExpiresAt: ParseTimeMillis(values[9]),
-		UniqueKey: values[10], Fingerprint: values[11], LastError: values[12],
+		Version:       values[14],
+		Policy:        decodePolicy(values[15]),
+		RecoveryCount: parseInt(values[16]),
+		FailureCount:  parseInt(values[17]),
+		Queue:         values[13],
+		ID:            d.JobID,
+		TaskName:      values[0],
+		Payload:       []byte(values[1]),
+		State:         JobState(values[2]),
+		Attempt:       parseInt(values[3]),
+		MaxAttempts:   parseInt(values[4]),
+		RunAt:         ParseTimeMillis(values[5]),
+		CreatedAt:     ParseTimeMillis(values[6]),
+		StartedAt:     ParseTimeMillis(values[7]),
+		FinishedAt:    ParseTimeMillis(values[8]),
+		ExpiresAt:     ParseTimeMillis(values[9]),
+		UniqueKey:     values[10],
+		Fingerprint:   values[11],
+		LastError:     values[12],
 	}, nil
 }
 
 func (s *Queue) CompleteJob(ctx context.Context, d Delivery, token string, succeededRetention, cancelledRetention time.Duration) error {
 	ctx, cancelOperation := s.commandContext(ctx)
 	defer cancelOperation()
-	result, err := Complete.Run(ctx, s.Client, []string{s.Keys.Job(d.JobID), s.Keys.Ready(), s.Keys.Running(), s.Keys.Receipt(d.JobID, token), s.Keys.History(d.JobID)}, token, s.Keys.Group(), d.MessageID, CeilDurationMillis(succeededRetention), CeilDurationMillis(cancelledRetention), CeilDurationMillis(s.CompletionRetention), fmt.Sprintf("complete:%d:%d", succeededRetention, cancelledRetention), s.HistoryLimit, CeilDurationMillis(s.HistoryTTL)).Int64()
+	result, err := Complete.Run(
+		ctx,
+		s.Client,
+		[]string{
+			s.Keys.Job(d.JobID),
+			s.Keys.Ready(),
+			s.Keys.Running(),
+			s.Keys.Receipt(d.JobID, token),
+			s.Keys.History(d.JobID),
+		},
+		token,
+		s.Keys.Group(),
+		d.MessageID,
+		CeilDurationMillis(succeededRetention),
+		CeilDurationMillis(cancelledRetention),
+		CeilDurationMillis(s.CompletionRetention),
+		fmt.Sprintf("complete:%d:%d", succeededRetention, cancelledRetention),
+		s.HistoryLimit,
+		CeilDurationMillis(s.HistoryTTL),
+	).
+		Int64()
 	if err != nil {
 		return err
 	}
@@ -90,7 +143,32 @@ func (s *Queue) FailJob(ctx context.Context, d Delivery, token string, command F
 	if command.Retry {
 		retryFlag = 1
 	}
-	result, err := Fail.Run(ctx, s.Client, []string{s.Keys.Job(d.JobID), s.Keys.Ready(), s.Keys.Scheduled(), s.Keys.Dead(), s.Keys.Running(), s.Keys.Receipt(d.JobID, token), s.Keys.History(d.JobID)}, token, command.Message, CeilDurationMillis(command.Delay), retryFlag, s.Keys.Group(), d.MessageID, CeilDurationMillis(command.DeadRetention), CeilDurationMillis(command.CancelledRetention), CeilDurationMillis(s.CompletionRetention), failureSignature(command), s.HistoryLimit, CeilDurationMillis(s.HistoryTTL)).Int64()
+	result, err := Fail.Run(
+		ctx,
+		s.Client,
+		[]string{
+			s.Keys.Job(d.JobID),
+			s.Keys.Ready(),
+			s.Keys.Scheduled(),
+			s.Keys.Dead(),
+			s.Keys.Running(),
+			s.Keys.Receipt(d.JobID, token),
+			s.Keys.History(d.JobID),
+		},
+		token,
+		command.Message,
+		CeilDurationMillis(command.Delay),
+		retryFlag,
+		s.Keys.Group(),
+		d.MessageID,
+		CeilDurationMillis(command.DeadRetention),
+		CeilDurationMillis(command.CancelledRetention),
+		CeilDurationMillis(s.CompletionRetention),
+		failureSignature(command),
+		s.HistoryLimit,
+		CeilDurationMillis(s.HistoryTTL),
+	).
+		Int64()
 	if err != nil {
 		return err
 	}

@@ -7,15 +7,18 @@ import (
 
 func decodeJob(id string, m map[string]string) *Job {
 	j := &Job{
-		Version: m["version"], Policy: decodePolicy(m["policy"]), RecoveryCount: parseInt(m["recovery_count"]), FailureCount: parseInt(m["failure_count"]),
-		Queue:       m["queue"],
-		ID:          id,
-		TaskName:    m["task"],
-		State:       JobState(m["state"]),
-		Payload:     []byte(m["payload"]),
-		LastError:   m["last_error"],
-		UniqueKey:   m["unique_key"],
-		Fingerprint: m["fingerprint"],
+		Version:       m["version"],
+		Policy:        decodePolicy(m["policy"]),
+		RecoveryCount: parseInt(m["recovery_count"]),
+		FailureCount:  parseInt(m["failure_count"]),
+		Queue:         m["queue"],
+		ID:            id,
+		TaskName:      m["task"],
+		State:         JobState(m["state"]),
+		Payload:       []byte(m["payload"]),
+		LastError:     m["last_error"],
+		UniqueKey:     m["unique_key"],
+		Fingerprint:   m["fingerprint"],
 	}
 	j.Attempt = parseInt(m["attempt"])
 	j.MaxAttempts = parseInt(m["max_attempts"])

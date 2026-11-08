@@ -94,3 +94,12 @@ Client 实现以下应用组件方法：
 - `Stop(ctx)`：关闭客户端
 
 由应用统一管理 Client 时，不要再对同一实例执行 `defer client.Close()`。
+
+## 验证
+
+```bash
+go test -race ./store/etcd -count=1
+KIT_ETCD_INTEGRATION=1 ETCD_ENDPOINT=localhost:2379 go test -race ./store/etcd -count=1
+```
+
+外部服务测试默认跳过。租约和注册对象应在 Client 关闭前释放；退出时清理使用独立且有超时的 Context，避免已取消的请求 Context 使清理立即失败。

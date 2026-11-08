@@ -9,10 +9,14 @@ type Mask interface {
 
 type replaceMask []byte
 
-func (m replaceMask) Append(dst, _ []byte) []byte { return append(dst, m...) }
+func (m replaceMask) Append(dst, _ []byte) []byte {
+	return append(dst, m...)
+}
 
 // Replace replaces the complete value.
-func Replace(replacement string) Mask { return replaceMask(replacement) }
+func Replace(replacement string) Mask {
+	return replaceMask(replacement)
+}
 
 type keepEdgesMask struct {
 	prefix int
@@ -23,7 +27,9 @@ type keepEdgesMask struct {
 type emailMask struct{}
 
 // Email preserves the email domain and the edges of the local part.
-func Email() Mask { return emailMask{} }
+func Email() Mask {
+	return emailMask{}
+}
 
 func (emailMask) Append(dst, value []byte) []byte {
 	local, domain, found := bytes.CutLast(value, []byte("@"))

@@ -6,7 +6,7 @@ import (
 	"github.com/kochabx/kit/log/redact"
 )
 
-// Option Logger 选项函数
+// Option configures a Logger.
 type Option func(*loggerOptions)
 
 type loggerOptions struct {
@@ -16,22 +16,22 @@ type loggerOptions struct {
 	redactor   *redact.Redactor
 }
 
-// WithLevel 设置日志级别
+// WithLevel sets the logging level.
 func WithLevel(level zerolog.Level) Option {
 	return func(o *loggerOptions) {
 		o.level = new(level)
 	}
 }
 
-// WithCaller 设置调用栈信息
+// WithCaller enables caller information.
 func WithCaller() Option {
 	return func(o *loggerOptions) {
 		o.caller = true
 	}
 }
 
-// WithCallerSkip 在默认帧数基础上额外跳过的帧数
-// skip=1 表示在 logger 之外额外封装了一层函数，以此类推
+// WithCallerSkip adds skip frames to the default caller depth.
+// For example, skip=1 skips one additional wrapper around the logger.
 func WithCallerSkip(skip int) Option {
 	return func(o *loggerOptions) {
 		o.caller = true
@@ -39,7 +39,7 @@ func WithCallerSkip(skip int) Option {
 	}
 }
 
-// WithRedactor 设置日志脱敏器。
+// WithRedactor sets the log redactor.
 func WithRedactor(redactor *redact.Redactor) Option {
 	return func(o *loggerOptions) {
 		o.redactor = redactor

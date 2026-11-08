@@ -63,6 +63,7 @@ func NewKeySet(current KeyPair, historical ...KeyPair) (*KeySet, error) {
 	}
 	return set, nil
 }
+
 func validateKeyPair(key KeyPair) error {
 	if key.ID == "" || key.Method == nil || key.SignKey == nil || key.VerifyKey == nil {
 		return ErrConfigInvalid
@@ -103,6 +104,7 @@ func validateKeyPair(key KeyPair) error {
 	}
 	return nil
 }
+
 func (s *KeySet) rotate(key KeyPair) error {
 	if err := validateKeyPair(key); err != nil {
 		return err
@@ -111,12 +113,19 @@ func (s *KeySet) rotate(key KeyPair) error {
 	s.verify[key.ID] = VerificationKey{key.Method, key.VerifyKey}
 	return nil
 }
-func (s *KeySet) Rotate(key KeyPair) error { s.mu.Lock(); defer s.mu.Unlock(); return s.rotate(key) }
+
+func (s *KeySet) Rotate(key KeyPair) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rotate(key)
+}
+
 func (s *KeySet) SigningKey(context.Context) (SigningKey, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return SigningKey{s.current.ID, s.current.Method, s.current.SignKey}, nil
 }
+
 func (s *KeySet) VerificationKey(_ context.Context, kid, alg string) (VerificationKey, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -133,9 +142,11 @@ func NewHMACKeyProvider(id string, method *gojwt.SigningMethodHMAC, secret []byt
 	}
 	return &HMACKeyProvider{id: id, method: method, secret: append([]byte(nil), secret...)}, nil
 }
+
 func (p *HMACKeyProvider) SigningKey(context.Context) (SigningKey, error) {
 	return SigningKey{p.id, p.method, p.secret}, nil
 }
+
 func (p *HMACKeyProvider) VerificationKey(_ context.Context, kid, alg string) (VerificationKey, error) {
 	if kid != p.id || alg != p.method.Alg() {
 		return VerificationKey{}, ErrInvalidSignature
