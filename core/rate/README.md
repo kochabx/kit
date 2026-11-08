@@ -1,91 +1,48 @@
 # rate
 
-`rate` 提供基于 Redis 的分布式限流器。限流判定及结果时间均在 Redis
-服务端原子计算，不受应用节点时钟偏差影响。
+基于 Redis 的分布式限流器。每次判定通过 Lua 原子执行，时间来自 Redis 服务端。限流器可以并发共享，借用 `redis.UniversalClient`，不负责关闭客户端。
 
 ## 算法
 
-| 算法 | Redis 数据结构 | 特点 |
+| 算法 | 数据结构 | 适用特点 |
 |---|---|---|
-| 令牌桶 | HASH | 按固定速率补充令牌，支持突发流量 |
-| 固定窗口 | HASH | 开销较低，按自然时间边界划分窗口 |
-| 滑动窗口 | ZSET | 精确记录带权事件，不存在固定窗口的边界突发 |
+| TokenBucket | HASH | 固定补充速率，允许突发流量 |
+| FixedWindow | HASH | 按自然时间边界计数，状态较小 |
+| SlidingWindow | ZSET | 精确保存带权事件，避免固定窗口边界突发 |
 
-所有算法均实现以下接口：
+三种算法都实现 `Limiter.AllowN(ctx, key, n)`，具体类型另提供申请一个配额的 `Allow(ctx, key)`。
 
-```go
-type Limiter interface {
-    AllowN(ctx context.Context, key string, n int64) (Result, error)
-}
-```
-
-`n` 表示本次申请的配额数量，必须大于零。构造函数负责校验限流参数。
-Redis 错误会直接返回，由调用方决定故障时放行还是拒绝。
-
-三个具体限流器还提供 `Allow(ctx, key)` 便捷方法，默认申请一个配额；
-`Limiter` 接口仅保留不可再简化的核心能力 `AllowN`。
-
-## 使用方式
-
-### 令牌桶
+## 使用
 
 ```go
-limiter, err := rate.NewTokenBucket(
-    redisClient,
-    10,  // 每秒补充的令牌数
-    100, // 最大突发容量
+limiter, err := rate.NewTokenBucket(redisClient, 10, 100,
     rate.WithKeyPrefix("orders"),
 )
 if err != nil {
     return err
 }
-
 result, err := limiter.Allow(ctx, "user:123")
 if err != nil {
     return err
 }
 if !result.Allowed {
-    return fmt.Errorf("请求被限流，请在 %s 后重试", result.RetryAfter)
+    return fmt.Errorf("retry after %s", result.RetryAfter)
 }
 ```
 
-### 固定窗口
+令牌补充速率为每秒令牌数，可以是小数；burst 是最大容量。参数必须有限、为正，完整补充周期及返回的等待时间必须能由 `time.Duration` 表示。
+
+固定窗口和滑动窗口使用 `time.Duration`：
 
 ```go
-// 60 秒内最多允许 60 个配额
-limiter, err := rate.NewFixedWindow(redisClient, 60, 60)
+fixed, err := rate.NewFixedWindow(redisClient, 60, time.Minute)
+sliding, err := rate.NewSlidingWindow(redisClient, 100, 10*time.Second)
+precise, err := rate.NewSlidingWindow(redisClient, 5, 250*time.Millisecond)
 ```
 
-### 滑动窗口
+窗口最小为一毫秒，必须是整毫秒，不会静默截断更小单位。配额上限为 `2^53-1`，以保持 Redis Lua 数值精度。Context 必须非 nil，`n` 必须大于零且不超过该限流器容量。
 
-```go
-// 10 秒内最多允许 100 个配额
-limiter, err := rate.NewSlidingWindow(redisClient, 100, 10)
-```
-
-## Redis key
-
-默认 Redis key 前缀为 `rate`，可通过 `WithKeyPrefix` 修改：
-
-```go
-limiter, err := rate.NewFixedWindow(
-    redisClient,
-    60,
-    60,
-    rate.WithKeyPrefix("orders"),
-)
-```
-
-Redis key 包含前缀、算法、限流参数和业务 key，例如：
-
-```text
-orders:fixed-window:60:60:user:123
-```
-
-不同算法和限流参数不会共享状态。每个 Lua 脚本只操作一个 Redis key，
-可用于 Redis Cluster。
-
-## 返回结果
+## 返回结果与错误
 
 ```go
 type Result struct {
@@ -97,26 +54,62 @@ type Result struct {
 }
 ```
 
-- `Allowed`：是否允许本次请求。
-- `Limit`：配额上限。
-- `Remaining`：判定完成后的剩余配额；拒绝的请求不会消耗配额。
-- `RetryAfter`：再次申请相同数量配额前的最短等待时间；请求被允许时为零。
-- `ResetAt`：当前已消耗配额预计完全恢复的时间。
+`Remaining` 是判定后的剩余配额。拒绝不会扣减配额；允许时 `RetryAfter` 为零，拒绝时为正。`ResetAt` 是预计恢复全部配额的服务端时间。
 
-## 测试
+输入和协议错误可通过 `errors.Is` 区分：
 
-参数校验和错误包装用例不需要 Redis；完整测试包含真实 Redis 场景，并且不会自动跳过。当前 `rate_test.go` 使用 `localhost:6379` 和本地测试密码 `12345678`，没有读取 `RATE_REDIS_ADDR` / `RATE_REDIS_PASSWORD` 环境变量。
+- `ErrNilClient`：nil 或 typed nil Redis 客户端。
+- `ErrNilContext`：nil Context。
+- `ErrInvalidConfig`：非法速率、容量或窗口。
+- `ErrInvalidOption`：nil Option 或归一化后为空的前缀。
+- `ErrInvalidKey`：空白业务 key。
+- `ErrInvalidN` / `ErrNTooLarge`：非法申请量。
+- `ErrInvalidResult`：Redis 返回值类型、长度、范围或判定状态不符合协议。
+
+Redis 执行错误保留原始错误链。调用方决定故障时放行还是拒绝，不会由模块自动降级。
+
+## Key 与共享状态
+
+```go
+limiter, err := rate.NewFixedWindow(redisClient, 60, time.Minute,
+    rate.WithKeyPrefix("orders"),
+)
+```
+
+前缀默认 `rate`，会移除首尾空白和冒号；业务 key 保留原始内容，仅拒绝空白值。窗口参数在内部使用毫秒，生成的 key 类似：
+
+```text
+orders:fixed-window:60:60000:user:123
+```
+
+前缀、算法或限流参数不同都会隔离状态。每次脚本只操作一个 key，可用于 Redis Cluster。不要由其他程序修改内部数据结构。
+
+限流判定不提供业务幂等：请求结果丢失后重试可能再次消耗配额。多个进程可共享限流状态，但不应由多个 Redis 实例分别维护同一业务配额。
+
+## 滑动窗口成本
+
+精确滑动窗口每次读取并扫描窗口内的事件，成本随事件条数增加。每个允许的请求保存一条带权事件，不会按申请量 n 创建 n 条记录。需要更低且稳定的请求成本时，可根据业务容忍的边界突发选择固定窗口或令牌桶。
+
+`workload_benchmark_test.go` 分别测量 32、1024、8192 条事件时的请求成本；基准使用固定占用量，不会不断扩大窗口。
+
+## 组织与验证
+
+公共 API 和校验在 `limiter.go`，选项和错误分别在 `options.go`、`errors.go`，脚本结果由 `result.go` 统一解码。各算法的 Go/Lua 文件继续成对维护。
+
+单元测试不访问网络：
 
 ```bash
 go test -race ./core/rate -count=1
-# 无 Redis 时只运行不依赖服务的参数与错误用例：
-go test ./core/rate -run 'Test(ConstructorsValidateArguments|BuildRedisKey|AllowValidatesInputBeforeRedis|RedisErrorIsWrapped)$'
 ```
 
-应在测试专用 Redis 上执行完整测试；需要不同连接地址时先调整测试连接配置。
+集成测试位于 `integration_test.go`，未设置地址或指定 `-short` 时跳过。设置地址后，连接失败会使测试失败；认证通过环境变量提供：
 
-## 客户端与时间单位
+```bash
+RATE_REDIS_ADDR=localhost:6379 RATE_REDIS_PASSWORD=secret \
+go test -race ./core/rate -count=3
 
-限流器借用 `redis.UniversalClient`，不负责关闭它。与 Scheduler 不同，限流模块不要求 Redis 8.10 专用命令。固定窗口和滑动窗口构造参数中的窗口为整数秒；令牌桶速率按每秒计算。
+RATE_REDIS_ADDR=localhost:6379 RATE_REDIS_PASSWORD=secret \
+go test ./core/rate -run '^$' -bench '^BenchmarkSlidingWindowEvents$' -benchmem -benchtime=100ms
+```
 
-如果请求失败后由调用方重试，相同业务操作可能再次消耗配额；限流结果不承担业务幂等职责。
+测试和基准使用随机前缀，只清理各自的 key，不执行 FLUSHDB/FLUSHALL。测试覆盖毫秒窗口、容量边界、令牌补充、并发扣减、Context 取消和 Key 隔离。

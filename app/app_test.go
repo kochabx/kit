@@ -82,7 +82,7 @@ func TestNewValidation(t *testing.T) {
 		options []Option
 	}{
 		{"nil option", []Option{nil}},
-		{"nil context", []Option{WithContext(nil)}},
+		{"nil context", []Option{WithContext(context.Background())}},
 		{"timeout", []Option{WithShutdownTimeout(0)}},
 		{"nil container", []Option{WithContainer(nil)}},
 		{"nil server", []Option{WithServer(nil)}},

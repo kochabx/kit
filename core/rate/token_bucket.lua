@@ -1,9 +1,9 @@
 -- KEYS[1]: bucket key
 -- ARGV: rate (tokens per second), burst, n
 -- Returns: allowed, limit, remaining, retry_after_ms, reset_at_ms
-local rate = tonumber(ARGV[1])
-local burst = tonumber(ARGV[2])
-local n = tonumber(ARGV[3])
+local rate = assert(tonumber(ARGV[1]), 'rate: invalid rate')
+local burst = assert(tonumber(ARGV[2]), 'rate: invalid burst')
+local n = assert(tonumber(ARGV[3]), 'rate: invalid n')
 
 local redis_time = redis.call('TIME')
 local now_ms = redis_time[1] * 1000 + math.floor(redis_time[2] / 1000)
@@ -26,6 +26,7 @@ local full_after_ms = math.ceil((max_balance - balance) * 1000 / rate)
 local ttl_ms = math.max(1, full_after_ms + 1000)
 redis.call('PEXPIRE', KEYS[1], ttl_ms)
 
+---@type number
 local retry_after_ms = 0
 if allowed == 0 then
   if n > burst then

@@ -3,7 +3,6 @@ package rate
 import (
 	"context"
 	_ "embed"
-	"errors"
 	"fmt"
 	"time"
 
@@ -18,37 +17,38 @@ var (
 
 // FixedWindow is a distributed limiter aligned to fixed time boundaries.
 type FixedWindow struct {
-	client    redis.UniversalClient
-	limit     int64
-	window    int64 // Window length in seconds.
-	keyPrefix string
+	client       redis.UniversalClient
+	limit        int64
+	windowMillis int64
+	keyPrefix    string
 }
 
 var _ Limiter = (*FixedWindow)(nil)
 
 // NewFixedWindow creates a limiter aligned to fixed time boundaries.
-func NewFixedWindow(client redis.UniversalClient, limit, window int64, opts ...Option) (*FixedWindow, error) {
-	if client == nil {
-		return nil, ErrNilClient
+// window must be a positive whole number of milliseconds.
+func NewFixedWindow(
+	client redis.UniversalClient,
+	limit int64,
+	window time.Duration,
+	opts ...Option,
+) (*FixedWindow, error) {
+	if err := validateClient(client); err != nil {
+		return nil, err
 	}
-	if limit <= 0 {
-		return nil, errors.New("rate: limit must be positive")
+	windowMillis, err := validateWindow(limit, window)
+	if err != nil {
+		return nil, err
 	}
-	if limit > maxExactLuaInteger {
-		return nil, errors.New("rate: limit exceeds Lua integer precision")
+	settings, err := applyOptions(opts)
+	if err != nil {
+		return nil, err
 	}
-	if window <= 0 {
-		return nil, errors.New("rate: window must be positive")
-	}
-	if window > maxExactLuaInteger/1000 {
-		return nil, errors.New("rate: window is too large")
-	}
-	settings := applyOptions(opts)
 	return &FixedWindow{
-		client:    client,
-		limit:     limit,
-		window:    window,
-		keyPrefix: fmt.Sprintf("%s:fixed-window:%d:%d:", settings.keyPrefix, limit, window),
+		client:       client,
+		limit:        limit,
+		windowMillis: windowMillis,
+		keyPrefix:    fmt.Sprintf("%s:fixed-window:%d:%d:", settings.keyPrefix, limit, windowMillis),
 	}, nil
 }
 
@@ -59,28 +59,19 @@ func (l *FixedWindow) Allow(ctx context.Context, key string) (Result, error) {
 
 // AllowN requests n quota units.
 func (l *FixedWindow) AllowN(ctx context.Context, key string, n int64) (Result, error) {
-	if err := validateN(n, l.limit); err != nil {
-		return Result{}, err
-	}
-	redisKey, err := buildRedisKey(l.keyPrefix, key)
+	redisKey, err := validateRequest(ctx, l.keyPrefix, key, n, l.limit)
 	if err != nil {
 		return Result{}, err
 	}
-	raw, err := fixedWindowLuaScript.Run(
-		ctx, l.client, []string{redisKey},
-		l.window, l.limit, n,
-	).Int64Slice()
-	if err != nil {
-		return Result{}, fmt.Errorf("rate: fixed window script: %w", err)
-	}
-	result := Result{
-		Allowed:   raw[0] == 1,
-		Limit:     raw[1],
-		Remaining: raw[2],
-		ResetAt:   time.UnixMilli(raw[4]),
-	}
-	if !result.Allowed {
-		result.RetryAfter = time.Duration(raw[3]) * time.Millisecond
-	}
-	return result, nil
+	return runScript(
+		ctx,
+		l.client,
+		fixedWindowLuaScript,
+		"fixed window",
+		redisKey,
+		l.limit,
+		l.windowMillis,
+		l.limit,
+		n,
+	)
 }
