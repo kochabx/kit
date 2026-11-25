@@ -3,7 +3,8 @@ package cx
 import (
 	"context"
 	"fmt"
-	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 type supervisedComponent struct {
@@ -12,57 +13,50 @@ type supervisedComponent struct {
 }
 
 type supervisor struct {
-	ctx    context.Context
 	cancel context.CancelFunc
 	done   chan struct{}
-	once   sync.Once
 	err    error
 }
 
 func newSupervisor(parent context.Context, components []supervisedComponent) *supervisor {
 	ctx, cancel := context.WithCancel(parent)
 	s := &supervisor{
-		ctx:    ctx,
 		cancel: cancel,
 		done:   make(chan struct{}),
 	}
 
+	g, gCtx := errgroup.WithContext(ctx)
 	if len(components) == 0 {
-		go func() {
-			<-ctx.Done()
-			s.complete(ctx.Err())
-		}()
-		return s
-	}
-	for _, component := range components {
-		go s.watch(component)
-	}
-	return s
-}
-
-func (s *supervisor) watch(component supervisedComponent) {
-	select {
-	case <-component.source.Done():
-		if s.ctx.Err() != nil {
-			s.complete(s.ctx.Err())
-			return
+		g.Go(func() error {
+			<-gCtx.Done()
+			return nil
+		})
+	} else {
+		for _, comp := range components {
+			g.Go(func() error {
+				select {
+				case <-comp.source.Done():
+					if ctx.Err() != nil {
+						return nil
+					}
+					err := comp.source.Err()
+					if err == nil {
+						err = ErrComponentExited
+					}
+					return fmt.Errorf("component %s: %w", comp.name, err)
+				case <-gCtx.Done():
+					return nil
+				}
+			})
 		}
-		err := component.source.Err()
-		if err == nil {
-			err = ErrComponentExited
-		}
-		s.complete(fmt.Errorf("component %s: %w", component.name, err))
-	case <-s.ctx.Done():
-		s.complete(s.ctx.Err())
 	}
-}
 
-func (s *supervisor) complete(err error) {
-	s.once.Do(func() {
-		s.err = err
+	go func() {
+		defer cancel()
+		s.err = g.Wait()
 		close(s.done)
-		s.cancel()
-	})
+	}()
+	return s
 }
 
 func (c *Container) supervisedComponentsLocked() []supervisedComponent {
@@ -75,7 +69,7 @@ func (c *Container) supervisedComponentsLocked() []supervisedComponent {
 	return components
 }
 
-// Wait waits for the shared supervisor result or caller cancellation.
+// Wait blocks until a supervised component exits, parent context cancels, or Stop runs.
 func (c *Container) Wait(ctx context.Context) error {
 	if ctx == nil {
 		return ErrNilContext

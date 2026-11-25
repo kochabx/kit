@@ -3,49 +3,38 @@ package cx
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync"
 	"time"
 )
 
-// State identifies the current Container lifecycle phase.
-type State uint8
-
-const (
-	StateNew State = iota
-	StateStarting
-	StateRunning
-	StateStopping
-	StateStopped
-	StateFailed
-	StateStopFailed
-)
-
-func (s State) String() string {
-	names := [...]string{"new", "starting", "running", "stopping", "stopped", "failed", "stop_failed"}
-	if int(s) >= len(names) {
-		return "unknown"
-	}
-	return names[s]
+type buildFlight struct {
+	done chan struct{}
+	err  error
 }
 
 type provider struct {
 	name         string
+	typ          reflect.Type
 	constructor  func(*Container) (any, error)
 	value        any
 	built        bool
 	owned        bool
+	flight       *buildFlight
 	declaredDeps []string
 	deps         []string
 }
 
-type Container struct {
-	mu         sync.RWMutex
-	providers  map[string]*provider
-	keys       []string
-	buildOrder []string
-	buildStack []string
-	state      State
+type containerCore struct {
+	mu           sync.RWMutex
+	providers    map[string]*provider
+	keys         []string
+	buildOrder   []string
+	state        State
+	buildGen     uint64
+	buildOpen    bool
+	activeBuilds sync.WaitGroup
 
 	shutdownTimeout      time.Duration
 	componentStopTimeout time.Duration
@@ -61,16 +50,111 @@ type Container struct {
 	onStopDone     []bool
 	supervisor     *supervisor
 	healthFlights  map[string]*healthFlight
+	waiting        map[string]map[string]int
 }
 
+// Container manages typed component registration, dependency ordering, lifecycle
+// hooks, rollback, health probes, and supervised runners.
+type Container struct {
+	*containerCore
+	stack []string // immutable per-build call path; never mutates shared core state
+}
+
+// Option configures a Container.
+type Option func(*Container)
+
+// WithShutdownTimeout bounds the complete shutdown sequence.
+func WithShutdownTimeout(timeout time.Duration) Option {
+	return func(c *Container) {
+		if timeout > 0 {
+			c.shutdownTimeout = timeout
+		}
+	}
+}
+
+// WithComponentStopTimeout bounds each individual component Stop call.
+func WithComponentStopTimeout(timeout time.Duration) Option {
+	return func(c *Container) {
+		if timeout > 0 {
+			c.componentStopTimeout = timeout
+		}
+	}
+}
+
+// WithRollbackTimeout bounds cleanup after startup failure.
+func WithRollbackTimeout(timeout time.Duration) Option {
+	return func(c *Container) {
+		if timeout > 0 {
+			c.rollbackTimeout = timeout
+		}
+	}
+}
+
+// WithHealthTimeout bounds each component health check.
+func WithHealthTimeout(timeout time.Duration) Option {
+	return func(c *Container) {
+		if timeout > 0 {
+			c.healthTimeout = timeout
+		}
+	}
+}
+
+func WithOnStart(fn func(context.Context) error) Option {
+	return appendHook(fn, func(c *Container) *[]func(context.Context) error { return &c.onStart })
+}
+
+func WithOnStarted(fn func(context.Context) error) Option {
+	return appendHook(fn, func(c *Container) *[]func(context.Context) error { return &c.onStarted })
+}
+
+func WithOnStopping(fn func(context.Context) error) Option {
+	return appendHook(fn, func(c *Container) *[]func(context.Context) error { return &c.onStopping })
+}
+
+func WithOnStop(fn func(context.Context) error) Option {
+	return appendHook(fn, func(c *Container) *[]func(context.Context) error { return &c.onStop })
+}
+
+func appendHook(
+	fn func(context.Context) error,
+	selectHooks func(*Container) *[]func(context.Context) error,
+) Option {
+	return func(c *Container) {
+		if fn != nil {
+			hooks := selectHooks(c)
+			*hooks = append(*hooks, fn)
+		}
+	}
+}
+
+// ProvideOption configures a component registration.
+type ProvideOption func(*provider) error
+
+// DependsOn declares lifecycle dependencies that are not constructor inputs.
+func DependsOn(dependencies ...Dependency) ProvideOption {
+	return func(p *provider) error {
+		for _, dep := range dependencies {
+			if dep == nil || dep.dependencyName() == "" {
+				return ErrInvalidDependency
+			}
+			p.declaredDeps = append(p.declaredDeps, dep.dependencyName())
+		}
+		return nil
+	}
+}
+
+// New constructs an idle Container.
 func New(opts ...Option) *Container {
 	c := &Container{
-		providers:            make(map[string]*provider),
-		shutdownTimeout:      30 * time.Second,
-		componentStopTimeout: 10 * time.Second,
-		rollbackTimeout:      30 * time.Second,
-		healthTimeout:        10 * time.Second,
-		healthFlights:        make(map[string]*healthFlight),
+		containerCore: &containerCore{
+			providers:            make(map[string]*provider),
+			shutdownTimeout:      30 * time.Second,
+			componentStopTimeout: 10 * time.Second,
+			rollbackTimeout:      30 * time.Second,
+			healthTimeout:        10 * time.Second,
+			healthFlights:        make(map[string]*healthFlight),
+			waiting:              make(map[string]map[string]int),
+		},
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -85,7 +169,7 @@ func (c *Container) Provide[T any](
 	constructor func(*Container) (T, error),
 	options ...ProvideOption,
 ) error {
-	if c == nil {
+	if c == nil || c.containerCore == nil {
 		return ErrNilContainer
 	}
 	if key.name == "" {
@@ -97,8 +181,9 @@ func (c *Container) Provide[T any](
 
 	p := &provider{
 		name: key.name,
-		constructor: func(c *Container) (any, error) {
-			return constructor(c)
+		typ:  reflect.TypeFor[T](),
+		constructor: func(sc *Container) (any, error) {
+			return constructor(sc)
 		},
 	}
 	for _, option := range options {
@@ -146,16 +231,33 @@ func (c *Container) MustSupply[T any](key Key[T], value T, options ...ProvideOpt
 
 func (c *Container) Get[T any](key Key[T]) (T, error) {
 	var zero T
-	if c == nil {
+	if c == nil || c.containerCore == nil {
 		return zero, ErrNilContainer
 	}
 
+	wantType := reflect.TypeFor[T]()
 	c.mu.RLock()
 	p, exists := c.providers[key.name]
 	state := c.state
-	if exists && p.built {
+	if !exists {
+		c.mu.RUnlock()
+		return zero, fmt.Errorf("%w: %s", ErrComponentNotFound, key.name)
+	}
+	if p.typ != wantType {
+		c.mu.RUnlock()
+		return zero, fmt.Errorf("%w: %s", ErrTypeMismatch, key.name)
+	}
+	if p.built {
 		value := p.value
 		c.mu.RUnlock()
+		if len(c.stack) > 0 {
+			c.mu.Lock()
+			c.recordDependencyLocked(key.name, c.stack)
+			c.mu.Unlock()
+		}
+		if value == nil {
+			return zero, nil
+		}
 		result, ok := value.(T)
 		if !ok {
 			return zero, fmt.Errorf("%w: %s", ErrTypeMismatch, key.name)
@@ -164,19 +266,19 @@ func (c *Container) Get[T any](key Key[T]) (T, error) {
 	}
 	c.mu.RUnlock()
 
-	if !exists {
-		return zero, fmt.Errorf("%w: %s", ErrComponentNotFound, key.name)
-	}
 	if state != StateStarting {
 		return zero, fmt.Errorf("%w: %s is not built in %s", ErrComponentNotFound, key.name, state)
 	}
-	if err := c.build(key.name); err != nil {
+	if err := c.build(key.name, c.stack); err != nil {
 		return zero, err
 	}
 
 	c.mu.RLock()
 	value := p.value
 	c.mu.RUnlock()
+	if value == nil {
+		return zero, nil
+	}
 	result, ok := value.(T)
 	if !ok {
 		return zero, fmt.Errorf("%w: %s", ErrTypeMismatch, key.name)
@@ -193,13 +295,14 @@ func (c *Container) MustGet[T any](key Key[T]) T {
 }
 
 func (c *Container) Has[T any](key Key[T]) bool {
-	if c == nil {
+	if c == nil || c.containerCore == nil {
 		return false
 	}
+	wantType := reflect.TypeFor[T]()
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	_, exists := c.providers[key.name]
-	return exists
+	p, exists := c.providers[key.name]
+	return exists && p.typ == wantType
 }
 
 func (c *Container) Keys() []string {
@@ -218,6 +321,15 @@ func (c *Container) State() State {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.state
+}
+
+func (c *Container) Metrics() ContainerMetrics {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return ContainerMetrics{
+		ComponentCount: len(c.providers),
+		State:          c.state,
+	}
 }
 
 func (c *Container) DependencyGraph() map[string][]string {
@@ -242,8 +354,8 @@ func (c *Container) resetInstancesLocked() {
 		p.deps = nil
 	}
 	c.buildOrder = nil
-	c.buildStack = nil
 	c.onStoppingDone = make([]bool, len(c.onStopping))
 	c.onStopDone = make([]bool, len(c.onStop))
 	c.healthFlights = make(map[string]*healthFlight)
+	c.waiting = make(map[string]map[string]int)
 }

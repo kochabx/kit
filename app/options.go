@@ -3,37 +3,28 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"reflect"
 	"slices"
 	"time"
 
 	"github.com/kochabx/kit/cx"
-	"github.com/kochabx/kit/transport"
 )
 
 type builder struct {
-	ctx             context.Context
 	shutdownTimeout time.Duration
 	signals         []os.Signal
+	logger          *slog.Logger
 	container       *cx.Container
 	cxOpts          []cx.Option
-	servers         []transport.Server
+	servers         []Server
+	runnables       []cx.Runnable
 	components      []func(*cx.Container) error
 }
 
-// Option configures an application before construction.
+// Option configures an Application before construction.
 type Option func(*builder) error
-
-func WithContext(ctx context.Context) Option {
-	return func(b *builder) error {
-		if isNil(ctx) {
-			return fmt.Errorf("%w: nil context", ErrInvalidOption)
-		}
-		b.ctx = ctx
-		return nil
-	}
-}
 
 func WithShutdownTimeout(timeout time.Duration) Option {
 	return func(b *builder) error {
@@ -45,12 +36,12 @@ func WithShutdownTimeout(timeout time.Duration) Option {
 	}
 }
 
-// WithSignals replaces the default signals. An empty list disables signal handling.
+// WithSignals replaces the default termination signals. Passing no signals disables signal handling.
 func WithSignals(signals ...os.Signal) Option {
 	captured := slices.Clone(signals)
 	return func(b *builder) error {
-		for _, signal := range captured {
-			if isNil(signal) {
+		for _, sig := range captured {
+			if isNilValue(sig) {
 				return fmt.Errorf("%w: nil signal", ErrInvalidOption)
 			}
 		}
@@ -59,8 +50,16 @@ func WithSignals(signals ...os.Signal) Option {
 	}
 }
 
-// WithContainer transfers lifecycle management to the application. Configure its
-// components and hooks beforehand; application registration options cannot be mixed.
+func WithLogger(logger *slog.Logger) Option {
+	return func(b *builder) error {
+		if logger == nil {
+			return fmt.Errorf("%w: nil logger", ErrInvalidOption)
+		}
+		b.logger = logger
+		return nil
+	}
+}
+
 func WithContainer(container *cx.Container) Option {
 	return func(b *builder) error {
 		if container == nil {
@@ -71,15 +70,11 @@ func WithContainer(container *cx.Container) Option {
 	}
 }
 
-func WithServer(server transport.Server) Option {
-	return WithServers(server)
-}
-
-func WithServers(servers ...transport.Server) Option {
+func WithServers(servers ...Server) Option {
 	captured := slices.Clone(servers)
 	return func(b *builder) error {
 		for index, server := range captured {
-			if isNil(server) {
+			if isNilValue(server) {
 				return fmt.Errorf("%w: nil server at index %d", ErrInvalidOption, index)
 			}
 		}
@@ -88,11 +83,23 @@ func WithServers(servers ...transport.Server) Option {
 	}
 }
 
-// WithComponent registers infrastructure before servers, independently of option
-// order. Components start in dependency order and stop in reverse order.
+func WithRunnable(runnables ...cx.Runnable) Option {
+	captured := slices.Clone(runnables)
+	return func(b *builder) error {
+		for index, r := range captured {
+			if isNilValue(r) {
+				return fmt.Errorf("%w: nil runnable at index %d", ErrInvalidOption, index)
+			}
+		}
+		b.runnables = append(b.runnables, captured...)
+		return nil
+	}
+}
+
+// WithComponent registers infrastructure before servers independently of option order.
 func WithComponent[T any](key cx.Key[T], value T) Option {
 	return func(b *builder) error {
-		if key.String() == "" || isNil(value) {
+		if key.String() == "" || isNilValue(value) {
 			return fmt.Errorf("%w: component needs a key and non-nil value", ErrInvalidOption)
 		}
 		b.components = append(b.components, func(c *cx.Container) error { return c.Supply(key, value) })
@@ -100,21 +107,14 @@ func WithComponent[T any](key cx.Key[T], value T) Option {
 	}
 }
 
-func WithOnStart(fn func(context.Context) error) Option {
-	return hookOption(fn, cx.WithOnStart)
-}
-
+func WithOnStart(fn func(context.Context) error) Option { return hookOption(fn, cx.WithOnStart) }
 func WithOnStarted(fn func(context.Context) error) Option {
 	return hookOption(fn, cx.WithOnStarted)
 }
-
 func WithOnStopping(fn func(context.Context) error) Option {
 	return hookOption(fn, cx.WithOnStopping)
 }
-
-func WithOnStop(fn func(context.Context) error) Option {
-	return hookOption(fn, cx.WithOnStop)
-}
+func WithOnStop(fn func(context.Context) error) Option { return hookOption(fn, cx.WithOnStop) }
 
 func hookOption(fn func(context.Context) error, option func(func(context.Context) error) cx.Option) Option {
 	return func(b *builder) error {
@@ -126,14 +126,15 @@ func hookOption(fn func(context.Context) error, option func(func(context.Context
 	}
 }
 
-func isNil(value any) bool {
+func isNilValue(value any) bool {
 	if value == nil {
 		return true
 	}
-	v := reflect.ValueOf(value)
-	switch v.Kind() {
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return v.IsNil()
+		return rv.IsNil()
+	default:
+		return false
 	}
-	return false
 }

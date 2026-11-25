@@ -104,6 +104,7 @@ report, err := c.HealthCheck(ctx)
 | API | 说明 |
 |---|---|
 | `NewKey[T](name)` | 创建类型化组件 Key |
+| `TypeKey[T]()` | 按类型名自动生成组件 Key |
 | `c.Provide(key, ctor, options...)` | 注册惰性构造函数 |
 | `c.Supply(key, value)` | 注册预构造值 |
 | `DependsOn(keys...)` | 声明显式生命周期依赖 |
@@ -112,7 +113,9 @@ report, err := c.HealthCheck(ctx)
 | `NewRunner/MustRunner` | 创建受监督的后台任务适配器 |
 | `Start/Stop/Restart` | 严格生命周期管理 |
 | `Wait` | 监督后台任务退出 |
+| `WithHealthTimeout(d)` | 配置单个组件健康检查超时预算 |
 | `HealthCheck` | 状态化并发健康检查 |
+| `Metrics()` | 返回容器状态、组件数、启停耗时与错误统计 |
 | `DependencyGraph` | 返回最近一次构建的依赖图 |
 
 ## 与应用组合

@@ -7,14 +7,14 @@
 ```go
 server := kithttp.NewServer(handler, kithttp.WithAddr(":8080"))
 application, err := app.New(
-    app.WithServer(server),
+    app.WithServers(server),
     app.WithComponent(cx.NewKey[*db.Client]("db"), dbClient),
     app.WithShutdownTimeout(30*time.Second),
 )
 if err != nil {
     return err
 }
-return application.Run()
+return application.Run(ctx)
 ```
 
 `app.New` 返回 `(*Application, error)`。它验证和注册配置，不启动组件；nil 选项、nil/typed nil Server、空组件键、nil 组件、nil 回调和非正超时都会返回错误。
@@ -30,7 +30,7 @@ New → Run（只运行一次）
         └─ OnStopping → 停止 Server → 释放基础组件 → OnStop
 ```
 
-基础组件在 Server 之前注册，与 `WithServer` 和 `WithComponent` 的选项排列无关。同类组件按注册顺序处理，显式声明的 cx 依赖关系优先。通过 `Container()` 后续注册的依赖不会自动排到 Server 前；优先使用 `WithComponent`，复杂依赖应通过 cx 声明。
+基础组件在 Server 之前注册，与 `WithServers` 和 `WithComponent` 的选项排列无关。同类组件按注册顺序处理，显式声明的 cx 依赖关系优先。通过 `Container()` 后续注册的依赖不会自动排到 Server 前；优先使用 `WithComponent`，复杂依赖应通过 cx 声明。
 
 运行中重复调用 `Run` 返回 `ErrAlreadyRunning`；运行结束或启动失败后重复调用返回 `ErrAlreadyRun`。需要重新运行时创建新 Application 及适合新生命周期的资源。
 
@@ -42,10 +42,11 @@ New → Run（只运行一次）
 
 | 选项 | 说明 | 默认值 |
 |---|---|---|
-| `WithContext(ctx)` | 应用根 Context，必须非 nil | Background |
 | `WithShutdownTimeout(d)` | 应用关闭预算，必须为正 | 30s |
 | `WithSignals(sigs...)` | 替换信号列表；空列表禁用监听 | SIGINT、SIGTERM、SIGQUIT |
-| `WithServer(s)` / `WithServers(...)` | 注册最后启动、最先停止的 Server | 无 |
+| `WithLogger(logger)` | 注入结构化日志器（`*slog.Logger`） | 丢弃日志器 |
+| `WithServers(servers...)` | 注册最后启动、最先停止的 Server | 无 |
+| `WithRunnable(runnables...)` | 注册受监督运行的后台任务 | 无 |
 | `WithComponent(key, value)` | 注册基础组件 | 无 |
 | `WithOnStart(fn)` | 所有组件启动前 | 无 |
 | `WithOnStarted(fn)` | 所有组件启动后 | 无 |
@@ -65,7 +66,7 @@ application, err := app.New(app.WithContainer(container))
 if err != nil {
     return err
 }
-return application.Run()
+return application.Run(ctx)
 ```
 
 `WithContainer` 要求容器处于 `cx.StateNew`，不能与 app 的组件、Server 或生命周期钩子注册选项混用；这些配置应在容器中完成。Context、信号和应用关闭超时仍可通过 app 配置。容器自身的关闭预算也有效，实际关闭受两个预算共同约束。

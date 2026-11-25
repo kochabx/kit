@@ -92,21 +92,21 @@ func (c *Container) checkComponentHealth(
 	flight := c.healthFlight(ctx, name, checker)
 	select {
 	case <-flight.done:
-		status := HealthHealthy
-		if flight.err != nil {
-			status = HealthUnhealthy
-			if errors.Is(flight.err, context.DeadlineExceeded) {
-				status = HealthTimeout
-			}
-		}
-		return ComponentHealth{Key: name, Status: status, Error: flight.err}
+		return componentHealthResult(name, flight.err)
 	case <-ctx.Done():
-		status := HealthUnhealthy
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			status = HealthTimeout
-		}
-		return ComponentHealth{Key: name, Status: status, Error: ctx.Err()}
+		return componentHealthResult(name, ctx.Err())
 	}
+}
+
+func componentHealthResult(name string, err error) ComponentHealth {
+	if err == nil {
+		return ComponentHealth{Key: name, Status: HealthHealthy}
+	}
+	status := HealthUnhealthy
+	if errors.Is(err, context.DeadlineExceeded) {
+		status = HealthTimeout
+	}
+	return ComponentHealth{Key: name, Status: status, Error: err}
 }
 
 func (c *Container) healthFlight(
@@ -126,7 +126,6 @@ func (c *Container) healthFlight(
 
 	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	go func() {
-		defer cancel()
 		checked := make(chan error, 1)
 		go func() {
 			checked <- checker.HealthCheck(checkCtx)
@@ -136,17 +135,30 @@ func (c *Container) healthFlight(
 		timedOut := false
 		select {
 		case err = <-checked:
+			cancel()
 		case <-checkCtx.Done():
 			err = checkCtx.Err()
 			timedOut = true
+			cancel()
 		}
 
 		c.mu.Lock()
 		flight.err = err
 		close(flight.done)
-		// Retain a timed-out flight so a checker that ignores context can leak at
-		// most one goroutine. Successful/completed checks may run again.
-		if !timedOut && c.healthFlights[name] == flight {
+		if !timedOut {
+			if c.healthFlights[name] == flight {
+				delete(c.healthFlights, name)
+			}
+			c.mu.Unlock()
+			return
+		}
+		c.mu.Unlock()
+
+		// Keep the timed-out flight slot registered while the stuck probe runs to cap
+		// concurrency at 1, then remove it once HealthCheck actually finishes so future probes recover.
+		<-checked
+		c.mu.Lock()
+		if c.healthFlights[name] == flight {
 			delete(c.healthFlights, name)
 		}
 		c.mu.Unlock()

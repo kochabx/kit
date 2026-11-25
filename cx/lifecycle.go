@@ -7,6 +7,9 @@ import (
 	"slices"
 )
 
+// Start builds, starts, and supervises registered components in dependency order.
+// onStarted runs after StateRunning is published; if a concurrent Stop claims
+// shutdown during onStarted, Start leaves cleanup to Stop and returns the hook error.
 func (c *Container) Start(ctx context.Context) error {
 	if ctx == nil {
 		return ErrNilContext
@@ -18,20 +21,38 @@ func (c *Container) Start(ctx context.Context) error {
 		return fmt.Errorf("%w: cannot start from %s", ErrInvalidState, state)
 	}
 	c.resetInstancesLocked()
+	c.buildGen++
+	c.buildOpen = true
 	c.state = StateStarting
 	keys := slices.Clone(c.keys)
 	c.mu.Unlock()
 
 	fail := func(startErr error) error {
+		c.mu.Lock()
+		c.buildOpen = false
+		c.mu.Unlock()
+
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.rollbackTimeout)
 		defer cancel()
+		waited := make(chan struct{})
+		go func() {
+			c.activeBuilds.Wait()
+			close(waited)
+		}()
+		select {
+		case <-waited:
+		case <-rollbackCtx.Done():
+		}
+
 		rollbackErr := c.stopOwned(rollbackCtx)
 
 		c.mu.Lock()
+		c.buildGen++
 		if rollbackErr != nil {
 			c.state = StateStopFailed
 		} else {
 			c.resetInstancesLocked()
+			c.supervisor = nil
 			c.state = StateFailed
 		}
 		c.mu.Unlock()
@@ -42,7 +63,7 @@ func (c *Container) Start(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fail(fmt.Errorf("build cancelled: %w", err))
 		}
-		if err := c.build(name); err != nil {
+		if err := c.build(name, nil); err != nil {
 			return fail(err)
 		}
 	}
@@ -68,19 +89,32 @@ func (c *Container) Start(ctx context.Context) error {
 			}
 		}
 	}
-	for _, hook := range c.onStarted {
-		if err := hook(ctx); err != nil {
-			return fail(fmt.Errorf("onStarted: %w", err))
-		}
-	}
 	if err := ctx.Err(); err != nil {
 		return fail(fmt.Errorf("start cancelled: %w", err))
 	}
 
 	c.mu.Lock()
+	c.buildOpen = false
 	c.state = StateRunning
-	c.supervisor = newSupervisor(ctx, c.supervisedComponentsLocked())
+	sup := newSupervisor(ctx, c.supervisedComponentsLocked())
+	c.supervisor = sup
 	c.mu.Unlock()
+
+	for _, hook := range c.onStarted {
+		if err := hook(ctx); err != nil {
+			c.mu.Lock()
+			if c.state != StateRunning {
+				c.mu.Unlock()
+				return fmt.Errorf("onStarted: %w", err)
+			}
+			c.state = StateStopping
+			c.mu.Unlock()
+
+			sup.cancel()
+			<-sup.done
+			return fail(fmt.Errorf("onStarted: %w", err))
+		}
+	}
 	return nil
 }
 
@@ -95,11 +129,16 @@ func (c *Container) Stop(ctx context.Context) error {
 		return fmt.Errorf("%w: cannot stop from %s", ErrInvalidState, state)
 	}
 	c.state = StateStopping
-	if c.supervisor != nil {
-		c.supervisor.cancel()
+	sup := c.supervisor
+	if sup != nil {
+		sup.cancel()
 	}
 	shutdownTimeout := c.shutdownTimeout
 	c.mu.Unlock()
+
+	if sup != nil {
+		<-sup.done
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(ctx, shutdownTimeout)
 	defer cancel()

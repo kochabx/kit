@@ -24,7 +24,6 @@ type execution struct {
 }
 
 // Runner adapts a blocking Runnable into a supervised lifecycle component.
-// Stop is retryable after a timeout and executions never share mutable state.
 type Runner struct {
 	runnable Runnable
 	mu       sync.RWMutex
@@ -32,7 +31,7 @@ type Runner struct {
 }
 
 func NewRunner(runnable Runnable) (*Runner, error) {
-	if isNil(runnable) {
+	if isNilValue(runnable) {
 		return nil, ErrNilRunnable
 	}
 	return &Runner{runnable: runnable}, nil
@@ -46,14 +45,14 @@ func MustRunner(runnable Runnable) *Runner {
 	return runner
 }
 
-func isNil(value any) bool {
+func isNilValue(value any) bool {
 	if value == nil {
 		return true
 	}
-	reflected := reflect.ValueOf(value)
-	switch reflected.Kind() {
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
 	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-		return reflected.IsNil()
+		return rv.IsNil()
 	default:
 		return false
 	}
@@ -79,15 +78,12 @@ func (r *Runner) Start(ctx context.Context) error {
 	r.current = exec
 
 	go func() {
+		defer close(exec.done)
 		err := r.run(runCtx)
-
 		r.mu.Lock()
 		exec.err = err
 		r.mu.Unlock()
-
-		close(exec.done)
 	}()
-
 	return nil
 }
 
@@ -97,7 +93,6 @@ func (r *Runner) run(ctx context.Context) (err error) {
 			err = fmt.Errorf("%w: %v\n%s", ErrRunnerPanic, recovered, debug.Stack())
 		}
 	}()
-
 	return r.runnable.Run(ctx)
 }
 

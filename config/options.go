@@ -4,45 +4,43 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/viper"
 
-	"github.com/kochabx/kit/core/validator"
+	"github.com/kochabx/kit/x/validate"
 )
 
-// Source identifies how Viper obtains its base configuration.
-type Source string
+var defaultTagValidator = sync.OnceValues(func() (*validate.Validator, error) {
+	return validate.New()
+})
 
-const (
-	// SourceFile reads the file configured on Viper.
-	SourceFile Source = "file"
-	// SourceRemote reads a remote provider configured on Viper.
-	SourceRemote Source = "remote"
-	// SourceValues uses values already registered through Set, flags,
-	// environment variables, aliases, and Viper defaults.
-	SourceValues Source = "values"
-)
-
-type options struct {
-	source    Source
-	viper     *viper.Viper
-	validator validator.Validator
-	remote    *remoteOptions
+// Validator checks struct constraints on a decoded configuration snapshot.
+type Validator interface {
+	Struct(ctx context.Context, v any) error
 }
 
-type remoteOptions struct {
-	Provider   string        `validate:"required"`
-	Endpoint   string        `validate:"required"`
-	Path       string        `validate:"required"`
-	ConfigType string        `validate:"required"`
-	Interval   time.Duration `validate:"gt=0"`
+// Validatable can be implemented by configuration structs for custom cross-field validation.
+type Validatable interface {
+	Validate(context.Context) error
+}
+
+type options struct {
+	filePath   string
+	viper      *viper.Viper
+	expandEnv  bool
+	tagName    string
+	validator  Validator
+	decodeOpts []viper.DecoderConfigOption
+	watchDelay time.Duration
 }
 
 func defaultOptions() options {
 	return options{
-		source:    SourceFile,
-		validator: validator.Validate,
+		expandEnv:  true,
+		tagName:    "json",
+		watchDelay: 50 * time.Millisecond,
 	}
 }
 
@@ -56,40 +54,27 @@ func newOptions(opts ...Option) (options, error) {
 			return configured, err
 		}
 	}
-	if err := configured.validate(); err != nil {
-		return configured, err
+	if configured.viper == nil {
+		configured.viper = newViper()
 	}
-	if err := configured.initialize(); err != nil {
-		return configured, err
+	if configured.filePath != "" {
+		configured.viper.SetConfigFile(configured.filePath)
 	}
-	return configured, nil
-}
-
-func (o *options) validate() error {
-	if o.remote != nil {
-		if err := validator.Validate.Struct(context.Background(), o.remote); err != nil {
-			return err
+	if configured.validator == nil {
+		validator, err := defaultTagValidator()
+		if err != nil {
+			return configured, fmt.Errorf("%w: init default validator: %w", ErrInvalidOptions, err)
 		}
+		configured.validator = validator
 	}
-	if o.remote != nil && o.source != SourceRemote {
-		return fmt.Errorf("%w: remote provider requires remote source", ErrInvalidOptions)
+	resolved := make([]viper.DecoderConfigOption, 0, len(configured.decodeOpts)+2)
+	resolved = append(resolved, tagNameDecodeOption(configured.tagName))
+	resolved = append(resolved, configured.decodeOpts...)
+	if configured.expandEnv {
+		resolved = append(resolved, envExpandDecodeHook())
 	}
-	if o.source == SourceRemote && o.remote == nil {
-		return fmt.Errorf("%w: remote source requires WithRemote", ErrInvalidOptions)
-	}
-	return nil
-}
-
-func (o *options) initialize() error {
-	if o.remote != nil {
-		var err error
-		o.viper, err = remoteViper(o.viper, *o.remote)
-		return err
-	}
-	if o.viper == nil {
-		o.viper = newViper()
-	}
-	return nil
+	configured.decodeOpts = resolved
+	return configured, nil
 }
 
 func newViper() *viper.Viper {
@@ -100,68 +85,81 @@ func newViper() *viper.Viper {
 	return v
 }
 
-func remoteViper(v *viper.Viper, remote remoteOptions) (*viper.Viper, error) {
-	if v == nil {
-		v = newViper()
-	}
-	v.SetConfigType(remote.ConfigType)
-	if err := v.AddRemoteProvider(remote.Provider, remote.Endpoint, remote.Path); err != nil {
-		return nil, fmt.Errorf("%w: add remote provider: %w", ErrInvalidOptions, err)
-	}
-	return v, nil
-}
-
 // Option customizes Config construction.
 type Option func(*options) error
 
-// WithSource selects the configuration source. The default is SourceFile.
-func WithSource(source Source) Option {
-	return func(options *options) error {
-		switch source {
-		case SourceFile, SourceRemote, SourceValues:
-			options.source = source
-			return nil
-		default:
-			return fmt.Errorf("%w: source %q", ErrUnsupportedSource, source)
+// WithFile configures the configuration file path on the underlying Viper instance.
+func WithFile(path string) Option {
+	return func(o *options) error {
+		if path == "" {
+			return fmt.Errorf("%w: empty file path", ErrInvalidOptions)
 		}
+		o.filePath = path
+		return nil
 	}
 }
 
-// WithViper uses a caller-configured Viper instance. This is intended for
-// flags, aliases, Set, custom file locations, and remote providers.
-func WithViper(value *viper.Viper) Option {
-	return func(options *options) error {
-		if value == nil {
+// WithViper uses a caller-configured Viper instance for flags, aliases, Set, and custom paths.
+func WithViper(v *viper.Viper) Option {
+	return func(o *options) error {
+		if v == nil {
 			return fmt.Errorf("%w: viper is nil", ErrInvalidOptions)
 		}
-		options.viper = value
+		o.viper = v
 		return nil
 	}
 }
 
-// WithValidator replaces the default project validator.
-func WithValidator(value validator.Validator) Option {
-	return func(options *options) error {
-		if value == nil {
+// WithExpandEnv toggles ${NAME} placeholder expansion on decoded string config values (default: true).
+func WithExpandEnv(enabled bool) Option {
+	return func(o *options) error {
+		o.expandEnv = enabled
+		return nil
+	}
+}
+
+// WithValidator overrides the default x/validate struct tag validator.
+func WithValidator(v Validator) Option {
+	return func(o *options) error {
+		if v == nil {
 			return fmt.Errorf("%w: validator is nil", ErrInvalidOptions)
 		}
-		options.validator = value
+		o.validator = v
 		return nil
 	}
 }
 
-// WithRemote configures a remote provider and how often WatchRemote refreshes
-// its configuration.
-func WithRemote(provider, endpoint, path, configType string, interval time.Duration) Option {
-	return func(options *options) error {
-		options.source = SourceRemote
-		options.remote = &remoteOptions{
-			Provider:   provider,
-			Endpoint:   endpoint,
-			Path:       path,
-			ConfigType: configType,
-			Interval:   interval,
+// WithTag overrides the struct tag name used during Unmarshal (default: "json").
+func WithTag(tag string) Option {
+	return func(o *options) error {
+		if tag == "" {
+			return fmt.Errorf("%w: empty tag name", ErrInvalidOptions)
 		}
+		o.tagName = tag
+		return nil
+	}
+}
+
+// WithDecodeOptions appends custom Viper DecoderConfigOption hooks for Unmarshal.
+func WithDecodeOptions(opts ...viper.DecoderConfigOption) Option {
+	return func(o *options) error {
+		for _, opt := range opts {
+			if opt == nil {
+				return fmt.Errorf("%w: nil decode option", ErrInvalidOptions)
+			}
+			o.decodeOpts = append(o.decodeOpts, opt)
+		}
+		return nil
+	}
+}
+
+// WithWatchDebounce sets the coalesce delay for file watch events (default: 50ms).
+func WithWatchDebounce(delay time.Duration) Option {
+	return func(o *options) error {
+		if delay < 0 {
+			return fmt.Errorf("%w: negative watch debounce", ErrInvalidOptions)
+		}
+		o.watchDelay = delay
 		return nil
 	}
 }

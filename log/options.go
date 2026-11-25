@@ -1,47 +1,86 @@
 package log
 
 import (
-	"github.com/rs/zerolog"
-
-	"github.com/kochabx/kit/log/redact"
+	"context"
+	"io"
+	"log/slog"
+	"os"
+	"time"
 )
 
-// Option configures a Logger.
-type Option func(*loggerOptions)
+// ContextExtractor extracts structured attributes (e.g. trace/span IDs) from ctx.
+type ContextExtractor func(context.Context) []slog.Attr
+
+// FileConfig configures size- and time-based log file rotation via timberjack.
+type FileConfig struct {
+	Filename         string
+	MaxSize          int           // Megabytes per file before rotation (timberjack default: 100).
+	MaxBackups       int           // Retained old log files (0 preserves all unless MaxAge prunes).
+	MaxAge           int           // Maximum days to retain old files.
+	RotationInterval time.Duration // Time-based rotation interval (0 disables interval rotation).
+	RotateAt         []string      // Daily HH:MM rotation triggers (e.g. "00:00").
+	RotateAtMinutes  []int         // Minute marks (0-59) within an hour to trigger rotation.
+	Compression      string        // "none", "gzip", or "zstd".
+	LocalTime        bool
+	FileMode         os.FileMode
+}
 
 type loggerOptions struct {
-	level      *zerolog.Level
-	caller     bool
-	callerSkip int
-	redactor   *redact.Redactor
+	level      slog.Level
+	addSource  bool
+	noColor    bool
+	timeFormat string
+	writer     io.Writer
+	redactor   *Redactor
+	extractors []ContextExtractor
 }
 
-// WithLevel sets the logging level.
-func WithLevel(level zerolog.Level) Option {
+// Option configures Logger construction.
+type Option func(*loggerOptions)
+
+// WithLevel sets the minimum log level (default: slog.LevelInfo).
+func WithLevel(level slog.Level) Option {
+	return func(o *loggerOptions) { o.level = level }
+}
+
+// WithAddSource enables source file/line attribution.
+func WithAddSource(enabled bool) Option {
+	return func(o *loggerOptions) { o.addSource = enabled }
+}
+
+// WithNoColor disables ANSI color escapes in console output.
+func WithNoColor(disabled bool) Option {
+	return func(o *loggerOptions) { o.noColor = disabled }
+}
+
+// WithTimeFormat sets the timestamp layout for console and JSON logs (default: time.DateTime).
+func WithTimeFormat(layout string) Option {
 	return func(o *loggerOptions) {
-		o.level = new(level)
+		if layout != "" {
+			o.timeFormat = layout
+		}
 	}
 }
 
-// WithCaller enables caller information.
-func WithCaller() Option {
+// WithWriter overrides the console output io.Writer (default: os.Stdout).
+func WithWriter(w io.Writer) Option {
 	return func(o *loggerOptions) {
-		o.caller = true
+		if w != nil {
+			o.writer = w
+		}
 	}
 }
 
-// WithCallerSkip adds skip frames to the default caller depth.
-// For example, skip=1 skips one additional wrapper around the logger.
-func WithCallerSkip(skip int) Option {
-	return func(o *loggerOptions) {
-		o.caller = true
-		o.callerSkip = skip
-	}
+// WithRedactor attaches a lock-free dynamic Redactor to the logging pipeline.
+func WithRedactor(r *Redactor) Option {
+	return func(o *loggerOptions) { o.redactor = r }
 }
 
-// WithRedactor sets the log redactor.
-func WithRedactor(redactor *redact.Redactor) Option {
+// WithContextExtractor registers a context attribute extractor (e.g. OTel trace bridge).
+func WithContextExtractor(fn ContextExtractor) Option {
 	return func(o *loggerOptions) {
-		o.redactor = redactor
+		if fn != nil {
+			o.extractors = append(o.extractors, fn)
+		}
 	}
 }

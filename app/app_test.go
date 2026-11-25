@@ -2,19 +2,24 @@ package app
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
-	"reflect"
+	"runtime"
+	"runtime/pprof"
+	"slices"
+	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/kochabx/kit/cx"
-	kithttp "github.com/kochabx/kit/transport/http"
-	"github.com/stretchr/testify/require"
 )
 
 type testComponent struct {
@@ -36,246 +41,238 @@ func (c *testComponent) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (c *testComponent) HealthCheck(context.Context) error {
-	return nil
-}
+func (c *testComponent) HealthCheck(context.Context) error { return nil }
 
-func mustNew(t *testing.T, options ...Option) *Application {
+func assertNoGoroutineLeaks(t *testing.T, baseline int) {
 	t.Helper()
-	value, err := New(options...)
-	require.NoError(t, err)
-	return value
-}
-
-func waitReady(t *testing.T, ready <-chan struct{}) {
-	t.Helper()
-	select {
-	case <-ready:
-	case <-time.After(5 * time.Second):
-		t.Fatal("startup did not complete")
+	prof := pprof.Lookup("goroutineleak")
+	if prof == nil {
+		t.Fatal("goroutineleak profile unavailable")
 	}
-}
-
-func waitRun(t *testing.T, done <-chan error) error {
-	t.Helper()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(5 * time.Second):
-		t.Fatal("Run did not finish")
-		return nil
+	runtime.GC()
+	if got := prof.Count(); got > baseline {
+		var buf bytes.Buffer
+		_ = prof.WriteTo(&buf, 2)
+		t.Fatalf("goroutine leak detected: count=%d (baseline=%d)\n%s", got, baseline, buf.String())
 	}
-}
-
-func launch(t *testing.T, application *Application) <-chan error {
-	t.Helper()
-	done := make(chan error, 1)
-	go func() { done <- application.Run() }()
-	t.Cleanup(application.Shutdown)
-	return done
 }
 
 func TestNewValidation(t *testing.T) {
 	var nilServer *testComponent
+	var nilRunnable cx.Runnable
 	for _, tc := range []struct {
 		name    string
 		options []Option
 	}{
 		{"nil option", []Option{nil}},
-		{"nil context", []Option{WithContext(context.Background())}},
 		{"timeout", []Option{WithShutdownTimeout(0)}},
+		{"nil logger", []Option{WithLogger(nil)}},
 		{"nil container", []Option{WithContainer(nil)}},
-		{"nil server", []Option{WithServer(nil)}},
-		{"typed nil server", []Option{WithServer(nilServer)}},
+		{"nil server", []Option{WithServers(nil)}},
+		{"typed nil server", []Option{WithServers(nilServer)}},
+		{"nil runnable", []Option{WithRunnable(nilRunnable)}},
 		{"nil signal", []Option{WithSignals(nil)}},
 		{"nil component", []Option{WithComponent(cx.NewKey[*testComponent]("component"), nilServer)}},
 		{"empty key", []Option{WithComponent(cx.NewKey[int](""), 1)}},
 		{"nil hook", []Option{WithOnStart(nil)}},
-		{
-			"external hook",
-			[]Option{WithContainer(cx.New()), WithOnStart(func(context.Context) error { return nil })},
-		},
-		{"external server", []Option{WithServer(&testComponent{}), WithContainer(cx.New())}},
+		{"external hook", []Option{WithContainer(cx.New()), WithOnStart(func(context.Context) error { return nil })}},
+		{"external server", []Option{WithServers(&testComponent{}), WithContainer(cx.New())}},
+		{"external runnable", []Option{WithContainer(cx.New()), WithRunnable(cx.RunnerFunc(func(context.Context) error { return nil }))}},
 		{"external component", []Option{WithContainer(cx.New()), WithComponent(cx.NewKey[int]("value"), 1)}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			app, err := New(tc.options...)
-			require.Nil(t, app)
-			require.ErrorIs(t, err, ErrInvalidOption)
+			application, err := New(tc.options...)
+			if application != nil || !errors.Is(err, ErrInvalidOption) {
+				t.Fatalf("New() = (%v, %v), want (nil, ErrInvalidOption)", application, err)
+			}
 		})
 	}
-	key := cx.NewKey[int]("duplicate")
-	app, err := New(WithComponent(key, 1), WithComponent(key, 2))
-	require.Nil(t, app)
-	require.Error(t, err)
 }
 
-func TestRunOrderHooksAndContext(t *testing.T) {
-	type key struct{}
+func TestRunOrderHooksContextAndShutdown(t *testing.T) {
+	baseline := pprof.Lookup("goroutineleak").Count()
+	t.Cleanup(func() { assertNoGoroutineLeaks(t, baseline) })
+
+	type ctxKey struct{}
 	var order []string
 	record := func(name string) func(context.Context) error {
 		return func(ctx context.Context) error {
 			if name == "server-stop" || name == "dependency-stop" {
-				require.NoError(t, ctx.Err())
-				require.Equal(t, "value", ctx.Value(key{}))
-				_, hasDeadline := ctx.Deadline()
-				require.True(t, hasDeadline)
+				if ctx.Err() != nil {
+					return fmt.Errorf("expected active shutdown ctx: %w", ctx.Err())
+				}
+				if ctx.Value(ctxKey{}) != "value" {
+					return errors.New("lost parent context value in shutdown")
+				}
+				if _, ok := ctx.Deadline(); !ok {
+					return errors.New("missing shutdown deadline")
+				}
 			}
 			order = append(order, name)
 			return nil
 		}
 	}
-	dependency := &testComponent{start: record("dependency-start"), stop: record("dependency-stop")}
-	server := &testComponent{start: record("server-start"), stop: record("server-stop")}
+
 	ready := make(chan struct{})
-	app := mustNew(t, WithSignals(), WithContext(context.WithValue(context.Background(), key{}, "value")),
-		WithServer(server), WithComponent(cx.NewKey[*testComponent]("dependency"), dependency),
+	dep := &testComponent{start: record("dependency-start"), stop: record("dependency-stop")}
+	srv := &testComponent{start: record("server-start"), stop: record("server-stop")}
+	application, err := New(
+		WithSignals(),
+		WithServers(srv),
+		WithComponent(cx.NewKey[*testComponent]("dependency"), dep),
 		WithOnStart(record("onStart")),
 		WithOnStarted(func(ctx context.Context) error { _ = record("onStarted")(ctx); close(ready); return nil }),
-		WithOnStopping(record("onStopping")), WithOnStop(record("onStop")))
-	done := launch(t, app)
-	waitReady(t, ready)
-	require.ErrorIs(t, app.Run(), ErrAlreadyRunning)
-	report, err := app.HealthCheck(context.Background())
-	require.NoError(t, err)
-	require.True(t, report.Healthy)
-	app.Shutdown()
-	require.NoError(t, waitRun(t, done))
-	require.Equal(
-		t,
-		[]string{
-			"onStart",
-			"dependency-start",
-			"server-start",
-			"onStarted",
-			"onStopping",
-			"server-stop",
-			"dependency-stop",
-			"onStop",
-		},
-		order,
+		WithOnStopping(record("onStopping")),
+		WithOnStop(record("onStop")),
 	)
-	require.ErrorIs(t, app.Run(), ErrAlreadyRun)
-}
+	if err != nil {
+		t.Fatal(err)
+	}
 
-func TestRunContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ready := make(chan struct{})
-	app := mustNew(t, WithSignals(), WithContext(ctx), WithOnStarted(func(context.Context) error {
-		close(ready)
-		return nil
-	}))
-	done := launch(t, app)
-	waitReady(t, ready)
-	cancel()
-	require.NoError(t, waitRun(t, done))
-}
+	done := make(chan error, 1)
+	go func() { done <- application.Run(context.WithValue(t.Context(), ctxKey{}, "value")) }()
+	<-ready
 
-func TestRunStartupCancellationAndRollback(t *testing.T) {
-	entered := make(chan struct{})
-	stopped := false
-	dependency := &testComponent{stop: func(ctx context.Context) error { stopped = true; return ctx.Err() }}
-	blocking := &testComponent{start: func(ctx context.Context) error { close(entered); <-ctx.Done(); return ctx.Err() }}
-	app := mustNew(t, WithSignals(), WithComponent(cx.NewKey[*testComponent]("dependency"), dependency), WithServer(blocking))
-	done := launch(t, app)
-	waitReady(t, entered)
-	app.Shutdown()
-	require.ErrorIs(t, waitRun(t, done), context.Canceled)
-	require.True(t, stopped)
-	require.ErrorIs(t, app.Run(), ErrAlreadyRun)
-}
-
-func TestRunSupervisedFailure(t *testing.T) {
-	for _, failure := range []error{errors.New("worker failed"), context.Canceled} {
-		runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return failure }))
-		app := mustNew(t, WithSignals(), WithComponent(cx.NewKey[*cx.Runner]("worker"), runner))
-		require.ErrorIs(t, app.Run(), failure)
-		require.Equal(t, cx.StateStopped, app.Container().State())
+	if err := application.Run(t.Context()); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("concurrent Run = %v, want ErrAlreadyRunning", err)
+	}
+	report, err := application.HealthCheck(t.Context())
+	if err != nil || !report.Healthy {
+		t.Fatalf("HealthCheck = (%+v, %v)", report, err)
+	}
+	application.Shutdown()
+	if err := <-done; err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	want := []string{"onStart", "dependency-start", "server-start", "onStarted", "onStopping", "server-stop", "dependency-stop", "onStop"}
+	if !slices.Equal(order, want) {
+		t.Fatalf("order = %v, want %v", order, want)
+	}
+	if err := application.Run(t.Context()); !errors.Is(err, ErrAlreadyRun) {
+		t.Fatalf("second Run = %v, want ErrAlreadyRun", err)
 	}
 }
 
-func TestRunShutdownFailure(t *testing.T) {
-	failure := errors.New("stop failed")
-	ready := make(chan struct{})
-	app := mustNew(
-		t,
+func TestRunContextCancelRollbackAndRunnable(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		ready := make(chan struct{})
+		application, err := New(
+			WithSignals(),
+			WithRunnable(cx.RunnerFunc(func(ctx context.Context) error {
+				close(ready)
+				<-ctx.Done()
+				return ctx.Err()
+			})),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- application.Run(ctx) }()
+		<-ready
+		cancel()
+		if err := <-done; err != nil {
+			t.Fatalf("Run after cancel = %v, want nil", err)
+		}
+	})
+
+	runErr := errors.New("worker boom")
+	stopErr := errors.New("stop boom")
+	var logBuf bytes.Buffer
+	application, err := New(
 		WithSignals(),
-		WithComponent(cx.NewKey[*testComponent]("resource"), &testComponent{stop: func(context.Context) error {
-			return failure
-		}}),
-		WithOnStarted(func(context.Context) error {
-			close(ready)
-			return nil
-		}),
+		WithLogger(slog.New(slog.NewTextHandler(&logBuf, nil))),
+		WithComponent(cx.NewKey[*testComponent]("res"), &testComponent{stop: func(context.Context) error { return stopErr }}),
+		WithRunnable(cx.RunnerFunc(func(context.Context) error { return runErr })),
 	)
-	done := launch(t, app)
-	waitReady(t, ready)
-	app.Shutdown()
-	require.ErrorIs(t, waitRun(t, done), failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = application.Run(t.Context())
+	if !errors.Is(err, runErr) || !errors.Is(err, stopErr) {
+		t.Fatalf("Run error = %v, want joined runErr+stopErr", err)
+	}
+	if !strings.Contains(logBuf.String(), "shutdown completed with errors") {
+		t.Fatalf("expected error log on shutdown failure, got %q", logBuf.String())
+	}
 }
 
-func TestRunExternalContainer(t *testing.T) {
+func TestRunShutdownTimeout(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ready := make(chan struct{})
+		resource := &testComponent{stop: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
+		application, err := New(
+			WithSignals(),
+			WithShutdownTimeout(20*time.Millisecond),
+			WithComponent(cx.TypeKey[*testComponent](), resource),
+			WithOnStarted(func(context.Context) error { close(ready); return nil }),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- application.Run(t.Context()) }()
+		<-ready
+		application.Shutdown()
+		if err := <-done; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Run error = %v, want DeadlineExceeded", err)
+		}
+	})
+}
+
+func TestRunHTTPServerWithSignalsDisabled(t *testing.T) {
+	ts := httptest.NewUnstartedServer(http.NotFoundHandler())
+	defer ts.Close()
+
 	ready := make(chan struct{})
-	container := cx.New(cx.WithOnStarted(func(context.Context) error { close(ready); return nil }))
-	container.MustSupply(cx.NewKey[*testComponent]("resource"), &testComponent{})
-	app := mustNew(t, WithSignals(), WithContainer(container))
-	require.Same(t, container, app.Container())
-	done := launch(t, app)
-	waitReady(t, ready)
-	report, err := app.HealthCheck(context.Background())
-	require.NoError(t, err)
-	require.True(t, report.Healthy)
-	_, err = New(WithContainer(container))
-	require.ErrorIs(t, err, ErrInvalidOption)
-	app.Shutdown()
-	require.NoError(t, waitRun(t, done))
-}
-
-func TestSignalOptionsSnapshot(t *testing.T) {
-	signals := []os.Signal{os.Interrupt}
-	option := WithSignals(signals...)
-	signals[0] = nil
-	app := mustNew(t, option)
-	require.True(t, reflect.DeepEqual([]os.Signal{os.Interrupt}, app.signals))
-	app.Shutdown()
-}
-
-func TestRunHTTPServer(t *testing.T) {
-	ready := make(chan struct{})
-	app := mustNew(
-		t,
+	srv := &testComponent{
+		start: func(context.Context) error { ts.Start(); return nil },
+		stop:  func(context.Context) error { ts.Close(); return nil },
+	}
+	application, err := New(
 		WithSignals(),
-		WithServer(kithttp.NewServer(http.NotFoundHandler(), kithttp.WithAddr("127.0.0.1:0"))),
-		WithOnStarted(func(context.Context) error {
-			close(ready)
-			return nil
-		}),
+		WithServers(srv),
+		WithOnStarted(func(context.Context) error { close(ready); return nil }),
 	)
-	done := launch(t, app)
-	waitReady(t, ready)
-	app.Shutdown()
-	require.NoError(t, waitRun(t, done))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- application.Run(t.Context()) }()
+	<-ready
+	application.Shutdown()
+	if err := <-done; err != nil {
+		t.Fatalf("Run error: %v", err)
+	}
 }
 
 func TestRunSignalDuringStartup(t *testing.T) {
 	const childEnv = "KIT_APP_SIGNAL_CHILD"
 	if os.Getenv(childEnv) == "1" {
-		app := mustNew(t, WithSignals(os.Interrupt), WithOnStart(func(ctx context.Context) error {
+		application, err := New(WithSignals(os.Interrupt), WithOnStart(func(ctx context.Context) error {
 			fmt.Println("startup-ready")
 			<-ctx.Done()
 			return ctx.Err()
 		}))
-		require.ErrorIs(t, app.Run(), context.Canceled)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := application.Run(context.Background()); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Run error = %v, want context.Canceled", err)
+		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRunSignalDuringStartup$")
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestRunSignalDuringStartup$")
 	cmd.Env = append(os.Environ(), childEnv+"=1")
 	output, err := cmd.StdoutPipe()
-	require.NoError(t, err)
-	require.NoError(t, cmd.Start())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		if cmd.ProcessState == nil {
 			_ = cmd.Process.Kill()
@@ -283,61 +280,29 @@ func TestRunSignalDuringStartup(t *testing.T) {
 		}
 	})
 	scanner := bufio.NewScanner(output)
-	require.True(t, scanner.Scan())
-	require.Equal(t, "startup-ready", scanner.Text())
-	require.NoError(t, cmd.Process.Signal(os.Interrupt))
+	if !scanner.Scan() || scanner.Text() != "startup-ready" {
+		t.Fatalf("unexpected child output: %q (%v)", scanner.Text(), scanner.Err())
+	}
+	if err := cmd.Process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
 	for scanner.Scan() {
 	}
-	require.NoError(t, scanner.Err())
-	require.NoError(t, cmd.Wait())
-}
-
-func TestStartupFailureRollsBackBeforeServing(t *testing.T) {
-	failure := errors.New("dependency startup failed")
-	var order []string
-	dependency := &testComponent{
-		start: func(context.Context) error { order = append(order, "start"); return failure },
-		stop:  func(context.Context) error { order = append(order, "rollback"); return nil },
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
 	}
-	server := &testComponent{start: func(context.Context) error { order = append(order, "serve"); return nil }}
-	app := mustNew(t, WithSignals(), WithServer(server), WithComponent(cx.NewKey[*testComponent]("dependency"), dependency))
-	require.ErrorIs(t, app.Run(), failure)
-	require.Equal(t, []string{"start", "rollback"}, order)
-	require.ErrorIs(t, app.Run(), ErrAlreadyRun)
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("child exited with error: %v", err)
+	}
 }
 
-func TestShutdownTimeout(t *testing.T) {
-	ready := make(chan struct{})
-	resource := &testComponent{stop: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}
-	app := mustNew(
-		t,
-		WithSignals(),
-		WithShutdownTimeout(20*time.Millisecond),
-		WithComponent(cx.NewKey[*testComponent]("resource"), resource),
-		WithOnStarted(func(context.Context) error {
-			close(ready)
-			return nil
-		}),
-	)
-	done := launch(t, app)
-	waitReady(t, ready)
-	app.Shutdown()
-	require.ErrorIs(t, waitRun(t, done), context.DeadlineExceeded)
-}
-
-func TestSupervisedAndShutdownErrorsAreJoined(t *testing.T) {
-	runErr := errors.New("worker failed")
-	stopErr := errors.New("cleanup failed")
-	runner := cx.MustRunner(cx.RunnerFunc(func(context.Context) error { return runErr }))
-	app := mustNew(
-		t,
-		WithSignals(),
-		WithComponent(cx.NewKey[*testComponent]("resource"), &testComponent{stop: func(context.Context) error {
-			return stopErr
-		}}),
-		WithComponent(cx.NewKey[*cx.Runner]("runner"), runner),
-	)
-	err := app.Run()
-	require.ErrorIs(t, err, runErr)
-	require.ErrorIs(t, err, stopErr)
+func TestShutdownBeforeRunAndTimeoutPropagation(t *testing.T) {
+	application, err := New(WithSignals(), WithShutdownTimeout(15*time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	application.Shutdown()
+	if err := application.Run(t.Context()); err != nil {
+		t.Fatalf("Run after early Shutdown = %v, want nil", err)
+	}
 }

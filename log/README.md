@@ -1,356 +1,130 @@
 # log
 
-基于 [zerolog](https://github.com/rs/zerolog) 的结构化日志库，提供文件轮转、多路输出和敏感数据脱敏能力。
-
-## 特性
-
-- 基于 zerolog，支持结构化字段和链式日志事件
-- 支持按时间（rotatelogs）或按大小（lumberjack）滚动日志文件
-- 支持控制台与文件同时输出
-- 内置敏感数据脱敏，基于原子快照的无锁读取
-- 提供全局日志实例，无需传递 logger
-- 调用位置可选记录
+基于 Go 标准库 **`log/slog`** 的结构化日志包，整合了 [`lmittmann/tint`](https://github.com/lmittmann/tint) 彩色控制台输出、[`timberjack`](https://github.com/DeRuina/timberjack) 大小/时间双模式轮转、无锁递归脱敏 [`Redactor`](file:///root/workspace/kit/log/redact.go) 与 Context 属性提取，并提供开箱即用的包级全局日志入口。
 
 ## 快速开始
 
-### 控制台日志
+### 全局日志（导入即用）
 
-```go
-import "github.com/kochabx/kit/log"
-
-logger := log.New()
-
-logger.Info().Msg("hello world")
-logger.Debug().Str("key", "value").Msg("debug with field")
-logger.Error().Err(err).Msg("something went wrong")
-```
-
-### 使用全局日志器
-
-`init()` 时已自动初始化一个控制台全局日志器，可直接调用：
-
-```go
-log.Info().Msg("global info")
-log.Info().Msgf("user %s logged in", username)
-log.Error().Err(err).Msg("global error")
-```
-
-### 文件日志
+包初始化时已自动构建默认彩色控制台日志器（`slog.LevelInfo`、`os.Stdout`），可直接调用包级函数：
 
 ```go
 import (
-    "github.com/kochabx/kit/log"
-    "github.com/kochabx/kit/log/writer"
+	"context"
+	"log/slog"
+
+	"github.com/kochabx/kit/log"
 )
 
-config := writer.FileConfig{
-    Path:         "logs/app.log",
-    RotateMode: writer.RotateModeSize,
-    SizeRotate: writer.SizeRotateConfig{
-        MaxSize:    100,  // MB
-        MaxBackups: 5,
-        MaxAge:     30,   // 天
-        Compress:   true,
-    },
+func handle(ctx context.Context, err error) {
+	log.Info("service started", slog.String("addr", ":8080"))
+	log.Warn("cache miss", slog.String("key", "session:1"))
+	log.ErrorContext(ctx, "request failed", slog.Any("err", err))
 }
+```
 
-logger, err := log.NewFile(config)
+### 替换全局日志器
+
+可通过 `log.SetDefault` 在服务启动阶段将全局日志器替换为带 caller、脱敏规则、链路提取或文件轮转的实例：
+
+```go
+logger, err := log.NewMulti(
+	log.FileConfig{
+		Filename:   "logs/app.log",
+		MaxSize:    100,
+		MaxBackups: 10,
+		MaxAge:     30,
+		Compression: "gzip",
+	},
+	log.WithLevel(slog.LevelDebug),
+	log.WithAddSource(true),
+)
 if err != nil {
-    panic(err)
+	panic(err)
 }
 defer logger.Close()
 
-logger.Info().Msg("file log message")
+log.SetDefault(logger)
+log.Debug("global logger updated")
 ```
 
-### 同时输出到控制台和文件
+> `SetDefault` 只原子替换指针且忽略 `nil`，不会自动关闭旧日志器；应用退出前请自行调用当前 `logger.Close()` 刷盘释放句柄。
+
+### 独立实例与文件轮转
 
 ```go
-logger, err := log.NewMulti(config)
+console := log.New(
+	log.WithLevel(slog.LevelDebug),
+	log.WithAddSource(true),
+	log.WithTimeFormat("2006-01-02 15:04:05"),
+)
+console.Info("listening", slog.Int("port", 8080))
+
+fileOnly, err := log.NewFile(log.FileConfig{
+	Filename:         "logs/json.log",
+	MaxSize:          100,
+	RotationInterval: 24 * time.Hour,
+})
 if err != nil {
-    panic(err)
+	return err
 }
-defer logger.Close()
-
-logger.Info().Msg("multi output")
+defer fileOnly.Close()
 ```
 
-## 配置
+通过 `logger.Slog()` 可获得底层 `*slog.Logger`，直接接入 `x/transport/http`、`x/transport/grpc`、`x/store/*`、`x/asynq` 等组件。
 
-### FileConfig
+## 敏感数据脱敏（Redactor）
 
-```go
-type FileConfig struct {
-    Path         string             // 完整日志路径，默认: "log/app.log"
-    RotateMode writer.RotateMode
-    TimeRotate TimeRotateConfig
-    SizeRotate SizeRotateConfig
-}
-```
-
-`RotateMode` 必须显式选择，零值不会自动选择轮转策略。
-
-### 轮转模式
+`Redactor` 基于 `atomic.Pointer` 实现无锁执行计划切换，支持递归遍历 `slog.Group`、`map`、struct 与 `error`；对 `slog.Any` 嵌套对象默认最多递归 16 层，超过深度上限的子树会以 `"[REDACTED:MAX_DEPTH]"` 整体截断，避免深层敏感字段原样泄露：
 
 ```go
-writer.RotateModeTime  // 按时间轮转
-writer.RotateModeSize  // 按大小轮转
-```
-
-### TimeRotateConfig（按时间轮转）
-
-```go
-type TimeRotateConfig struct {
-    MaxAge   time.Duration // 日志保留时间，默认: 24h
-    Interval time.Duration // 轮转间隔，默认: 1h
-}
-```
-
-### SizeRotateConfig（按大小轮转）
-
-```go
-type SizeRotateConfig struct {
-    MaxSize    int  // 单文件上限（MB），默认: 100
-    MaxBackups int  // 保留旧文件数，默认: 5
-    MaxAge     int  // 文件保留天数，默认: 30
-    Compress   bool // 压缩旧文件，默认: false
-}
-```
-
-## 选项
-
-```go
-log.WithLevel(zerolog.InfoLevel)  // 设置日志级别
-log.WithCaller()                  // 记录调用位置
-log.WithCallerSkip(1)      // 记录调用位置，跳过 skip 层封装
-log.WithRedactor(redactor)         // 绑定脱敏 Redactor
-```
-
-## 数据脱敏
-
-完整的规则说明、常用配置和动态管理示例见 [`redact/README.md`](redact/README.md)。
-
-### 配置规则
-
-```go
-import "github.com/kochabx/kit/log/redact"
-
-redactor, err := redact.New(
-	redact.Field("password", redact.Replace("******")),
-	redact.Field("token", redact.Replace("******")),
-	redact.Field("phone", redact.KeepEdges(3, 4)),
+redactor, err := log.NewRedactor(
+	log.FieldRule("password", log.MaskFull("******")),
+	log.FieldRule("phone", log.MaskPartial(3, 4)),
+	log.ContentRule("email", `\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`, log.MaskEmail()),
 )
 if err != nil {
-    panic(err)
+	panic(err)
 }
 
 logger := log.New(log.WithRedactor(redactor))
-logger.Info().Str("phone", "13812345678").Msg("user info")
-// 输出: "phone":"138****5678"
+logger.Info("login", slog.String("phone", "13812345678")) // phone=138****5678
+
+// 运行时动态增删启停规则（并发安全）
+_ = redactor.AddRule(log.FieldRule("token", log.MaskFull()))
+redactor.DisableRule("token")
+redactor.EnableRule("token")
+redactor.RemoveRule("token")
 ```
 
-规则由应用显式配置，避免基础库对字段名和脱敏策略作业务假设。
+## Context 属性提取
 
-### 内容规则
-
-```go
-redactor, err := redact.New(
-    // 字段规则：精确匹配字段名并保留首尾字符
-    redact.Field("id_no", redact.KeepEdges(6, 4)),
-    // 内容规则：正则匹配后完整替换
-    redact.Content("access-key", `AKIA[A-Z0-9]{16}`, redact.Replace("******")),
-)
-```
-
-Redactor 支持运行时原子更新规则。执行计划保持不可变，日志读取路径无锁：
+配合 [`x/otel`](file:///root/workspace/kit/x/otel) 等组件从 `context.Context` 自动注入 `trace_id`、`span_id` 等上下文属性：
 
 ```go
-redactor.AddRule(redact.Field("phone", redact.KeepEdges(3, 4)))
-redactor.DisableRule("phone")
-redactor.EnableRule("phone")
-redactor.IsEnabled("phone")
-redactor.RemoveRule("phone")
-```
-
-## 全局日志器
-
-```go
-// 替换全局日志器
-logger, err := log.NewFile(config, log.WithCaller(), log.WithLevel(zerolog.InfoLevel))
-if err != nil { return err }
-defer logger.Close()
-old := log.SetGlobal(logger)
-defer log.SetGlobal(old)
-```
-
-`SetGlobal` 只替换指针，不会关闭旧实例；恢复旧实例后再关闭当前日志器，避免全局指针仍引用已关闭的输出。
-
-全局函数返回 `*zerolog.Event`，必须调用 `Msg`、`Msgf` 等方法才会写出日志：
-
-```go
-log.Debug().Str("k", "v").Msg("debug")
-log.Info().Str("user", uid).Dur("elapsed", d).Msg("done")
-log.Error().Err(err).Msg("failed")
-log.Error().Stack().Err(err).Msg("failed with stack")
-log.Fatal().Err(err).Msg("abort")   // 退出进程
-```
-
-## 最佳实践
-
-### 生产环境
-
-```go
-import (
-    "github.com/kochabx/kit/log"
-    "github.com/kochabx/kit/log/redact"
-    "github.com/kochabx/kit/log/writer"
-    "github.com/rs/zerolog"
-)
-
-redactor, err := redact.New(
-	redact.Field("password", redact.Replace("******")),
-	redact.Field("token", redact.Replace("******")),
-	redact.Field("secret", redact.Replace("******")),
-	redact.Field("phone", redact.KeepEdges(3, 4)),
-	redact.Content("email", `\b[A-Za-z0-9][A-Za-z0-9._%+\-]*@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`, redact.Email()),
-)
-if err != nil {
-    panic(err)
-}
-
-logger, err := log.NewFile(
-    writer.FileConfig{
-        RotateMode: writer.RotateModeSize,
-        Path:         "/var/log/myapp/app.log",
-        SizeRotate: writer.SizeRotateConfig{
-            MaxSize:    100,
-            MaxBackups: 10,
-            MaxAge:     30,
-            Compress:   true,
-        },
-    },
-    log.WithCaller(),
-    log.WithLevel(zerolog.InfoLevel),
-    log.WithRedactor(redactor),
-)
-if err != nil {
-    panic(err)
-}
-defer logger.Close()
-
-old := log.SetGlobal(logger)
-defer log.SetGlobal(old)
-```
-
-### 开发环境
-
-```go
-import "github.com/rs/zerolog"
-
 logger := log.New(
-    log.WithCaller(),
-    log.WithLevel(zerolog.DebugLevel),
+	log.WithContextExtractor(func(ctx context.Context) []slog.Attr {
+		return []slog.Attr{slog.String("trace_id", traceIDFrom(ctx))}
+	}),
 )
-old := log.SetGlobal(logger)
-defer log.SetGlobal(old)
+logger.InfoContext(ctx, "order created", slog.String("order_id", "ord-1001"))
 ```
 
-### 结构化日志
+## 选项参考
 
-```go
-log.Info().
-    Str("user_id", "12345").
-    Int("status", 200).
-    Dur("elapsed", time.Since(start)).
-    Msg("request handled")
-```
-
-### 错误日志
-
-```go
-if err != nil {
-    log.Error().
-        Err(err).
-        Str("op", "db.query").
-        Str("table", "users").
-        Msg("query failed")
-}
-```
-
-## API 参考
-
-### 创建日志器
-
-| 函数 | 说明 |
-|------|------|
-| `New(opts ...Option) *Logger` | 控制台日志器 |
-| `NewFile(c writer.FileConfig, opts ...Option) (*Logger, error)` | 文件日志器 |
-| `NewMulti(c writer.FileConfig, opts ...Option) (*Logger, error)` | 文件 + 控制台双路输出 |
-
-### Logger 方法
-
-| 方法 | 说明 |
-|------|------|
-| `Close() error` | 释放文件句柄等资源 |
-| `Redactor() *redact.Redactor` | 获取绑定的脱敏 Redactor |
-
-### 全局函数
-
-| 函数 | 说明 |
-|------|------|
-| `Global() *Logger` | 获取全局日志器 |
-| `SetGlobal(logger *Logger) *Logger` | 原子替换并返回旧的全局日志器 |
-| `ConfigureZerolog()` | 显式配置进程级时间和错误堆栈格式 |
-| `Debug/Info/Warn/Error/Fatal/Panic() *zerolog.Event` | 创建对应级别的日志事件 |
-
-### 脱敏 Redactor API
-
-| 方法 | 说明 |
-|------|------|
-| `New(rules ...Rule) (*Redactor, error)` | 校验并编译初始规则 |
-| `AddRule(rule Rule) error` | 原子添加并启用规则 |
-| `AddRules(rules ...Rule) error` | 原子批量添加并启用规则 |
-| `RemoveRule(name string) bool` | 原子删除规则 |
-| `EnableRule(name string) bool` | 原子启用规则 |
-| `DisableRule(name string) bool` | 原子禁用规则 |
-| `IsEnabled(name string) bool` | 查询规则是否存在且已启用 |
-| `Field(name string, mask Mask) Rule` | 创建字段规则 |
-| `Content(name, pattern string, mask Mask) Rule` | 创建内容正则规则 |
-| `Replace(value string) Mask` | 完整替换策略 |
-| `KeepEdges(prefix, suffix int) Mask` | 保留首尾字符策略 |
-| `Email() Mask` | 保留邮箱域名及用户名首尾字符 |
-| `RedactString(value string) string` | 对字符串执行脱敏 |
-
-## 模块结构
-
-```
-log/
-├── logger.go              # Logger 实现
-├── file.go                # 文件日志构造与配置
-├── options.go             # Option 函数
-├── global.go              # 全局日志实例与函数
-├── zerolog.go             # Zerolog 进程级配置
-├── writer/
-│   ├── console.go         # 控制台 writer
-│   ├── file.go            # 文件 writer 工厂
-│   └── rotate.go          # RotateMode 与轮转实现
-└── redact/
-    ├── engine.go          # 动态规则管理与不可变执行计划
-    ├── rule.go            # 字段规则与内容规则
-    ├── mask.go            # 脱敏策略
-    └── writer.go          # 脱敏 io.Writer 包装
-```
-
-## 依赖
-
-- [github.com/rs/zerolog](https://github.com/rs/zerolog)：核心日志库
-- [github.com/lestrrat-go/file-rotatelogs](https://github.com/lestrrat-go/file-rotatelogs)：按时间轮转
-- [gopkg.in/natefinch/lumberjack.v2](https://gopkg.in/natefinch/lumberjack.v2)：按大小轮转
+| 选项 | 说明 | 默认值 |
+|---|---|---|
+| `WithLevel(slog.Level)` | 设置最低输出级别 | `slog.LevelInfo` |
+| `WithAddSource(bool)` | 是否记录调用方文件与行号（caller） | `false` |
+| `WithNoColor(bool)` | 禁用控制台 ANSI 颜色 | `false` |
+| `WithTimeFormat(string)` | 控制台时间格式 | `time.DateTime` |
+| `WithWriter(io.Writer)` | 覆盖控制台输出目标 | `os.Stdout` |
+| `WithRedactor(*Redactor)` | 绑定动态脱敏处理器 | 无 |
+| `WithContextExtractor(ContextExtractor)` | 注册 Context 属性提取器 | 无 |
 
 ## 验证
 
 ```bash
-go test -race ./log/... -count=1
+go test -v -run TestLogOutputPreview ./log
+go test -race -count=1 ./log/...
 ```
-
-本包不负责初始化 OpenTelemetry SDK。HTTP 日志的 trace/span 关联由中间件从 Context 读取，详见 [HTTP 中间件](../transport/http/middleware/README.md)。
