@@ -171,8 +171,10 @@ func TestUndoRollbackPreservesSyncPrimitivesAndTLS(t *testing.T) {
 		t.Fatalf("state was not atomically rolled back: host=%q nested=%v subPort=%d", s.Host, s.Nested, s.Sub.Port)
 	}
 	// Mutex remains usable untouched.
-	s.mu.Lock()
-	s.mu.Unlock()
+	if !s.mu.TryLock() {
+		t.Fatal("mutex unexpectedly locked")
+	}
+	defer s.mu.Unlock()
 }
 
 func TestOptionsCycleAndSetter(t *testing.T) {
@@ -270,6 +272,8 @@ func TestSetterPanicRollsBackTagsAndPreservesSyncPrimitives(t *testing.T) {
 		t.Fatalf("tag-applied field was not rolled back: %q", target.Tagged)
 	}
 	// Mutex remains usable untouched.
-	target.mu.Lock()
-	target.mu.Unlock()
+	if !target.mu.TryLock() {
+		t.Fatal("mutex unexpectedly locked")
+	}
+	defer target.mu.Unlock()
 }
