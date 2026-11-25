@@ -43,7 +43,7 @@ loader, err := config.New[AppConfig](config.WithViper(v))
 
 > 调用 `Load` 或 `Watch` 后，请勿再并发修改传入的 `*viper.Viper` 实例。
 
-## 热更新（可取消、无泄露）
+## 热更新
 
 监听前必须成功调用 `Load`：
 
