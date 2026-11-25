@@ -36,7 +36,6 @@ type Config[T any] struct {
 	closed      atomic.Bool
 	watchCancel context.CancelFunc
 	watchWG     sync.WaitGroup
-	watchReady  func()
 }
 
 // New creates a typed Config loader targeting struct type T.

@@ -11,12 +11,13 @@ import (
 // concurrent Get calls inside constructors never corrupt shared container state.
 func (c *Container) build(name string, stack []string) error {
 	c.mu.Lock()
-	if !c.buildOpen {
+	round := c.round
+	if round == nil || !round.open {
 		c.mu.Unlock()
 		return fmt.Errorf("%w: container build closed", ErrInvalidState)
 	}
-	c.activeBuilds.Add(1)
-	defer c.activeBuilds.Done()
+	round.wg.Add(1)
+	defer round.wg.Done()
 	gen := c.buildGen
 
 	p, exists := c.providers[name]
@@ -39,24 +40,24 @@ func (c *Container) build(name string, stack []string) error {
 	waiter := ""
 	if len(stack) > 0 {
 		waiter = stack[len(stack)-1]
-		if cycle := c.findWaitCycleLocked(name, waiter); len(cycle) > 0 {
+		if cycle := round.findWaitCycleLocked(name, waiter); len(cycle) > 0 {
 			c.mu.Unlock()
 			return fmt.Errorf("%w: %s", ErrCircularDependency, strings.Join(cycle, " -> "))
 		}
-		c.addWaitEdgeLocked(waiter, name)
+		round.addWaitEdgeLocked(waiter, name)
 	}
-	if flight := p.flight; flight != nil {
+	if flight := round.flights[name]; flight != nil {
 		c.mu.Unlock()
 		<-flight.done
 		if waiter != "" {
 			c.mu.Lock()
-			c.removeWaitEdgeLocked(waiter, name)
+			round.removeWaitEdgeLocked(waiter, name)
 			c.mu.Unlock()
 		}
 		return flight.err
 	}
 	flight := &buildFlight{done: make(chan struct{})}
-	p.flight = flight
+	round.flights[name] = flight
 	nextStack := append(slices.Clone(stack), name)
 	declaredDeps := slices.Clone(p.declaredDeps)
 	constructor := p.constructor
@@ -66,10 +67,10 @@ func (c *Container) build(name string, stack []string) error {
 	defer func() {
 		c.mu.Lock()
 		if waiter != "" {
-			c.removeWaitEdgeLocked(waiter, name)
+			round.removeWaitEdgeLocked(waiter, name)
 		}
-		if p.flight == flight {
-			p.flight = nil
+		if round.flights[name] == flight {
+			delete(round.flights, name)
 		}
 		flight.err = buildErr
 		close(flight.done)
@@ -135,38 +136,38 @@ func (c *Container) recordDependencyLocked(name string, stack []string) {
 	}
 }
 
-func (c *Container) addWaitEdgeLocked(waiter, target string) {
-	edges := c.waiting[waiter]
+func (r *buildRound) addWaitEdgeLocked(waiter, target string) {
+	edges := r.waiting[waiter]
 	if edges == nil {
 		edges = make(map[string]int)
-		c.waiting[waiter] = edges
+		r.waiting[waiter] = edges
 	}
 	edges[target]++
 }
 
-func (c *Container) removeWaitEdgeLocked(waiter, target string) {
-	edges := c.waiting[waiter]
+func (r *buildRound) removeWaitEdgeLocked(waiter, target string) {
+	edges := r.waiting[waiter]
 	if edges == nil {
 		return
 	}
 	if count := edges[target]; count <= 1 {
 		delete(edges, target)
 		if len(edges) == 0 {
-			delete(c.waiting, waiter)
+			delete(r.waiting, waiter)
 		}
 	} else {
 		edges[target] = count - 1
 	}
 }
 
-func (c *Container) findWaitCycleLocked(start, target string) []string {
+func (r *buildRound) findWaitCycleLocked(start, target string) []string {
 	visited := map[string]bool{start: true}
 	var dfs func(cur string) []string
 	dfs = func(cur string) []string {
 		if cur == target {
 			return []string{target}
 		}
-		for next := range c.waiting[cur] {
+		for next := range r.waiting[cur] {
 			if visited[next] {
 				continue
 			}

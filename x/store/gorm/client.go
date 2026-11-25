@@ -157,21 +157,15 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
-// Stop closes the connection pool while respecting ctx cancellation.
-func (c *Client) Stop(ctx context.Context) error {
-	done := make(chan error, 1)
-	go func() {
-		done <- c.Close()
-	}()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+// Stop closes the connection pool idempotently.
+func (c *Client) Stop(context.Context) error {
+	return c.Close()
 }
 
 // Close closes the underlying *sql.DB idempotently.
 func (c *Client) Close() error {
+	if c.closeOnce == nil {
+		return nil
+	}
 	return c.closeOnce()
 }

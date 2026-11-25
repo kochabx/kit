@@ -649,3 +649,144 @@ func TestStartRollbackPreservesConcurrentGetStopFailureForRetry(t *testing.T) {
 		t.Fatalf("State after retry Stop = %v, want StateStopped", state)
 	}
 }
+
+func TestStartOnStartedConcurrentRestartPreservesSecondGeneration(t *testing.T) {
+	hookErr := errors.New("round1 onStarted failed")
+	var hookCalls atomic.Int32
+	var stops atomic.Int32
+	inHook1 := make(chan struct{})
+	releaseHook1 := make(chan struct{})
+
+	var instanceGen atomic.Int32
+	c := New(WithOnStarted(func(context.Context) error {
+		if hookCalls.Add(1) == 1 {
+			close(inHook1)
+			<-releaseHook1
+			return hookErr
+		}
+		return nil
+	}))
+	c.MustProvide(TypeKey[*lifecycleComponent](), func(*Container) (*lifecycleComponent, error) {
+		instanceGen.Add(1)
+		return &lifecycleComponent{
+			start: func(context.Context) error { return nil },
+			stop: func(context.Context) error {
+				stops.Add(1)
+				return nil
+			},
+		}, nil
+	})
+
+	startDone := make(chan error, 1)
+	go func() {
+		startDone <- c.Start(t.Context())
+	}()
+
+	<-inHook1
+	restartDone := make(chan error, 1)
+	go func() {
+		restartDone <- c.Restart(t.Context())
+	}()
+
+	if err := <-restartDone; err != nil {
+		close(releaseHook1)
+		t.Fatalf("Restart failed: %v", err)
+	}
+	if got := c.State(); got != StateRunning {
+		close(releaseHook1)
+		t.Fatalf("State after Restart = %v, want StateRunning", got)
+	}
+
+	// Unblock round-1 onStarted so it returns hookErr while round-2 is running.
+	close(releaseHook1)
+	if err := <-startDone; !errors.Is(err, hookErr) {
+		t.Fatalf("round-1 Start = %v, want hookErr", err)
+	}
+
+	// Round-2 must remain running and untouched by round-1's late onStarted failure.
+	if got := c.State(); got != StateRunning {
+		t.Fatalf("State after round-1 onStarted error = %v, want StateRunning", got)
+	}
+	if got := stops.Load(); got != 1 {
+		t.Fatalf("stops = %d, want 1 (only round-1 stopped)", got)
+	}
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("final Stop failed: %v", err)
+	}
+	if got := stops.Load(); got != 2 || c.State() != StateStopped {
+		t.Fatalf("after final Stop: stops=%d state=%v, want 2 and StateStopped", got, c.State())
+	}
+}
+
+func TestStartRollbackTimeoutThenRestartIsolatesOldConstructor(t *testing.T) {
+	c := New(WithRollbackTimeout(20 * time.Millisecond))
+	kRoot := NewKey[int]("root")
+	kSlow := NewKey[*lifecycleComponent]("slow")
+
+	var round atomic.Int32
+	slowEntered := make(chan struct{})
+	releaseHung := make(chan struct{})
+	var r1Stops atomic.Int32
+	var r2Stops atomic.Int32
+
+	var rootCalls atomic.Int32
+	c.MustProvide(kRoot, func(sc *Container) (int, error) {
+		if rootCalls.Add(1) == 1 {
+			go func() {
+				_, _ = sc.Get(kSlow)
+			}()
+			<-slowEntered
+			return 0, errors.New("round1 failed")
+		}
+		return 1, nil
+	})
+	c.MustProvide(kSlow, func(*Container) (*lifecycleComponent, error) {
+		r := round.Add(1)
+		if r == 1 {
+			close(slowEntered)
+			<-releaseHung
+			return &lifecycleComponent{
+				start: func(context.Context) error { return nil },
+				stop:  func(context.Context) error { r1Stops.Add(1); return nil },
+			}, nil
+		}
+		return &lifecycleComponent{
+			start: func(context.Context) error { return nil },
+			stop:  func(context.Context) error { r2Stops.Add(1); return nil },
+		}, nil
+	})
+
+	if err := c.Start(t.Context()); err == nil {
+		close(releaseHung)
+		t.Fatal("expected round1 Start failure")
+	}
+
+	// Start round 2 immediately while round 1's hung constructor is still blocked.
+	if err := c.Start(t.Context()); err != nil {
+		close(releaseHung)
+		t.Fatalf("round2 Start failed: %v", err)
+	}
+	if state := c.State(); state != StateRunning {
+		close(releaseHung)
+		t.Fatalf("State after round2 Start = %v, want StateRunning", state)
+	}
+
+	// Unblock round 1's stale constructor: it must self-stop its stale instance without touching round 2.
+	close(releaseHung)
+	for range 200 {
+		if r1Stops.Load() == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if r1Stops.Load() != 1 || r2Stops.Load() != 0 || c.State() != StateRunning {
+		t.Fatalf("stale constructor corrupted round2: r1Stops=%d r2Stops=%d state=%v", r1Stops.Load(), r2Stops.Load(), c.State())
+	}
+
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("final Stop failed: %v", err)
+	}
+	if r2Stops.Load() != 1 || c.State() != StateStopped {
+		t.Fatalf("after final Stop: r2Stops=%d state=%v, want 1 and StateStopped", r2Stops.Load(), c.State())
+	}
+}

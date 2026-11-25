@@ -25,6 +25,7 @@ import (
 
 	"github.com/rs/cors"
 
+	"github.com/kochabx/kit/app"
 	"github.com/kochabx/kit/cx"
 	"github.com/kochabx/kit/fault"
 )
@@ -107,7 +108,7 @@ func TestServerTLSWithoutFilesAndScalarContentTypes(t *testing.T) {
 
 	srv := NewServer(
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			WriteOK(w, map[string]string{"ok": "yes"})
+			OK(w, map[string]string{"ok": "yes"})
 		}),
 		WithAddr("127.0.0.1:0"),
 		WithTLSConfig(tlsCfg),
@@ -194,7 +195,7 @@ func TestHardenedMiddlewaresAndReplayCache(t *testing.T) {
 						panic("boom")
 					}
 					b, _ := io.ReadAll(r.Body)
-					WriteOK(w, string(b))
+					OK(w, string(b))
 				})),
 			),
 		),
@@ -345,7 +346,7 @@ func TestServerTLSCertFilesValidationAndSyncErrors(t *testing.T) {
 
 	// Valid cert/key pair succeeds and serves HTTPS.
 	validSrv := NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		WriteOK(w, "tls-ok")
+		OK(w, "tls-ok")
 	}), WithAddr("127.0.0.1:0"), WithTLSCertFiles(certA, keyA))
 	if err := validSrv.Start(t.Context()); err != nil {
 		t.Fatalf("valid TLS Start failed: %v", err)
@@ -412,7 +413,7 @@ func TestServerTLSConfigSourcesAndListenerCleanup(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				WriteOK(w, tc.name)
+				OK(w, tc.name)
 			}), WithAddr("127.0.0.1:0"), WithTLSConfig(tc.cfg))
 			if err := srv.Start(t.Context()); err != nil {
 				t.Fatalf("Start failed: %v", err)
@@ -452,7 +453,7 @@ func TestMemoryReplayStoreStrictTTLAndCapacityRejection(t *testing.T) {
 			return r.Header.Get("X-Nonce"), 10 * time.Second, nil
 		}),
 	})(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		WriteOK(w, "ok")
+		OK(w, "ok")
 	}))
 
 	reqN3 := httptest.NewRequest(http.MethodPost, "/signed", nil)
@@ -485,6 +486,40 @@ func TestMemoryReplayStoreStrictTTLAndCapacityRejection(t *testing.T) {
 	mw.ServeHTTP(recN3Replay, reqN3)
 	if recN3Replay.Code != http.StatusBadRequest {
 		t.Fatalf("n3 replay = %d, want 400 (%s)", recN3Replay.Code, recN3Replay.Body.String())
+	}
+}
+
+func TestWithServersHTTPUnexpectedExitPropagatesToAppRun(t *testing.T) {
+	srv := NewServer(nil, WithAddr("127.0.0.1:0"))
+	application, err := app.New(app.WithSignals(), app.WithServers(srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- application.Run(t.Context()) }()
+
+	for range 200 {
+		if srv.HealthCheck(t.Context()) == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if srv.HealthCheck(t.Context()) != nil {
+		_ = srv.Stop(t.Context())
+		t.Fatal("http server never started")
+	}
+
+	// Unexpected close of underlying http.Server without app.Shutdown triggers supervised exit.
+	_ = srv.srv.Close()
+
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("expected non-nil error from app.Run when HTTP server exited unexpectedly")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("app.Run did not terminate after HTTP server exited unexpectedly")
 	}
 }
 

@@ -38,7 +38,7 @@ func TestAdaptPropagatesResponseWriterAndContext(t *testing.T) {
 		c.JSON(http.StatusCreated, gin.H{"user": user})
 	})
 	r.GET("/fail", func(c *gin.Context) {
-		WriteProblem(c, fault.Forbidden("nope"))
+		Fail(c, fault.Forbidden("nope"))
 	})
 
 	// Middleware-wrapped ResponseRecorder inside Logger MUST capture downstream Gin 201 status and body size.
@@ -56,13 +56,13 @@ func TestAdaptPropagatesResponseWriterAndContext(t *testing.T) {
 		t.Fatalf("logger middleware missed wrapped gin status 201: %s", logBuf.String())
 	}
 
-	// WriteProblem works cleanly inside adapted Gin handlers.
+	// Fail works cleanly inside adapted Gin handlers.
 	failReq := httptest.NewRequest(http.MethodGet, "/fail", nil)
 	failReq.Header.Set("X-Token", "ok")
 	failRec := httptest.NewRecorder()
 	r.ServeHTTP(failRec, failReq)
 	if failRec.Code != http.StatusForbidden {
-		t.Fatalf("expected 403 from WriteProblem, got %d", failRec.Code)
+		t.Fatalf("expected 403 from Fail, got %d", failRec.Code)
 	}
 
 	// Aborting middleware must prevent route handler execution and propagate 401 status.

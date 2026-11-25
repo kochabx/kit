@@ -349,7 +349,7 @@ func TestSafeEnvExpansionLiteralDollarsInjectionAndWatchCloseRace(t *testing.T) 
 		t.Fatalf("JSON env expansion = (%+v, %v)", jsonCfg, err)
 	}
 
-	// 2. Concurrent Watch + Close race stress + WatchSeq early break (watchDelay=0).
+	// 2. Concurrent Watch + Close race stress (watchDelay=0).
 	for range 10 {
 		wFile := filepath.Join(t.TempDir(), "race.yaml")
 		writeConfig(t, wFile, "server:\n  host: init\n  port: 8080\n")
@@ -370,7 +370,7 @@ func TestSafeEnvExpansionLiteralDollarsInjectionAndWatchCloseRace(t *testing.T) 
 	}
 }
 
-func TestFileWatchAndWatchSeqNoLeak(t *testing.T) {
+func TestFileWatchNoLeak(t *testing.T) {
 	baseline := pprof.Lookup("goroutineleak").Count()
 	t.Cleanup(func() { assertNoLeak(t, baseline) })
 
@@ -417,46 +417,6 @@ func TestFileWatchAndWatchSeqNoLeak(t *testing.T) {
 	if err := loader.Close(); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
-
-	// Also verify WatchSeq iterator exits cleanly with zero leaks.
-	seqFile := filepath.Join(t.TempDir(), "seq.yaml")
-	writeConfig(t, seqFile, "server:\n  host: s1\n  port: 8080\n")
-	seqLoader, err := New[testConfig](WithFile(seqFile), WithWatchDebounce(15*time.Millisecond))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = seqLoader.Close() }()
-	if _, err := seqLoader.Load(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	ready := make(chan struct{})
-	seqLoader.watchReady = func() { close(ready) }
-
-	seqCtx, seqCancel := context.WithTimeout(t.Context(), 3*time.Second)
-	defer seqCancel()
-	done := make(chan struct{})
-	var seqGot *testConfig
-	go func() {
-		defer close(done)
-		for ev := range seqLoader.WatchSeq(seqCtx) {
-			if ev.Current != nil && ev.Current.Server.Host == "s2" {
-				seqGot = ev.Current
-				return
-			}
-		}
-	}()
-
-	<-ready
-	writeConfig(t, seqFile, "server:\n  host: s2\n  port: 8081\n")
-	select {
-	case <-done:
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for WatchSeq")
-	}
-	if seqGot == nil || seqGot.Server.Port != 8081 {
-		t.Fatalf("unexpected WatchSeq result: %+v", seqGot)
-	}
 }
 
 func TestConcurrentWatchAndCloseRace(t *testing.T) {
@@ -489,42 +449,13 @@ func TestConcurrentWatchAndCloseRace(t *testing.T) {
 		close(start)
 		wg.Wait()
 	}
-
-	for range 20 {
-		seqFile := filepath.Join(t.TempDir(), "seq-race.yaml")
-		writeConfig(t, seqFile, "server:\n  host: init\n  port: 8080\n")
-		sl, err := New[testConfig](WithFile(seqFile), WithWatchDebounce(5*time.Millisecond))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := sl.Load(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-
-		start := make(chan struct{})
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			<-start
-			for range sl.WatchSeq(t.Context()) {
-				return
-			}
-		})
-		for range 4 {
-			wg.Go(func() {
-				<-start
-				_ = sl.Close()
-			})
-		}
-		close(start)
-		wg.Wait()
-	}
 }
 
-func TestWatchAndWatchSeqCloseInsideCallbackNoDeadlock(t *testing.T) {
+func TestWatchCloseInsideCallbackNoDeadlock(t *testing.T) {
 	baseline := pprof.Lookup("goroutineleak").Count()
 	t.Cleanup(func() { assertNoLeak(t, baseline) })
 
-	// 1. Calling Close() directly inside Watch handler must return without self-deadlock.
+	// Calling Close() directly inside Watch handler must return without self-deadlock.
 	wFile := filepath.Join(t.TempDir(), "watch-self-close.yaml")
 	writeConfig(t, wFile, "server:\n  host: init\n  port: 8080\n")
 	wl, err := New[testConfig](WithFile(wFile), WithWatchDebounce(10*time.Millisecond))
@@ -551,41 +482,6 @@ func TestWatchAndWatchSeqCloseInsideCallbackNoDeadlock(t *testing.T) {
 		_ = wl.Close()
 		t.Fatal("Close inside Watch callback deadlocked")
 	}
-
-	// 2. Calling Close() directly inside WatchSeq loop body must return without self-deadlock.
-	sFile := filepath.Join(t.TempDir(), "seq-self-close.yaml")
-	writeConfig(t, sFile, "server:\n  host: init\n  port: 8080\n")
-	sl, err := New[testConfig](WithFile(sFile), WithWatchDebounce(10*time.Millisecond))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sl.Load(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	ready := make(chan struct{})
-	sl.watchReady = func() { close(ready) }
-
-	seqClosed := make(chan error, 1)
-	seqExited := make(chan struct{})
-	go func() {
-		defer close(seqExited)
-		for range sl.WatchSeq(t.Context()) {
-			seqClosed <- sl.Close()
-		}
-	}()
-
-	<-ready
-	writeConfig(t, sFile, "server:\n  host: updated\n  port: 8082\n")
-	select {
-	case closeErr := <-seqClosed:
-		if closeErr != nil {
-			t.Fatalf("Close inside WatchSeq body failed: %v", closeErr)
-		}
-	case <-time.After(3 * time.Second):
-		_ = sl.Close()
-		t.Fatal("Close inside WatchSeq body deadlocked")
-	}
-	<-seqExited
 }
 
 func awaitEvent[T any](t *testing.T, events <-chan Event[T]) Event[T] {

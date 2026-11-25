@@ -306,3 +306,49 @@ func TestShutdownBeforeRunAndTimeoutPropagation(t *testing.T) {
 		t.Fatalf("Run after early Shutdown = %v, want nil", err)
 	}
 }
+
+type supervisedTestServer struct {
+	done chan struct{}
+	err  error
+}
+
+func (s *supervisedTestServer) Start(context.Context) error { return nil }
+func (s *supervisedTestServer) Stop(context.Context) error  { return nil }
+func (s *supervisedTestServer) Done() <-chan struct{}       { return s.done }
+func (s *supervisedTestServer) Err() error                  { return s.err }
+
+func TestWithServersUnexpectedExitTerminatesAppRun(t *testing.T) {
+	crashErr := errors.New("listener died")
+	srv := &supervisedTestServer{done: make(chan struct{})}
+	var compStopped bool
+	comp := &testComponent{stop: func(context.Context) error { compStopped = true; return nil }}
+
+	application, err := New(
+		WithSignals(),
+		WithComponent(cx.NewKey[*testComponent]("dep"), comp),
+		WithServers(srv),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- application.Run(t.Context()) }()
+
+	// Give Run time to enter Wait, then simulate unexpected server exit.
+	time.Sleep(15 * time.Millisecond)
+	srv.err = crashErr
+	close(srv.done)
+
+	select {
+	case err := <-runDone:
+		if !errors.Is(err, crashErr) {
+			t.Fatalf("Run error = %v, want crashErr", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("app.Run did not exit on supervised server crash")
+	}
+	if !compStopped {
+		t.Fatal("companion component was not stopped on server crash")
+	}
+}

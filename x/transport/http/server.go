@@ -133,6 +133,7 @@ type Server struct {
 	addr     string
 	state    serverState
 	serveErr error
+	done     chan struct{}
 	wg       sync.WaitGroup
 }
 
@@ -230,10 +231,13 @@ func (s *Server) Start(ctx context.Context) error {
 		s.mu.Unlock()
 		return err
 	}
+	done := make(chan struct{})
 	s.addr = lis.Addr().String()
 	s.state = serverRunning
 	s.serveErr = nil
+	s.done = done
 	s.wg.Go(func() {
+		defer close(done)
 		defer lis.Close()
 		var serveErr error
 		if hasTLS {
@@ -334,4 +338,21 @@ func (s *Server) HealthCheck(context.Context) error {
 	default:
 		return errors.New("http: server is not running")
 	}
+}
+
+// Done returns a channel closed when the serve goroutine exits, or nil before Start.
+func (s *Server) Done() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
+}
+
+// Err returns the unexpected Serve error if the server failed.
+func (s *Server) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state == serverFailed {
+		return s.serveErr
+	}
+	return nil
 }

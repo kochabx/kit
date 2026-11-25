@@ -8,7 +8,9 @@ import (
 	"runtime"
 	"runtime/pprof"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,6 +19,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 
+	"github.com/kochabx/kit/app"
 	"github.com/kochabx/kit/fault"
 )
 
@@ -195,5 +198,83 @@ func TestServerCannotRestartAfterStop(t *testing.T) {
 	}
 	if err := srv.HealthCheck(t.Context()); err == nil {
 		t.Fatal("HealthCheck must fail after Stop")
+	}
+}
+
+func TestWithServersGRPCUnexpectedExitPropagatesToAppRun(t *testing.T) {
+	srv := NewServer(WithAddr("127.0.0.1:0"))
+	application, err := app.New(app.WithSignals(), app.WithServers(srv))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- application.Run(t.Context()) }()
+
+	for range 200 {
+		if srv.HealthCheck(t.Context()) == nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if srv.HealthCheck(t.Context()) != nil {
+		_ = srv.Stop(t.Context())
+		t.Fatal("grpc server never started")
+	}
+
+	// Unexpected stop of underlying *grpc.Server without app.Shutdown triggers supervised exit.
+	srv.GRPCServer().Stop()
+
+	select {
+	case err := <-runDone:
+		if err == nil {
+			t.Fatal("expected non-nil error from app.Run when gRPC server exited unexpectedly")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("app.Run did not terminate after gRPC server exited unexpectedly")
+	}
+}
+
+func TestServerCannotRestartAfterUnexpectedExitAndConcurrentStop(t *testing.T) {
+	// 1. After Serve exits unexpectedly without Stop, Start is immediately rejected (no restart window).
+	srv := NewServer(WithAddr("127.0.0.1:0"))
+	if err := srv.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	srv.GRPCServer().Stop()
+	select {
+	case <-srv.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("Done() did not close after Serve exited")
+	}
+	if err := srv.HealthCheck(t.Context()); err == nil {
+		t.Fatal("HealthCheck must fail after Serve exited")
+	}
+	if err := srv.Start(t.Context()); err == nil {
+		_ = srv.Stop(t.Context())
+		t.Fatal("expected Start rejected immediately after Serve exited without Stop")
+	}
+	if err := srv.Stop(t.Context()); err != nil {
+		t.Fatalf("idempotent Stop after Serve exit failed: %v", err)
+	}
+
+	// 2. Concurrent Stop calls converge cleanly without race or panic.
+	srv2 := NewServer(WithAddr("127.0.0.1:0"))
+	if err := srv2.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for range 8 {
+		wg.Go(func() {
+			errs <- srv2.Stop(t.Context())
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Stop error: %v", err)
+		}
 	}
 }

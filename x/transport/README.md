@@ -3,7 +3,7 @@
 服务端传输层实现：
 
 - `github.com/kochabx/kit/x/transport/http` — 标准库 `net/http` Server 生命周期、泛型 JSON `Router`、RFC 9457 `Problem` 响应、内置 Scalar OpenAPI 3.x UI 与 7 个安全中间件
-- `github.com/kochabx/kit/x/transport/http/gin` — Gin 框架适配器（`Adapt` 完整桥接包装后的 `http.ResponseWriter` 状态，`WriteProblem` 直接输出 RFC 9457 错误）
+- `github.com/kochabx/kit/x/transport/http/gin` — Gin 框架适配器（`Adapt` 完整桥接包装后的 `http.ResponseWriter` 状态，`Fail` 直接输出 RFC 9457 错误）
 - `github.com/kochabx/kit/x/transport/http/prom` — Prometheus HTTP 指标中间件与 `/metrics` Handler
 - `github.com/kochabx/kit/x/transport/grpc` — gRPC Server（`otelgrpc`、`slog` 日志、Panic 恢复、`*fault.Error` 状态映射、`grpc/health/v1` 与 reflection）
 
@@ -40,7 +40,7 @@ srv := kithttp.NewServer(handler,
 
 内置中间件与辅助函数：
 - 中间件：`Recovery`、`Logger`、`CORS`、`CSRF`、`Auth`、`Permission`、`Crypto`、`Signature`
-- 响应与健康检查：`WriteJSON`、`WriteOK`、`WriteProblem`、`HealthHandler`
+- 响应与健康检查：`JSON`、`OK`、`Fail`、`HealthHandler`
 
 ---
 
@@ -52,7 +52,7 @@ r.Use(kitgin.Adapt(kithttp.Recovery(logger.Slog())))
 r.Use(kitgin.Adapt(kithttp.Logger(logger.Slog())))
 ```
 
-`Adapt` 通过双向桥接完整保留下游/上游对 `http.ResponseWriter`（如响应状态码、流式 `Flush`、Context 注入）的变更；handler 内可直接调用 `kitgin.WriteProblem(c, err)` 输出 RFC 9457 错误。
+`Adapt` 通过双向桥接完整保留下游/上游对 `http.ResponseWriter`（如响应状态码、流式 `Flush`、Context 注入）的变更；handler 内可直接调用 `kitgin.Fail(c, err)` 输出 RFC 9457 错误。
 
 ---
 

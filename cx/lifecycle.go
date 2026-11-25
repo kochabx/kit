@@ -21,22 +21,27 @@ func (c *Container) Start(ctx context.Context) error {
 		return fmt.Errorf("%w: cannot start from %s", ErrInvalidState, state)
 	}
 	c.resetInstancesLocked()
+	round := &buildRound{
+		open:    true,
+		flights: make(map[string]*buildFlight),
+		waiting: make(map[string]map[string]int),
+	}
 	c.buildGen++
-	c.buildOpen = true
+	c.round = round
 	c.state = StateStarting
 	keys := slices.Clone(c.keys)
 	c.mu.Unlock()
 
 	fail := func(startErr error) error {
 		c.mu.Lock()
-		c.buildOpen = false
+		round.open = false
 		c.mu.Unlock()
 
 		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.rollbackTimeout)
 		defer cancel()
 		waited := make(chan struct{})
 		go func() {
-			c.activeBuilds.Wait()
+			round.wg.Wait()
 			close(waited)
 		}()
 		select {
@@ -48,6 +53,7 @@ func (c *Container) Start(ctx context.Context) error {
 
 		c.mu.Lock()
 		c.buildGen++
+		c.round = nil
 		if rollbackErr != nil {
 			c.state = StateStopFailed
 		} else {
@@ -94,7 +100,8 @@ func (c *Container) Start(ctx context.Context) error {
 	}
 
 	c.mu.Lock()
-	c.buildOpen = false
+	round.open = false
+	c.round = nil
 	c.state = StateRunning
 	sup := newSupervisor(ctx, c.supervisedComponentsLocked())
 	c.supervisor = sup
@@ -103,7 +110,7 @@ func (c *Container) Start(ctx context.Context) error {
 	for _, hook := range c.onStarted {
 		if err := hook(ctx); err != nil {
 			c.mu.Lock()
-			if c.state != StateRunning {
+			if c.state != StateRunning || c.supervisor != sup {
 				c.mu.Unlock()
 				return fmt.Errorf("onStarted: %w", err)
 			}

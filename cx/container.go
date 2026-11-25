@@ -21,20 +21,25 @@ type provider struct {
 	value        any
 	built        bool
 	owned        bool
-	flight       *buildFlight
 	declaredDeps []string
 	deps         []string
 }
 
+type buildRound struct {
+	open    bool
+	wg      sync.WaitGroup
+	flights map[string]*buildFlight
+	waiting map[string]map[string]int
+}
+
 type containerCore struct {
-	mu           sync.RWMutex
-	providers    map[string]*provider
-	keys         []string
-	buildOrder   []string
-	state        State
-	buildGen     uint64
-	buildOpen    bool
-	activeBuilds sync.WaitGroup
+	mu         sync.RWMutex
+	providers  map[string]*provider
+	keys       []string
+	buildOrder []string
+	state      State
+	buildGen   uint64
+	round      *buildRound
 
 	shutdownTimeout      time.Duration
 	componentStopTimeout time.Duration
@@ -50,7 +55,6 @@ type containerCore struct {
 	onStopDone     []bool
 	supervisor     *supervisor
 	healthFlights  map[string]*healthFlight
-	waiting        map[string]map[string]int
 }
 
 // Container manages typed component registration, dependency ordering, lifecycle
@@ -153,7 +157,6 @@ func New(opts ...Option) *Container {
 			rollbackTimeout:      30 * time.Second,
 			healthTimeout:        10 * time.Second,
 			healthFlights:        make(map[string]*healthFlight),
-			waiting:              make(map[string]map[string]int),
 		},
 	}
 	for _, opt := range opts {
@@ -357,5 +360,5 @@ func (c *Container) resetInstancesLocked() {
 	c.onStoppingDone = make([]bool, len(c.onStopping))
 	c.onStopDone = make([]bool, len(c.onStop))
 	c.healthFlights = make(map[string]*healthFlight)
-	c.waiting = make(map[string]map[string]int)
+	c.round = nil
 }

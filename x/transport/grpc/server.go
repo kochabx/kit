@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"runtime/debug"
@@ -100,17 +101,30 @@ func WithShutdownTimeout(timeout time.Duration) Option {
 	}
 }
 
+type serverState uint8
+
+const (
+	serverIdle serverState = iota
+	serverRunning
+	serverStopping
+	serverFailed
+	serverClosed
+)
+
 // Server wraps *grpc.Server with Lazy startup, Start/Stop, Run(ctx) for cx.Runner,
 // and HealthCheck integration.
 type Server struct {
-	srv     *grpc.Server
-	health  *health.Server
-	opts    options
-	mu      sync.Mutex
-	addr    string
-	running bool
-	stopped bool
-	wg      sync.WaitGroup
+	srv      *grpc.Server
+	health   *health.Server
+	opts     options
+	mu       sync.Mutex
+	addr     string
+	state    serverState
+	serveErr error
+	done     chan struct{}
+	stopOnce sync.Once
+	stopDone chan struct{}
+	wg       sync.WaitGroup
 }
 
 // NewServer constructs a gRPC Server (does not bind any socket until Start or Run).
@@ -196,10 +210,11 @@ func (s *Server) Start(ctx context.Context) error {
 func (s *Server) startListen(ctx context.Context) (<-chan error, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.stopped {
+	switch s.state {
+	case serverIdle:
+	case serverClosed, serverFailed:
 		return nil, errors.New("grpc: server already stopped")
-	}
-	if s.running {
+	default:
 		return nil, errors.New("grpc: server already started")
 	}
 	var lc net.ListenConfig
@@ -210,14 +225,30 @@ func (s *Server) startListen(ctx context.Context) (<-chan error, error) {
 	if s.health != nil {
 		s.health.Resume()
 	}
+	done := make(chan struct{})
 	s.addr = lis.Addr().String()
-	s.running = true
+	s.state = serverRunning
+	s.serveErr = nil
+	s.done = done
+	s.stopDone = make(chan struct{})
 
 	serveErr := make(chan error, 1)
 	s.wg.Go(func() {
+		defer close(done)
 		err := s.srv.Serve(lis)
+		s.mu.Lock()
 		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			s.serveErr = err
+			if s.state == serverRunning {
+				s.state = serverFailed
+			}
+			s.mu.Unlock()
 			s.opts.logger.Error("grpc server serve failed", slog.Any("error", err))
+		} else {
+			if s.state == serverRunning {
+				s.state = serverClosed
+			}
+			s.mu.Unlock()
 		}
 		serveErr <- err
 	})
@@ -227,36 +258,56 @@ func (s *Server) startListen(ctx context.Context) (<-chan error, error) {
 
 // Stop gracefully stops the gRPC server, falling back to hard Stop if ctx expires.
 func (s *Server) Stop(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	s.mu.Lock()
-	if !s.running {
+	switch s.state {
+	case serverIdle:
 		s.mu.Unlock()
 		return nil
+	case serverClosed:
+		s.mu.Unlock()
+		s.wg.Wait()
+		return nil
+	case serverFailed:
+		s.mu.Unlock()
+		s.wg.Wait()
+		s.mu.Lock()
+		if s.state == serverFailed {
+			s.state = serverClosed
+		}
+		s.mu.Unlock()
+		return nil
+	case serverRunning:
+		s.state = serverStopping
+	case serverStopping:
 	}
+	stopDone := s.stopDone
 	s.mu.Unlock()
 
-	if s.health != nil {
-		s.health.Shutdown()
-	}
-
-	stopped := make(chan struct{})
-	go func() {
-		s.srv.GracefulStop()
-		close(stopped)
-	}()
+	s.stopOnce.Do(func() {
+		if s.health != nil {
+			s.health.Shutdown()
+		}
+		go func() {
+			s.srv.GracefulStop()
+			close(stopDone)
+		}()
+	})
 
 	var ctxErr error
 	select {
-	case <-stopped:
+	case <-stopDone:
 	case <-ctx.Done():
 		ctxErr = ctx.Err()
 		s.srv.Stop()
-		<-stopped
+		<-stopDone
 	}
 	s.wg.Wait()
 
 	s.mu.Lock()
-	s.running = false
-	s.stopped = true
+	s.state = serverClosed
 	s.mu.Unlock()
 	return ctxErr
 }
@@ -271,8 +322,9 @@ func (s *Server) Run(ctx context.Context) error {
 	case err := <-serveErr:
 		s.wg.Wait()
 		s.mu.Lock()
-		s.running = false
-		s.stopped = true
+		if s.state == serverRunning {
+			s.state = serverClosed
+		}
 		s.mu.Unlock()
 		return err
 	case <-ctx.Done():
@@ -287,10 +339,30 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) HealthCheck(context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running {
+	switch s.state {
+	case serverRunning:
+		return nil
+	case serverFailed:
+		return fmt.Errorf("grpc: server failed: %w", s.serveErr)
+	case serverStopping:
+		return errors.New("grpc: server is shutting down")
+	default:
 		return errors.New("grpc: server is not running")
 	}
-	return nil
+}
+
+// Done returns a channel closed when Serve exits, or nil before Start/Run.
+func (s *Server) Done() <-chan struct{} {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.done
+}
+
+// Err returns the unexpected Serve error if Serve exited with a failure.
+func (s *Server) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.serveErr
 }
 
 func faultUnaryInterceptor() grpc.UnaryServerInterceptor {

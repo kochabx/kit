@@ -3,7 +3,6 @@ package config
 import (
 	"context"
 	"fmt"
-	"iter"
 	"path/filepath"
 	"reflect"
 	"time"
@@ -24,7 +23,6 @@ func (c *Config[T]) Watch(ctx context.Context, handler func(Event[T])) error {
 	if err != nil {
 		return err
 	}
-
 	fw, err := c.openFileWatcher(filename)
 	if err != nil {
 		c.watching.Store(false)
@@ -63,71 +61,6 @@ func (c *Config[T]) Watch(ctx context.Context, handler func(Event[T])) error {
 		}
 	}()
 	return nil
-}
-
-// WatchSeq returns an iterator yielding validated reload events until ctx
-// is canceled, Close is called, or the caller breaks out of iteration.
-func (c *Config[T]) WatchSeq(ctx context.Context) iter.Seq[Event[T]] {
-	return func(yield func(Event[T]) bool) {
-		if ctx == nil {
-			yield(Event[T]{Previous: c.Current(), Err: fmt.Errorf("%w: nil context", ErrInvalidOptions)})
-			return
-		}
-		filename, err := c.acquireWatch()
-		if err != nil {
-			yield(Event[T]{Previous: c.Current(), Err: err})
-			return
-		}
-		watchCtx, cancel := context.WithCancel(ctx)
-		eventsCh := make(chan Event[T])
-		watcherDone := make(chan struct{})
-		c.mu.Lock()
-		if c.closed.Load() {
-			c.mu.Unlock()
-			cancel()
-			c.watching.Store(false)
-			yield(Event[T]{Previous: c.Current(), Err: ErrClosed})
-			return
-		}
-		c.watchCancel = cancel
-		c.watchWG.Go(func() {
-			defer close(watcherDone)
-			defer close(eventsCh)
-			defer c.finishWatch(cancel)
-
-			fw, err := c.openFileWatcher(filename)
-			if err != nil {
-				select {
-				case eventsCh <- Event[T]{Previous: c.Current(), Err: err}:
-				case <-watchCtx.Done():
-				}
-				return
-			}
-			defer func() { _ = fw.close() }()
-			if c.watchReady != nil {
-				c.watchReady()
-			}
-			c.runFileWatchLoop(watchCtx, fw, func(ev Event[T]) bool {
-				select {
-				case eventsCh <- ev:
-					return true
-				case <-watchCtx.Done():
-					return false
-				}
-			})
-		})
-		c.mu.Unlock()
-
-		defer func() {
-			cancel()
-			<-watcherDone
-		}()
-		for ev := range eventsCh {
-			if !yield(ev) {
-				return
-			}
-		}
-	}
 }
 
 func (c *Config[T]) acquireWatch() (string, error) {

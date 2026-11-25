@@ -88,11 +88,11 @@ func (rt *Router) Handle[Req, Resp any](
 			limited := http.MaxBytesReader(w, r.Body, rt.maxBody)
 			if err := json.UnmarshalRead(limited, &req); err != nil {
 				if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-					WriteProblem(w, r, fault.BadRequest("request body too large").WithStatus(http.StatusRequestEntityTooLarge).WithCause(err))
+					Fail(w, r, fault.BadRequest("request body too large").WithStatus(http.StatusRequestEntityTooLarge).WithCause(err))
 					return
 				}
 				if !errors.Is(err, io.EOF) {
-					WriteProblem(w, r, fault.InvalidArgument("invalid request body").WithCause(err))
+					Fail(w, r, fault.InvalidArgument("invalid request body").WithCause(err))
 					return
 				}
 			}
@@ -100,18 +100,18 @@ func (rt *Router) Handle[Req, Resp any](
 		if rt.validator != nil {
 			if err := rt.validator.Struct(r.Context(), &req); err != nil {
 				if _, isFault := fault.From(err); isFault {
-					WriteProblem(w, r, err)
+					Fail(w, r, err)
 				} else {
-					WriteProblem(w, r, fault.InvalidArgument("validation failed").WithCause(err))
+					Fail(w, r, fault.InvalidArgument("validation failed").WithCause(err))
 				}
 				return
 			}
 		}
 		resp, err := fn(r.Context(), req)
 		if err != nil {
-			WriteProblem(w, r, err)
+			Fail(w, r, err)
 			return
 		}
-		WriteOK(w, resp)
+		OK(w, resp)
 	})
 }

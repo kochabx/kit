@@ -18,8 +18,8 @@ type Envelope[T any] struct {
 	Data    T      `json:"data,omitzero"`
 }
 
-// WriteJSON serializes v as JSON with nosniff headers.
-func WriteJSON(w http.ResponseWriter, status int, v any) {
+// JSON serializes v as JSON with nosniff headers.
+func JSON(w http.ResponseWriter, status int, v any) {
 	body, err := json.Marshal(v)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/problem+json; charset=utf-8")
@@ -34,14 +34,14 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 	_, _ = w.Write(body)
 }
 
-// WriteOK writes an Envelope[T] with HTTP 200 OK.
-func WriteOK[T any](w http.ResponseWriter, data T) {
-	WriteJSON(w, http.StatusOK, Envelope[T]{Code: "OK", Data: data})
+// OK writes an Envelope[T] with HTTP 200 OK.
+func OK[T any](w http.ResponseWriter, data T) {
+	JSON(w, http.StatusOK, Envelope[T]{Code: "OK", Data: data})
 }
 
-// WriteProblem writes an RFC 9457 Problem Details payload derived from err.
+// Fail writes an RFC 9457 Problem Details payload derived from err.
 // Non-fault errors are masked as generic internal errors to avoid leaking internals.
-func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
+func Fail(w http.ResponseWriter, r *http.Request, err error) {
 	f, ok := errors.AsType[*fault.Error](err)
 	if !ok {
 		f = fault.Internal("internal server error")
@@ -69,18 +69,18 @@ func WriteProblem(w http.ResponseWriter, r *http.Request, err error) {
 func HealthHandler(c *cx.Container) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if c == nil {
-			WriteJSON(w, http.StatusOK, map[string]any{"healthy": true})
+			JSON(w, http.StatusOK, map[string]any{"healthy": true})
 			return
 		}
 		report, err := c.HealthCheck(r.Context())
 		if err != nil {
-			WriteProblem(w, r, fault.ServiceUnavailable("health check unavailable").WithCause(err))
+			Fail(w, r, fault.ServiceUnavailable("health check unavailable").WithCause(err))
 			return
 		}
 		status := http.StatusOK
 		if !report.Healthy {
 			status = http.StatusServiceUnavailable
 		}
-		WriteJSON(w, status, report)
+		JSON(w, status, report)
 	}
 }

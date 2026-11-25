@@ -230,7 +230,7 @@ func Recovery(logger *slog.Logger) func(http.Handler) http.Handler {
 					slog.String("stack", string(debug.Stack())),
 				)
 				if !rec.Written() {
-					WriteProblem(rec, r, fault.Internal("internal server error"))
+					Fail(rec, r, fault.Internal("internal server error"))
 				}
 			}()
 			next.ServeHTTP(rec, r)
@@ -259,7 +259,7 @@ func CSRF(trustedOrigins ...string) (func(http.Handler) http.Handler, error) {
 		}
 	}
 	p.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		WriteProblem(w, r, fault.Forbidden("cross-origin request denied"))
+		Fail(w, r, fault.Forbidden("cross-origin request denied"))
 	}))
 	return p.Handler, nil
 }
@@ -289,15 +289,15 @@ func Auth(auth Authenticator, skip ...SkipConfig) func(http.Handler) http.Handle
 				return
 			}
 			if auth == nil {
-				WriteProblem(w, r, fault.Unauthorized("authenticator not configured"))
+				Fail(w, r, fault.Unauthorized("authenticator not configured"))
 				return
 			}
 			ctx, err := auth.Authenticate(r.Context(), r)
 			if err != nil {
 				if _, isFault := fault.From(err); isFault {
-					WriteProblem(w, r, err)
+					Fail(w, r, err)
 				} else {
-					WriteProblem(w, r, fault.Unauthorized("unauthorized").WithCause(err))
+					Fail(w, r, fault.Unauthorized("unauthorized").WithCause(err))
 				}
 				return
 			}
@@ -329,14 +329,14 @@ func Permission(authz Authorizer, skip ...SkipConfig) func(http.Handler) http.Ha
 				return
 			}
 			if authz == nil {
-				WriteProblem(w, r, fault.Forbidden("authorizer not configured"))
+				Fail(w, r, fault.Forbidden("authorizer not configured"))
 				return
 			}
 			if err := authz.Authorize(r.Context(), r); err != nil {
 				if _, isFault := fault.From(err); isFault {
-					WriteProblem(w, r, err)
+					Fail(w, r, err)
 				} else {
-					WriteProblem(w, r, fault.Forbidden("forbidden").WithCause(err))
+					Fail(w, r, fault.Forbidden("forbidden").WithCause(err))
 				}
 				return
 			}
@@ -457,7 +457,7 @@ func Signature(cfg SignatureConfig) func(http.Handler) http.Handler {
 				return
 			}
 			if cfg.Verifier == nil {
-				WriteProblem(w, r, fault.BadRequest("signature verifier not configured"))
+				Fail(w, r, fault.BadRequest("signature verifier not configured"))
 				return
 			}
 			var body []byte
@@ -465,7 +465,7 @@ func Signature(cfg SignatureConfig) func(http.Handler) http.Handler {
 				var err error
 				body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, cfg.MaxBodyBytes))
 				if err != nil {
-					WriteProblem(w, r, fault.BadRequest("read request body failed").WithCause(err))
+					Fail(w, r, fault.BadRequest("read request body failed").WithCause(err))
 					return
 				}
 				r.Body = io.NopCloser(bytes.NewReader(body))
@@ -473,21 +473,21 @@ func Signature(cfg SignatureConfig) func(http.Handler) http.Handler {
 
 			replayKey, replayTTL, err := cfg.Verifier.Verify(r.Context(), r, body)
 			if err != nil {
-				WriteProblem(w, r, fault.BadRequest("invalid signature").WithCause(err))
+				Fail(w, r, fault.BadRequest("invalid signature").WithCause(err))
 				return
 			}
 			if cfg.ReplayStore != nil && replayKey != "" && replayTTL > 0 {
 				firstUse, err := cfg.ReplayStore.Use(r.Context(), replayKey, replayTTL)
 				if err != nil {
 					if _, ok := errors.AsType[*fault.Error](err); ok {
-						WriteProblem(w, r, err)
+						Fail(w, r, err)
 						return
 					}
-					WriteProblem(w, r, fault.Internal("replay check failed").WithCause(err))
+					Fail(w, r, fault.Internal("replay check failed").WithCause(err))
 					return
 				}
 				if !firstUse {
-					WriteProblem(w, r, fault.BadRequest("signature replay detected"))
+					Fail(w, r, fault.BadRequest("signature replay detected"))
 					return
 				}
 			}
@@ -522,7 +522,7 @@ func Crypto(dec Decryptor, maxBodyBytes int64, skip ...SkipConfig) func(http.Han
 				return
 			}
 			if dec == nil {
-				WriteProblem(w, r, fault.BadRequest("decryptor not configured"))
+				Fail(w, r, fault.BadRequest("decryptor not configured"))
 				return
 			}
 			if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
@@ -531,7 +531,7 @@ func Crypto(dec Decryptor, maxBodyBytes int64, skip ...SkipConfig) func(http.Han
 			}
 			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 			if err != nil {
-				WriteProblem(w, r, fault.BadRequest("read encrypted body failed").WithCause(err))
+				Fail(w, r, fault.BadRequest("read encrypted body failed").WithCause(err))
 				return
 			}
 			if len(raw) == 0 {
@@ -540,7 +540,7 @@ func Crypto(dec Decryptor, maxBodyBytes int64, skip ...SkipConfig) func(http.Han
 			}
 			plain, err := dec.Decrypt(r.Context(), raw)
 			if err != nil {
-				WriteProblem(w, r, fault.BadRequest("decrypt request body failed").WithCause(err))
+				Fail(w, r, fault.BadRequest("decrypt request body failed").WithCause(err))
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(plain))

@@ -102,8 +102,8 @@ func Adapt(mw func(http.Handler) http.Handler) gin.HandlerFunc {
 	}
 }
 
-// WriteProblem writes an RFC 9457 fault Problem response via Gin and aborts the chain.
-func WriteProblem(c *gin.Context, err error) {
-	kithttp.WriteProblem(c.Writer, c.Request, err)
+// Fail writes an RFC 9457 fault Problem response via Gin and aborts the chain.
+func Fail(c *gin.Context, err error) {
+	kithttp.Fail(c.Writer, c.Request, err)
 	c.Abort()
 }

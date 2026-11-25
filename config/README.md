@@ -48,7 +48,7 @@ loader, err := config.New[AppConfig](config.WithViper(v))
 监听前必须成功调用 `Load`：
 
 ```go
-// 1. 回调模式（基于可关闭的 fsnotify，随 ctx 取消或 Close() 自动回收全部协程）
+// 基于可关闭的 fsnotify，随 ctx 取消或 Close() 自动回收全部协程
 err := loader.Watch(ctx, func(event config.Event[AppConfig]) {
 	if event.Err != nil {
 		slog.Error("reload configuration", slog.Any("err", event.Err))
@@ -56,14 +56,6 @@ err := loader.Watch(ctx, func(event config.Event[AppConfig]) {
 	}
 	applyReloadableSettings(event.Current)
 })
-
-// 2. Go 1.23+ 迭代器模式
-for event := range loader.WatchSeq(ctx) {
-	if event.Err != nil {
-		continue
-	}
-	applyReloadableSettings(event.Current)
-}
 ```
 
 - 文件事件经过可配置 debounce（默认 `50ms`，可通过 `WithWatchDebounce` 调整）并自动处理符号链接切换；

@@ -96,23 +96,13 @@ func (c *Client) Stop(ctx context.Context) error {
 	}
 	flushErr := c.kgo.Flush(ctx)
 	c.kgo.LeaveGroupContext(ctx)
-
-	done := make(chan error, 1)
-	go func() {
-		done <- c.Close()
-	}()
-	select {
-	case closeErr := <-done:
-		return errors.Join(flushErr, closeErr)
-	case <-ctx.Done():
-		if errors.Is(flushErr, ctx.Err()) {
-			return flushErr
-		}
-		return errors.Join(flushErr, ctx.Err())
-	}
+	return errors.Join(flushErr, c.Close())
 }
 
 // Close closes the Kafka client idempotently.
 func (c *Client) Close() error {
+	if c.closeOnce == nil {
+		return nil
+	}
 	return c.closeOnce()
 }
