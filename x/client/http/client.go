@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -108,7 +109,6 @@ type Client struct {
 	baseURL   string
 	resty     *resty.Client
 	transport *http.Transport
-	logger    *slog.Logger
 }
 
 // New constructs a Client configured with OTel transport, retries, and cloned TLS state.
@@ -138,7 +138,11 @@ func New(opts ...Option) (*Client, error) {
 		}
 		rt = transport
 	} else if o.tlsConfig != nil {
-		return nil, fmt.Errorf("http client: cannot apply TLSConfig to non-*http.Transport DefaultTransport (%T)", http.DefaultTransport)
+		if http.DefaultTransport != nil {
+			return nil, fmt.Errorf("http client: cannot apply TLSConfig to non-*http.Transport DefaultTransport (%T)", http.DefaultTransport)
+		}
+		transport = &http.Transport{TLSClientConfig: o.tlsConfig}
+		rt = transport
 	} else if http.DefaultTransport != nil {
 		rt = http.DefaultTransport
 	} else {
@@ -175,11 +179,14 @@ func New(opts ...Option) (*Client, error) {
 		rc.SetAuthToken(o.bearerToken)
 	}
 
-	return &Client{baseURL: o.baseURL, resty: rc, transport: transport, logger: o.logger}, nil
+	return &Client{baseURL: o.baseURL, resty: rc, transport: transport}, nil
 }
 
 // Resty returns the underlying *resty.Client for custom streaming or multipart requests.
 func (c *Client) Resty() *resty.Client { return c.resty }
+
+// Stop closes idle connections held by the underlying HTTP transport and Resty client.
+func (c *Client) Stop(context.Context) error { return c.Close() }
 
 // Close closes idle connections held by the underlying HTTP transport and Resty client.
 func (c *Client) Close() error {
@@ -191,22 +198,22 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Get[Resp any](ctx context.Context, path string, opts ...RequestOption) (Resp, error) {
-	return doJSON[struct{}, Resp](c, ctx, http.MethodGet, path, nil, false, opts...)
+	return doJSON[Resp](c, ctx, http.MethodGet, path, nil, false, opts...)
 }
 
 func (c *Client) Post[Req, Resp any](ctx context.Context, path string, body Req, opts ...RequestOption) (Resp, error) {
-	return doJSON[Req, Resp](c, ctx, http.MethodPost, path, body, true, opts...)
+	return doJSON[Resp](c, ctx, http.MethodPost, path, body, true, opts...)
 }
 
 func (c *Client) Put[Req, Resp any](ctx context.Context, path string, body Req, opts ...RequestOption) (Resp, error) {
-	return doJSON[Req, Resp](c, ctx, http.MethodPut, path, body, true, opts...)
+	return doJSON[Resp](c, ctx, http.MethodPut, path, body, true, opts...)
 }
 
 func (c *Client) Delete[Resp any](ctx context.Context, path string, opts ...RequestOption) (Resp, error) {
-	return doJSON[struct{}, Resp](c, ctx, http.MethodDelete, path, nil, false, opts...)
+	return doJSON[Resp](c, ctx, http.MethodDelete, path, nil, false, opts...)
 }
 
-func doJSON[Req, Resp any](
+func doJSON[Resp any](
 	c *Client,
 	ctx context.Context,
 	method, path string,
@@ -236,6 +243,12 @@ func doJSON[Req, Resp any](
 
 	resp, err := r.Execute(method, target)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return zero, fault.Canceled("http request canceled").WithCause(err)
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return zero, fault.DeadlineExceeded("http request timed out").WithCause(err)
+		}
 		return zero, fault.BadGateway("http request failed").WithCause(err)
 	}
 	if resp.StatusCode() >= http.StatusBadRequest {

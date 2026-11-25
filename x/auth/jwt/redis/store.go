@@ -172,10 +172,20 @@ func WithKeyPrefix(prefix string) Option {
 	}
 }
 
+// WithClock overrides the clock used for revocation expiry checks.
+func WithClock(clock func() time.Time) Option {
+	return func(s *Store) {
+		if clock != nil {
+			s.clock = clock
+		}
+	}
+}
+
 // Store implements kitjwt.SessionStore backed by redis.UniversalClient and EVALSHA scripts.
 type Store struct {
 	rdb    goredis.UniversalClient
 	prefix string
+	clock  func() time.Time
 }
 
 var _ kitjwt.SessionStore = (*Store)(nil)
@@ -188,6 +198,7 @@ func New(rdb goredis.UniversalClient, opts ...Option) (*Store, error) {
 	s := &Store{
 		rdb:    rdb,
 		prefix: "jwt:",
+		clock:  func() time.Time { return time.Now().UTC() },
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -365,7 +376,7 @@ func (s *Store) IsRevoked(ctx context.Context, subject, _, sessionID string) (bo
 		}
 		return false, err
 	}
-	return session.IsRevokedAt(time.Now().UTC()), nil
+	return session.IsRevokedAt(s.clock().UTC()), nil
 }
 
 // ListSessions streams all stored sessions for subject via Go iter.Seq2.
@@ -375,7 +386,7 @@ func (s *Store) ListSessions(ctx context.Context, subject string) iter.Seq2[kitj
 			yield(kitjwt.Session{}, errors.New("jwt/redis: subject is required"))
 			return
 		}
-		_, index, _ := s.authKeys(subject, "")
+		_, index, prefix := s.authKeys(subject, "")
 		ids, err := s.rdb.ZRange(ctx, index, 0, -1).Result()
 		if err != nil {
 			yield(kitjwt.Session{}, fmt.Errorf("jwt/redis: list session ids: %w", err))
@@ -386,7 +397,7 @@ func (s *Store) ListSessions(ctx context.Context, subject string) iter.Seq2[kitj
 		}
 		keys := make([]string, len(ids))
 		for i, id := range ids {
-			keys[i], _, _ = s.authKeys(subject, id)
+			keys[i] = prefix + id
 		}
 		values, err := s.rdb.MGet(ctx, keys...).Result()
 		if err != nil {

@@ -67,7 +67,7 @@ pub, priv, err := sign.GenerateEd25519()
 sigBytes, err := sign.SignEd25519(priv, msg)
 err = sign.VerifyEd25519(pub, msg, sigBytes)
 
-pqPriv, err := sign.GenerateMLDSA(sign.MLDSA44)
+pqPriv, err := sign.GenerateMLDSA(sign.MLDSA44())
 pqSig, err := sign.SignMLDSA(pqPriv, msg, "ctx")
 err = sign.VerifyMLDSA(pqPriv.PublicKey(), msg, pqSig, "ctx")
 ```

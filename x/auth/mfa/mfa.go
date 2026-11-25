@@ -64,12 +64,15 @@ type MemoryReplayStore struct {
 
 // NewMemoryReplayStore constructs a MemoryReplayStore capped at maxEntries (default 10000).
 func NewMemoryReplayStore(maxEntries int, clock ...func() time.Time) *MemoryReplayStore {
-	clk := func() time.Time { return time.Now().UTC() }
+	clk := time.Now
 	if len(clock) > 0 && clock[0] != nil {
 		clk = clock[0]
 	}
+	if maxEntries <= 0 {
+		maxEntries = defaultReplayMaxCap
+	}
 	return &MemoryReplayStore{
-		maxCap:  cmp.Or(maxEntries, defaultReplayMaxCap),
+		maxCap:  maxEntries,
 		clock:   clk,
 		entries: make(map[string]time.Time),
 	}
@@ -78,7 +81,7 @@ func NewMemoryReplayStore(maxEntries int, clock ...func() time.Time) *MemoryRepl
 // Use records key for ttl and returns true if key has not been used yet.
 // Unexpired entries are never evicted early; if capacity is full of live entries, ErrReplayStoreFull is returned.
 func (s *MemoryReplayStore) Use(_ context.Context, key string, ttl time.Duration) (bool, error) {
-	if key == "" || ttl <= 0 {
+	if s == nil || key == "" || ttl <= 0 {
 		return false, fault.InvalidArgument("invalid replay key or ttl")
 	}
 
@@ -125,6 +128,21 @@ type TOTPConfig struct {
 	Clock      func() time.Time `json:"-"`
 }
 
+func validateOTPParams(digits otp.Digits, alg otp.Algorithm) []error {
+	var errs []error
+	switch digits {
+	case 0, otp.DigitsSix, otp.DigitsEight:
+	default:
+		errs = append(errs, errors.New("mfa: digits must be 6 or 8"))
+	}
+	switch alg {
+	case 0, otp.AlgorithmSHA256, otp.AlgorithmSHA512:
+	default:
+		errs = append(errs, errors.New("mfa: unsupported OTP algorithm"))
+	}
+	return errs
+}
+
 // Validate checks TOTPConfig.
 func (c TOTPConfig) Validate() error {
 	var errs []error
@@ -134,6 +152,7 @@ func (c TOTPConfig) Validate() error {
 	if c.Skew > 10 {
 		errs = append(errs, errors.New("mfa: skew cannot exceed 10"))
 	}
+	errs = append(errs, validateOTPParams(c.Digits, c.Algorithm)...)
 	return errors.Join(errs...)
 }
 
@@ -292,10 +311,12 @@ type HOTPConfig struct {
 
 // Validate checks HOTPConfig.
 func (c HOTPConfig) Validate() error {
+	var errs []error
 	if c.Issuer == "" {
-		return errors.New("mfa: issuer is required")
+		errs = append(errs, errors.New("mfa: issuer is required"))
 	}
-	return nil
+	errs = append(errs, validateOTPParams(c.Digits, c.Algorithm)...)
+	return errors.Join(errs...)
 }
 
 // HOTP generates and verifies HMAC-based One-Time Passwords.

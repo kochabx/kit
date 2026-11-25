@@ -97,4 +97,24 @@ func TestKeyringRotation(t *testing.T) {
 	if err != nil || string(pt2) != "secret-v2" {
 		t.Fatalf("Open new key = (%q, %v)", pt2, err)
 	}
+	if err := kr.Remove("v2"); err == nil {
+		t.Fatal("expected removing primary key to fail")
+	}
+	if err := kr.Remove("v1"); err != nil {
+		t.Fatalf("Remove(v1) failed: %v", err)
+	}
+
+	// Clearing PrivateKey.Bytes() output must not corrupt the live key.
+	raw, err := k2.Bytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	clear(raw)
+	envAfterClear, err := kr.Seal([]byte("after-clear"), []byte("aad"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pt, err := kr.Open(envAfterClear, []byte("aad")); err != nil || string(pt) != "after-clear" {
+		t.Fatalf("clearing PrivateKey.Bytes() corrupted live key: (%q, %v)", pt, err)
+	}
 }

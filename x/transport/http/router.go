@@ -97,7 +97,7 @@ func (rt *Router) Handle[Req, Resp any](
 				}
 			}
 		}
-		if rt.validator != nil {
+		if !isEmptyReq && rt.validator != nil {
 			if err := rt.validator.Struct(r.Context(), &req); err != nil {
 				if _, isFault := fault.From(err); isFault {
 					Fail(w, r, err)

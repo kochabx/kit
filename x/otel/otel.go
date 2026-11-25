@@ -3,7 +3,6 @@
 package otel
 
 import (
-	"cmp"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -201,11 +200,11 @@ func (p *Provider) Start(ctx context.Context) error {
 
 func (p *Provider) buildResource() *resource.Resource {
 	resAttrs := []attribute.KeyValue{semconv.ServiceName(p.cfg.ServiceName)}
-	if v := cmp.Or(p.cfg.ServiceVersion, ""); v != "" {
-		resAttrs = append(resAttrs, semconv.ServiceVersion(v))
+	if p.cfg.ServiceVersion != "" {
+		resAttrs = append(resAttrs, semconv.ServiceVersion(p.cfg.ServiceVersion))
 	}
-	if env := cmp.Or(p.cfg.Environment, ""); env != "" {
-		resAttrs = append(resAttrs, attribute.String("deployment.environment.name", env))
+	if p.cfg.Environment != "" {
+		resAttrs = append(resAttrs, attribute.String("deployment.environment.name", p.cfg.Environment))
 	}
 	resAttrs = append(resAttrs, p.attrs...)
 	return resource.NewWithAttributes(semconv.SchemaURL, resAttrs...)
@@ -226,7 +225,7 @@ func (p *Provider) initTracerProvider(ctx context.Context, res *resource.Resourc
 		traceOpts = append(traceOpts, otlptracehttp.WithHeaders(p.cfg.Headers))
 	}
 	if p.cfg.TLS != nil {
-		traceOpts = append(traceOpts, otlptracehttp.WithTLSClientConfig(p.cfg.TLS))
+		traceOpts = append(traceOpts, otlptracehttp.WithTLSClientConfig(p.cfg.TLS.Clone()))
 	}
 	exp, err := otlptracehttp.New(ctx, traceOpts...)
 	if err != nil {
@@ -255,7 +254,7 @@ func (p *Provider) initMeterProvider(ctx context.Context, res *resource.Resource
 		metricOpts = append(metricOpts, otlpmetrichttp.WithHeaders(p.cfg.Headers))
 	}
 	if p.cfg.TLS != nil {
-		metricOpts = append(metricOpts, otlpmetrichttp.WithTLSClientConfig(p.cfg.TLS))
+		metricOpts = append(metricOpts, otlpmetrichttp.WithTLSClientConfig(p.cfg.TLS.Clone()))
 	}
 	exp, err := otlpmetrichttp.New(ctx, metricOpts...)
 	if err != nil {
@@ -284,15 +283,33 @@ func (p *Provider) Stop(ctx context.Context) error {
 	tp, mp := p.tracer, p.meter
 	p.mu.Unlock()
 
-	var errs []error
+	var (
+		errs      []error
+		tpCleared bool
+		mpCleared bool
+	)
 	if tp != nil {
-		errs = append(errs, tp.Shutdown(ctx))
+		if tpErr := tp.Shutdown(ctx); tpErr != nil {
+			errs = append(errs, tpErr)
+		} else {
+			tpCleared = true
+		}
 	}
 	if mp != nil {
-		errs = append(errs, mp.Shutdown(ctx))
+		if mpErr := mp.Shutdown(ctx); mpErr != nil {
+			errs = append(errs, mpErr)
+		} else {
+			mpCleared = true
+		}
 	}
 	err := errors.Join(errs...)
 	p.mu.Lock()
+	if tpCleared {
+		p.tracer = nil
+	}
+	if mpCleared {
+		p.meter = nil
+	}
 	if err == nil {
 		p.closed = true
 	}

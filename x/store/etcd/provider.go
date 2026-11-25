@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
+
+// ErrKeyNotFound indicates the requested etcd configuration key does not exist.
+var ErrKeyNotFound = errors.New("etcd: config key not found")
 
 // ConfigProvider reads raw configuration payloads stored at an etcd key.
 type ConfigProvider struct {
@@ -38,7 +40,7 @@ func (p *ConfigProvider) ReadBytes(ctx context.Context) ([]byte, error) {
 
 	timeout := defaultOperationTimeout
 	if p.client.dialTimeout > 0 {
-		timeout = time.Duration(p.client.dialTimeout)
+		timeout = p.client.dialTimeout
 	}
 	opCtx, cancel := context.WithTimeout(cmp.Or(ctx, context.Background()), timeout)
 	defer cancel()
@@ -48,7 +50,7 @@ func (p *ConfigProvider) ReadBytes(ctx context.Context) ([]byte, error) {
 		return nil, fmt.Errorf("etcd: read config key %q: %w", p.key, err)
 	}
 	if len(resp.Kvs) == 0 {
-		return nil, fmt.Errorf("etcd: config key %q not found", p.key)
+		return nil, fmt.Errorf("%w: %s", ErrKeyNotFound, p.key)
 	}
 	return resp.Kvs[0].Value, nil
 }

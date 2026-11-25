@@ -210,10 +210,22 @@ func TestHealthCheckCancelsBlockedPing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := srv.HealthCheck(t.Context()); err == nil {
+		t.Fatal("expected HealthCheck to fail before Server.Start")
+	}
+	if err := srv.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	defer func() { _ = srv.Stop(t.Context()) }()
 
 	sched, err := kitasynq.NewScheduler(kitasynq.Config{RedisOpt: opt})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sched.HealthCheck(t.Context()); err == nil {
+		t.Fatal("expected HealthCheck to fail before Scheduler.Start")
+	}
+	if err := sched.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = sched.Stop(t.Context()) }()

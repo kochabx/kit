@@ -790,3 +790,68 @@ func TestStartRollbackTimeoutThenRestartIsolatesOldConstructor(t *testing.T) {
 		t.Fatalf("after final Stop: r2Stops=%d state=%v, want 1 and StateStopped", r2Stops.Load(), c.State())
 	}
 }
+
+type panickingHealthChecker struct{}
+
+func (panickingHealthChecker) HealthCheck(context.Context) error {
+	panic("health probe boom")
+}
+
+func TestStartContextCancelDoesNotKillRunnerAndHealthPanicRecovered(t *testing.T) {
+	c := New()
+	var exited atomic.Bool
+	runner := MustRunner(RunnerFunc(func(ctx context.Context) error {
+		<-ctx.Done()
+		exited.Store(true)
+		return ctx.Err()
+	}))
+	c.MustSupply(NewKey[*Runner]("worker"), runner)
+	c.MustSupply(NewKey[panickingHealthChecker]("probe"), panickingHealthChecker{})
+
+	startCtx, startCancel := context.WithTimeout(t.Context(), time.Second)
+	if err := c.Start(startCtx); err != nil {
+		startCancel()
+		t.Fatal(err)
+	}
+	startCancel()
+
+	// Canceling Start's context must NOT cancel Runner or supervisor.
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- c.Wait(t.Context()) }()
+	select {
+	case err := <-waitDone:
+		t.Fatalf("Wait returned early after Start ctx cancel: %v", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	if exited.Load() {
+		t.Fatal("Runner exited when Start ctx was canceled")
+	}
+
+	// Panicking HealthChecker must turn into HealthUnhealthy error rather than crashing.
+	report, err := c.HealthCheck(t.Context())
+	if err != nil {
+		t.Fatalf("HealthCheck returned error: %v", err)
+	}
+	if report.Healthy {
+		t.Fatal("expected unhealthy report for panicking health checker")
+	}
+	var foundPanic bool
+	for _, ch := range report.Components {
+		if ch.Key == "probe" && ch.Status == HealthUnhealthy && ch.Error != nil && strings.Contains(ch.Error.Error(), "health check panic") {
+			foundPanic = true
+		}
+	}
+	if !foundPanic {
+		t.Fatalf("expected recovered panic error in health report, got %+v", report.Components)
+	}
+
+	if err := c.Stop(t.Context()); err != nil {
+		t.Fatalf("Stop failed: %v", err)
+	}
+	if err := <-waitDone; err != nil {
+		t.Fatalf("Wait after Stop = %v, want nil", err)
+	}
+	if !exited.Load() {
+		t.Fatal("Runner did not exit on Stop")
+	}
+}

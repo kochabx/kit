@@ -1,6 +1,6 @@
 # x/store
 
-基础设施存储与消息客户端合集，均提供结构化 `Config` 校验、延迟建连、`Start` / `HealthCheck` / `Stop` 生命周期管理，以及 `slog` 日志与 OpenTelemetry 链路追踪：
+基础设施存储与消息客户端合集，均提供结构化 `Config` 校验、延迟建连、`Start` / `HealthCheck` / `Stop` 生命周期管理；除 `etcd` 外均内置 OpenTelemetry 链路追踪（`pg`、`gorm`、`redis`、`kafka` 支持 `slog` 查询/驱动日志）：
 
 - `github.com/kochabx/kit/x/store/pg` — 原生 `jackc/pgx/v5/pgxpool` 连接池（零 ORM 依赖，直接兼容 `sqlc`）
 - `github.com/kochabx/kit/x/store/gorm` + `{postgres,mysql,sqlite}` — GORM 公共壳与三种方言驱动（SQLite 采用纯 Go `modernc.org/sqlite`，零 CGO）

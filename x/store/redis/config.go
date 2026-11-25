@@ -53,7 +53,7 @@ func (c Config) Validate() error {
 	if c.Cluster && c.MasterName != "" {
 		errs = append(errs, errors.New("redis: cluster mode and master_name (sentinel) are mutually exclusive"))
 	}
-	if c.Cluster && c.DB > 0 {
+	if (c.Cluster || (len(c.Addrs) > 1 && c.MasterName == "")) && c.DB > 0 {
 		errs = append(errs, errors.New("redis: db must be 0 in cluster mode"))
 	}
 	if c.DB < 0 {

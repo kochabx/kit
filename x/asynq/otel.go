@@ -2,6 +2,7 @@ package asynq
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/hibiken/asynq"
@@ -47,21 +48,41 @@ func OTelMiddleware(opts ...OTelOption) asynq.MiddlewareFunc {
 		}
 	}
 
-	return func(next asynq.Handler) asynq.Handler {
-		return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) (err error) {
-			tp := cfg.tp
-			if tp == nil {
-				tp = otel.GetTracerProvider()
-			}
-			mp := cfg.mp
-			if mp == nil {
-				mp = otel.GetMeterProvider()
-			}
-			tracer := tp.Tracer("github.com/kochabx/kit/x/asynq")
-			durHist, _ := mp.Meter("github.com/kochabx/kit/x/asynq").Float64Histogram(
+	var (
+		mu      sync.Mutex
+		lastTP  trace.TracerProvider
+		lastMP  metric.MeterProvider
+		tracer  trace.Tracer
+		durHist metric.Float64Histogram
+	)
+	instruments := func() (trace.Tracer, metric.Float64Histogram) {
+		tp := cfg.tp
+		if tp == nil {
+			tp = otel.GetTracerProvider()
+		}
+		mp := cfg.mp
+		if mp == nil {
+			mp = otel.GetMeterProvider()
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if tracer == nil || tp != lastTP {
+			lastTP = tp
+			tracer = tp.Tracer("github.com/kochabx/kit/x/asynq")
+		}
+		if durHist == nil || mp != lastMP {
+			lastMP = mp
+			durHist, _ = mp.Meter("github.com/kochabx/kit/x/asynq").Float64Histogram(
 				"asynq.process.duration",
 				metric.WithUnit("s"),
 			)
+		}
+		return tracer, durHist
+	}
+
+	return func(next asynq.Handler) asynq.Handler {
+		return asynq.HandlerFunc(func(ctx context.Context, task *asynq.Task) (err error) {
+			tr, hist := instruments()
 
 			attrs := []attribute.KeyValue{
 				attribute.String("asynq.task.type", task.Type()),
@@ -76,7 +97,7 @@ func OTelMiddleware(opts ...OTelOption) asynq.MiddlewareFunc {
 				attrs = append(attrs, attribute.Int("asynq.retry_count", retry))
 			}
 
-			ctx, span := tracer.Start(ctx, "asynq.process "+task.Type(),
+			ctx, span := tr.Start(ctx, "asynq.process "+task.Type(),
 				trace.WithSpanKind(trace.SpanKindConsumer),
 				trace.WithAttributes(attrs...),
 			)
@@ -84,8 +105,8 @@ func OTelMiddleware(opts ...OTelOption) asynq.MiddlewareFunc {
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					span.SetStatus(codes.Error, "task handler panicked")
-					if durHist != nil {
-						durHist.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(
+					if hist != nil {
+						hist.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(
 							attribute.String("asynq.task.type", task.Type()),
 							attribute.String("asynq.status", "panic"),
 						))
@@ -99,8 +120,8 @@ func OTelMiddleware(opts ...OTelOption) asynq.MiddlewareFunc {
 					span.RecordError(err)
 					span.SetStatus(codes.Error, err.Error())
 				}
-				if durHist != nil {
-					durHist.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(
+				if hist != nil {
+					hist.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(
 						attribute.String("asynq.task.type", task.Type()),
 						statusAttr,
 					))

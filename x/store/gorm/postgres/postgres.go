@@ -136,7 +136,11 @@ func BuildConnConfig(cfg Config) (*pgx.ConnConfig, error) {
 	if cfg.PreferSimpleProtocol {
 		connCfg.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	}
-	connCfg.ConnectTimeout = cmp.Or(cfg.ConnectTimeout, defaultConnectTimeout)
+	if cfg.ConnectTimeout > 0 {
+		connCfg.ConnectTimeout = cfg.ConnectTimeout
+	} else if cfg.DSN == "" {
+		connCfg.ConnectTimeout = defaultConnectTimeout
+	}
 	return connCfg, nil
 }
 

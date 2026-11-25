@@ -289,7 +289,7 @@ func Auth(auth Authenticator, skip ...SkipConfig) func(http.Handler) http.Handle
 				return
 			}
 			if auth == nil {
-				Fail(w, r, fault.Unauthorized("authenticator not configured"))
+				Fail(w, r, fault.Internal("authenticator not configured"))
 				return
 			}
 			ctx, err := auth.Authenticate(r.Context(), r)
@@ -329,7 +329,7 @@ func Permission(authz Authorizer, skip ...SkipConfig) func(http.Handler) http.Ha
 				return
 			}
 			if authz == nil {
-				Fail(w, r, fault.Forbidden("authorizer not configured"))
+				Fail(w, r, fault.Internal("authorizer not configured"))
 				return
 			}
 			if err := authz.Authorize(r.Context(), r); err != nil {
@@ -457,7 +457,7 @@ func Signature(cfg SignatureConfig) func(http.Handler) http.Handler {
 				return
 			}
 			if cfg.Verifier == nil {
-				Fail(w, r, fault.BadRequest("signature verifier not configured"))
+				Fail(w, r, fault.Internal("signature verifier not configured"))
 				return
 			}
 			var body []byte
@@ -465,6 +465,10 @@ func Signature(cfg SignatureConfig) func(http.Handler) http.Handler {
 				var err error
 				body, err = io.ReadAll(http.MaxBytesReader(w, r.Body, cfg.MaxBodyBytes))
 				if err != nil {
+					if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+						Fail(w, r, fault.BadRequest("request body too large").WithStatus(http.StatusRequestEntityTooLarge).WithCause(err))
+						return
+					}
 					Fail(w, r, fault.BadRequest("read request body failed").WithCause(err))
 					return
 				}
@@ -473,13 +477,17 @@ func Signature(cfg SignatureConfig) func(http.Handler) http.Handler {
 
 			replayKey, replayTTL, err := cfg.Verifier.Verify(r.Context(), r, body)
 			if err != nil {
-				Fail(w, r, fault.BadRequest("invalid signature").WithCause(err))
+				if _, isFault := fault.From(err); isFault {
+					Fail(w, r, err)
+				} else {
+					Fail(w, r, fault.BadRequest("invalid signature").WithCause(err))
+				}
 				return
 			}
 			if cfg.ReplayStore != nil && replayKey != "" && replayTTL > 0 {
 				firstUse, err := cfg.ReplayStore.Use(r.Context(), replayKey, replayTTL)
 				if err != nil {
-					if _, ok := errors.AsType[*fault.Error](err); ok {
+					if _, ok := fault.From(err); ok {
 						Fail(w, r, err)
 						return
 					}
@@ -522,7 +530,7 @@ func Crypto(dec Decryptor, maxBodyBytes int64, skip ...SkipConfig) func(http.Han
 				return
 			}
 			if dec == nil {
-				Fail(w, r, fault.BadRequest("decryptor not configured"))
+				Fail(w, r, fault.Internal("decryptor not configured"))
 				return
 			}
 			if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
@@ -531,6 +539,10 @@ func Crypto(dec Decryptor, maxBodyBytes int64, skip ...SkipConfig) func(http.Han
 			}
 			raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 			if err != nil {
+				if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+					Fail(w, r, fault.BadRequest("request body too large").WithStatus(http.StatusRequestEntityTooLarge).WithCause(err))
+					return
+				}
 				Fail(w, r, fault.BadRequest("read encrypted body failed").WithCause(err))
 				return
 			}
@@ -540,7 +552,11 @@ func Crypto(dec Decryptor, maxBodyBytes int64, skip ...SkipConfig) func(http.Han
 			}
 			plain, err := dec.Decrypt(r.Context(), raw)
 			if err != nil {
-				Fail(w, r, fault.BadRequest("decrypt request body failed").WithCause(err))
+				if _, isFault := fault.From(err); isFault {
+					Fail(w, r, err)
+				} else {
+					Fail(w, r, fault.BadRequest("decrypt request body failed").WithCause(err))
+				}
 				return
 			}
 			r.Body = io.NopCloser(bytes.NewReader(plain))

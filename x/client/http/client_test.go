@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/json/v2"
 	"net/http"
@@ -96,5 +97,32 @@ func TestNewWithWrappedDefaultTransport(t *testing.T) {
 
 	if _, err := New(WithTLSConfig(&tls.Config{})); err == nil {
 		t.Fatal("expected error when applying WithTLSConfig to non-*http.Transport DefaultTransport")
+	}
+}
+
+func TestContextCancellationMappedToFaultCodes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	c, err := New(WithBaseURL(srv.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+
+	cancelCtx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = c.Get[map[string]string](cancelCtx, "/slow")
+	if f, ok := fault.From(err); !ok || f.Code() != fault.CodeCanceled {
+		t.Fatalf("canceled request fault = %v, want %s", err, fault.CodeCanceled)
+	}
+
+	deadlineCtx, deadlineCancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer deadlineCancel()
+	_, err = c.Get[map[string]string](deadlineCtx, "/slow")
+	if f, ok := fault.From(err); !ok || f.Code() != fault.CodeDeadlineExceeded {
+		t.Fatalf("timed out request fault = %v, want %s", err, fault.CodeDeadlineExceeded)
 	}
 }

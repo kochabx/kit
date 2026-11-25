@@ -103,7 +103,7 @@ func (c *Container) Start(ctx context.Context) error {
 	round.open = false
 	c.round = nil
 	c.state = StateRunning
-	sup := newSupervisor(ctx, c.supervisedComponentsLocked())
+	sup := newSupervisor(context.WithoutCancel(ctx), c.supervisedComponentsLocked())
 	c.supervisor = sup
 	c.mu.Unlock()
 

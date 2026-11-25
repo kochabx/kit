@@ -115,7 +115,7 @@ report, err := c.HealthCheck(ctx)
 | `Wait` | 监督后台任务退出 |
 | `WithHealthTimeout(d)` | 配置单个组件健康检查超时预算 |
 | `HealthCheck` | 状态化并发健康检查 |
-| `Metrics()` | 返回容器状态、组件数、启停耗时与错误统计 |
+| `Metrics()` | 返回容器状态与组件数量（`ContainerMetrics`） |
 | `DependencyGraph` | 返回最近一次构建的依赖图 |
 
 ## 与应用组合

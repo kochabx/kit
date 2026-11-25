@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -37,6 +38,7 @@ func WithKgoOpts(opts ...kgo.Opt) Option {
 // Client manages a lazy franz-go Kafka client.
 type Client struct {
 	kgo       *kgo.Client
+	stopped   atomic.Bool
 	closeOnce func() error
 }
 
@@ -91,12 +93,15 @@ func (c *Client) HealthCheck(ctx context.Context) error {
 
 // Stop flushes buffered producer records up to ctx deadline and closes the client idempotently.
 func (c *Client) Stop(ctx context.Context) error {
+	if !c.stopped.CompareAndSwap(false, true) {
+		return nil
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	flushErr := c.kgo.Flush(ctx)
-	c.kgo.LeaveGroupContext(ctx)
-	return errors.Join(flushErr, c.Close())
+	leaveErr := c.kgo.LeaveGroupContext(ctx)
+	return errors.Join(flushErr, leaveErr, c.Close())
 }
 
 // Close closes the Kafka client idempotently.

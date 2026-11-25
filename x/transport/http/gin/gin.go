@@ -87,13 +87,15 @@ func Adapt(mw func(http.Handler) http.Handler) gin.HandlerFunc {
 			c.Request = r
 			bw := &bridgedWriter{ResponseWriter: origWriter, rw: w}
 			c.Writer = bw
+			completed := false
 			defer func() {
-				if bw.status != 0 && !bw.written {
+				if completed && bw.status != 0 && !bw.written {
 					bw.WriteHeaderNow()
 				}
 				c.Writer = origWriter
 			}()
 			c.Next()
+			completed = true
 		})).ServeHTTP(origWriter, origReq)
 
 		if !nextCalled {

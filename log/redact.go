@@ -367,9 +367,25 @@ func redactAttr(plan *redactPlan, attr slog.Attr) slog.Attr {
 	return slog.Attr{Key: attr.Key, Value: val}
 }
 
+func isNilError(err error) bool {
+	if err == nil {
+		return true
+	}
+	rv := reflect.ValueOf(err)
+	switch rv.Kind() {
+	case reflect.Pointer, reflect.Interface, reflect.Slice, reflect.Map, reflect.Func, reflect.Chan:
+		return rv.IsNil()
+	default:
+		return false
+	}
+}
+
 func valueString(val slog.Value) string {
 	if val.Kind() == slog.KindAny {
-		if err, ok := val.Any().(error); ok && err != nil {
+		if err, ok := val.Any().(error); ok {
+			if isNilError(err) {
+				return "<nil>"
+			}
 			return err.Error()
 		}
 	}
@@ -379,6 +395,7 @@ func valueString(val slog.Value) string {
 const (
 	maxRedactDepth   = 16
 	redactedMaxDepth = "[REDACTED:MAX_DEPTH]"
+	redactedCycle    = "[REDACTED:CYCLE]"
 )
 
 func redactAnyValue(plan *redactPlan, v any, depth int, seen map[uintptr]struct{}) (any, bool) {
@@ -393,7 +410,7 @@ func redactAnyValue(plan *redactPlan, v any, depth int, seen map[uintptr]struct{
 		masked := redactString(plan, x)
 		return masked, masked != x
 	case error:
-		if x == nil {
+		if isNilError(x) {
 			return v, false
 		}
 		s := x.Error()
@@ -437,7 +454,7 @@ func redactAnyValue(plan *redactPlan, v any, depth int, seen map[uintptr]struct{
 		}
 		return v, false
 	case map[string]any:
-		return redactMapStringAny(plan, x, depth+1, seen)
+		return redactMapStringAny(plan, x, depth, seen)
 	case []any:
 		var out []any
 		for i, elem := range x {
@@ -502,7 +519,7 @@ func redactReflect(plan *redactPlan, orig any, rv reflect.Value, depth int, seen
 				seen = make(map[uintptr]struct{}, 4)
 			}
 			if _, ok := seen[ptr]; ok {
-				return orig, false
+				return redactedCycle, true
 			}
 			seen[ptr] = struct{}{}
 			defer delete(seen, ptr)

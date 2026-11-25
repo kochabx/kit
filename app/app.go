@@ -66,7 +66,8 @@ func New(options ...Option) (*Application, error) {
 	if container == nil {
 		b.cxOpts = append(b.cxOpts,
 			cx.WithShutdownTimeout(b.shutdownTimeout),
-			cx.WithComponentStopTimeout(b.shutdownTimeout),
+			cx.WithComponentStopTimeout(min(b.shutdownTimeout, 10*time.Second)),
+			cx.WithRollbackTimeout(b.shutdownTimeout),
 		)
 		container = cx.New(b.cxOpts...)
 		for _, component := range b.components {
@@ -81,8 +82,12 @@ func New(options ...Option) (*Application, error) {
 			}
 		}
 		for index, runnable := range b.runnables {
+			runner, err := cx.NewRunner(runnable)
+			if err != nil {
+				return nil, fmt.Errorf("%w: create runnable: %w", ErrInvalidOption, err)
+			}
 			key := cx.NewKey[*cx.Runner](fmt.Sprintf("app:runnable:%d", index))
-			if err := container.Supply(key, cx.MustRunner(runnable)); err != nil {
+			if err := container.Supply(key, runner); err != nil {
 				return nil, fmt.Errorf("%w: register runnable: %w", ErrInvalidOption, err)
 			}
 		}

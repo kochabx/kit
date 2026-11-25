@@ -99,8 +99,16 @@ func (c Config) BuildClientOptions() (*options.ClientOptions, error) {
 		opts.SetTLSConfig(c.TLS.Clone())
 	}
 
-	opts.SetConnectTimeout(cmp.Or(c.ConnectTimeout, defaultConnectTimeout))
-	opts.SetServerSelectionTimeout(cmp.Or(c.ServerSelectionTimeout, defaultServerSelectionTimeout))
+	if c.ConnectTimeout > 0 {
+		opts.SetConnectTimeout(c.ConnectTimeout)
+	} else if opts.ConnectTimeout == nil {
+		opts.SetConnectTimeout(defaultConnectTimeout)
+	}
+	if c.ServerSelectionTimeout > 0 {
+		opts.SetServerSelectionTimeout(c.ServerSelectionTimeout)
+	} else if opts.ServerSelectionTimeout == nil {
+		opts.SetServerSelectionTimeout(defaultServerSelectionTimeout)
+	}
 
 	if c.EnableTracing == nil || *c.EnableTracing {
 		opts.SetMonitor(otelmongo.NewMonitor())

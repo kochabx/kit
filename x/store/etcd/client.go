@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.uber.org/zap"
@@ -46,7 +47,7 @@ type Client struct {
 	etcd        *clientv3.Client
 	endpoints   []string
 	logger      *slog.Logger
-	dialTimeout int64
+	dialTimeout time.Duration
 	statusProbe func(ctx context.Context, ep string) error
 	closeOnce   func() error
 }
@@ -89,6 +90,8 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 	if o.configHook != nil {
 		o.configHook(&v3Cfg)
 	}
+	eps = slices.Clone(v3Cfg.Endpoints)
+	dialTimeout = v3Cfg.DialTimeout
 
 	cli, err := clientv3.New(v3Cfg)
 	if err != nil {
@@ -99,7 +102,7 @@ func New(cfg Config, opts ...Option) (*Client, error) {
 		etcd:        cli,
 		endpoints:   eps,
 		logger:      o.logger,
-		dialTimeout: int64(dialTimeout),
+		dialTimeout: dialTimeout,
 		statusProbe: func(ctx context.Context, ep string) error {
 			resp, err := cli.Status(ctx, ep)
 			if err != nil {

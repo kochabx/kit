@@ -151,3 +151,21 @@ func TestMemoryReplayStoreCapacityExhaustionAndExpiryRecovery(t *testing.T) {
 		t.Fatalf("k3 after k1 expiry = (%v, %v), want (true, nil)", ok, err)
 	}
 }
+
+func TestConfigValidationRejectsUnsafeAlgorithmAndDigits(t *testing.T) {
+	t.Parallel()
+
+	if _, err := mfa.NewTOTP(mfa.TOTPConfig{Issuer: "App", Digits: 99}); err == nil {
+		t.Fatal("expected error for invalid TOTP digits")
+	}
+	if _, err := mfa.NewTOTP(mfa.TOTPConfig{Issuer: "App", Algorithm: 99}); err == nil {
+		t.Fatal("expected error for invalid TOTP algorithm")
+	}
+	if _, err := mfa.NewHOTP(mfa.HOTPConfig{Issuer: "App", Digits: -1}); err == nil {
+		t.Fatal("expected error for negative HOTP digits")
+	}
+	negStore := mfa.NewMemoryReplayStore(-5)
+	if ok, err := negStore.Use(t.Context(), "k1", time.Second); err != nil || !ok {
+		t.Fatalf("negative maxEntries store Use = (%v, %v), want (true, nil)", ok, err)
+	}
+}

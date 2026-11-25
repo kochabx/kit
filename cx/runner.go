@@ -70,7 +70,7 @@ func (r *Runner) Start(ctx context.Context) error {
 	if r.current != nil {
 		return ErrRunnerAlreadyStarted
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	exec := &execution{
 		cancel: cancel,
 		done:   make(chan struct{}),

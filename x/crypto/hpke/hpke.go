@@ -3,6 +3,7 @@
 package hpke
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	stdhpke "crypto/hpke"
 	"errors"
@@ -86,7 +87,11 @@ func (sk *PrivateKey) KeyID() string { return sk.kid }
 func (sk *PrivateKey) Suite() Suite  { return sk.suite }
 
 func (sk *PrivateKey) Bytes() ([]byte, error) {
-	return sk.key.Bytes()
+	raw, err := sk.key.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	return slices.Clone(raw), nil
 }
 
 func (sk *PrivateKey) PublicKey() *PublicKey {
@@ -200,7 +205,7 @@ type Keyring struct {
 
 // NewKeyring constructs a Keyring with primary set as the initial sealing and opening key.
 func NewKeyring(primary *PrivateKey) (*Keyring, error) {
-	if primary == nil || primary.key == nil {
+	if primary == nil || primary.key == nil || !primary.suite.valid() || primary.kid == "" || len(primary.kid) > maxKeyIDLen {
 		return nil, ErrInvalidKey
 	}
 	kr := &Keyring{
@@ -214,7 +219,7 @@ func NewKeyring(primary *PrivateKey) (*Keyring, error) {
 }
 
 func (kr *Keyring) AddPrivateKey(priv *PrivateKey) error {
-	if priv == nil || priv.key == nil {
+	if priv == nil || priv.key == nil || !priv.suite.valid() || priv.kid == "" || len(priv.kid) > maxKeyIDLen {
 		return ErrInvalidKey
 	}
 	kr.mu.Lock()
@@ -225,12 +230,27 @@ func (kr *Keyring) AddPrivateKey(priv *PrivateKey) error {
 }
 
 func (kr *Keyring) AddPublicKey(pub *PublicKey) error {
-	if pub == nil || pub.key == nil {
+	if pub == nil || pub.key == nil || !pub.suite.valid() || pub.kid == "" || len(pub.kid) > maxKeyIDLen {
 		return ErrInvalidKey
 	}
 	kr.mu.Lock()
 	defer kr.mu.Unlock()
+	if existingPriv, exists := kr.privs[pub.kid]; exists && !bytes.Equal(existingPriv.PublicKey().Bytes(), pub.Bytes()) {
+		return fmt.Errorf("%w: public key %q conflicts with registered private key", ErrInvalidKey, pub.kid)
+	}
 	kr.pubs[pub.kid] = pub
+	return nil
+}
+
+// Remove deletes a retired key from the keyring. Rejects removing the primary key.
+func (kr *Keyring) Remove(kid string) error {
+	kr.mu.Lock()
+	defer kr.mu.Unlock()
+	if kid == kr.primary {
+		return fmt.Errorf("%w: cannot remove primary key %q", ErrInvalidKey, kid)
+	}
+	delete(kr.privs, kid)
+	delete(kr.pubs, kid)
 	return nil
 }
 

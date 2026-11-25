@@ -7,12 +7,13 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"sync/atomic"
 
 	"github.com/hibiken/asynq"
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// Option configures Client, Server, and Scheduler wrappers.
+// Option configures Server and Scheduler wrappers.
 type Option func(*runtimeOptions)
 
 type runtimeOptions struct {
@@ -119,7 +120,6 @@ func pingRedis(ctx context.Context, pinger goredis.UniversalClient, fallback fun
 type Client struct {
 	client    *asynq.Client
 	pinger    goredis.UniversalClient
-	shared    bool
 	closeOnce func() error
 }
 
@@ -138,7 +138,6 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{
 		client: ac,
 		pinger: rc,
-		shared: !owned,
 		closeOnce: sync.OnceValue(func() error {
 			if rc != nil {
 				if owned {
@@ -168,12 +167,19 @@ func (c *Client) Stop(context.Context) error { return c.Close() }
 // Close closes owned Redis connections (no-op when sharing an external UniversalClient).
 func (c *Client) Close() error { return c.closeOnce() }
 
+const (
+	stateIdle uint32 = iota
+	stateRunning
+	stateStopped
+)
+
 // Server is a cx-compatible wrapper exposing a native *asynq.Server.
 type Server struct {
 	server     *asynq.Server
 	handler    asynq.Handler
 	pinger     goredis.UniversalClient
 	ownedRedis goredis.UniversalClient
+	state      atomic.Uint32
 	stopOnce   sync.Once
 	stopDone   chan struct{}
 	stopErr    error
@@ -220,12 +226,19 @@ func (s *Server) Server() *asynq.Server { return s.server }
 
 // Start launches the worker server asynchronously.
 func (s *Server) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("asynq: nil context")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.state.Load() == stateStopped {
+		return errors.New("asynq: server is stopped")
 	}
 	if err := s.server.Start(s.handler); err != nil {
 		return fmt.Errorf("asynq: start server: %w", err)
 	}
+	s.state.Store(stateRunning)
 	return nil
 }
 
@@ -243,6 +256,7 @@ func (s *Server) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	s.state.Store(stateStopped)
 	s.stopOnce.Do(func() {
 		go func() {
 			s.server.Shutdown()
@@ -260,8 +274,14 @@ func (s *Server) Stop(ctx context.Context) error {
 	}
 }
 
-// HealthCheck pings the backing Redis connection.
+// HealthCheck verifies the server is running and pings the backing Redis connection.
 func (s *Server) HealthCheck(ctx context.Context) error {
+	switch s.state.Load() {
+	case stateIdle:
+		return errors.New("asynq: server is not started")
+	case stateStopped:
+		return errors.New("asynq: server is stopped")
+	}
 	return pingRedis(ctx, s.pinger, s.server.Ping)
 }
 
@@ -270,6 +290,7 @@ type Scheduler struct {
 	scheduler  *asynq.Scheduler
 	pinger     goredis.UniversalClient
 	ownedRedis goredis.UniversalClient
+	state      atomic.Uint32
 	stopOnce   sync.Once
 	stopDone   chan struct{}
 	stopErr    error
@@ -308,12 +329,19 @@ func (s *Scheduler) Scheduler() *asynq.Scheduler { return s.scheduler }
 
 // Start launches the scheduler asynchronously.
 func (s *Scheduler) Start(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("asynq: nil context")
+	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if s.state.Load() == stateStopped {
+		return errors.New("asynq: scheduler is stopped")
 	}
 	if err := s.scheduler.Start(); err != nil {
 		return fmt.Errorf("asynq: start scheduler: %w", err)
 	}
+	s.state.Store(stateRunning)
 	return nil
 }
 
@@ -331,6 +359,7 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	s.state.Store(stateStopped)
 	s.stopOnce.Do(func() {
 		go func() {
 			s.scheduler.Shutdown()
@@ -348,7 +377,13 @@ func (s *Scheduler) Stop(ctx context.Context) error {
 	}
 }
 
-// HealthCheck pings the backing Redis connection.
+// HealthCheck verifies the scheduler is running and pings the backing Redis connection.
 func (s *Scheduler) HealthCheck(ctx context.Context) error {
+	switch s.state.Load() {
+	case stateIdle:
+		return errors.New("asynq: scheduler is not started")
+	case stateStopped:
+		return errors.New("asynq: scheduler is stopped")
+	}
 	return pingRedis(ctx, s.pinger, s.scheduler.Ping)
 }

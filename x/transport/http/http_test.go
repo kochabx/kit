@@ -580,3 +580,61 @@ func TestServerStopTimeoutRetryUntilDrained(t *testing.T) {
 		t.Fatal("HealthCheck must fail after Stop")
 	}
 }
+
+type failHealthComponent struct{}
+
+func (failHealthComponent) HealthCheck(context.Context) error {
+	return errors.New("db dial refused")
+}
+
+func TestHealthHandlerJSONSchemaAndNormalizedPaths(t *testing.T) {
+	c := cx.New()
+	c.MustSupply(cx.NewKey[failHealthComponent]("db"), failHealthComponent{})
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Stop(t.Context()) }()
+
+	// Missing leading '/' on healthPath and OpenAPI paths must not panic or mis-mount host routes.
+	srv := NewServer(nil,
+		WithAddr("127.0.0.1:0"),
+		WithHealthEndpoint("healthz", c),
+		WithOpenAPI(OpenAPIConfig{
+			UIPath:   "docs",
+			SpecPath: "openapi.json",
+			Spec:     []byte(`{"openapi":"3.1.0"}`),
+		}),
+	)
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("health status = %d, want 503", rec.Code)
+	}
+	var payload struct {
+		Healthy    bool `json:"healthy"`
+		Components []struct {
+			Key    string `json:"key"`
+			Status string `json:"status"`
+			Error  string `json:"error"`
+		} `json:"components"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("decode health JSON failed: %v (%s)", err, rec.Body.String())
+	}
+	if payload.Healthy || len(payload.Components) != 1 || payload.Components[0].Status != "unhealthy" || !strings.Contains(payload.Components[0].Error, "db dial refused") {
+		t.Fatalf("unexpected health JSON payload: %+v (%s)", payload, rec.Body.String())
+	}
+
+	specRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(specRec, httptest.NewRequest(http.MethodGet, "/openapi.json", nil))
+	if specRec.Code != http.StatusOK {
+		t.Fatalf("normalized SpecPath status = %d, want 200", specRec.Code)
+	}
+
+	uiRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(uiRec, httptest.NewRequest(http.MethodGet, "/docs/", nil))
+	if uiRec.Code != http.StatusOK {
+		t.Fatalf("normalized UIPath status = %d, want 200", uiRec.Code)
+	}
+}

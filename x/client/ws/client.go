@@ -93,7 +93,9 @@ func WithReconnect(enabled bool, initial, maxInterval time.Duration, maxRetries 
 		if maxInterval > 0 {
 			o.maxBackoff = maxInterval
 		}
-		o.maxRetries = maxRetries
+		if maxRetries >= 0 {
+			o.maxRetries = maxRetries
+		}
 	}
 }
 
@@ -116,6 +118,7 @@ type Client struct {
 	conn       *websocket.Conn
 	connCancel context.CancelFunc
 	closed     atomic.Bool
+	closedCh   chan struct{}
 	wg         sync.WaitGroup
 	closeOnce  func() error
 }
@@ -142,16 +145,23 @@ func New(targetURL string, opts ...Option) (*Client, error) {
 
 	dialOpts := &websocket.DialOptions{HTTPHeader: o.headers}
 	if o.tlsConfig != nil {
-		base, ok := http.DefaultTransport.(*http.Transport)
-		if !ok || base == nil {
+		if base, ok := http.DefaultTransport.(*http.Transport); ok && base != nil {
+			tr := base.Clone()
+			tr.TLSClientConfig = o.tlsConfig
+			dialOpts.HTTPClient = &http.Client{Transport: tr}
+		} else if http.DefaultTransport != nil {
 			return nil, fmt.Errorf("ws: cannot apply TLSConfig to non-*http.Transport DefaultTransport (%T)", http.DefaultTransport)
+		} else {
+			dialOpts.HTTPClient = &http.Client{Transport: &http.Transport{TLSClientConfig: o.tlsConfig}}
 		}
-		tr := base.Clone()
-		tr.TLSClientConfig = o.tlsConfig
-		dialOpts.HTTPClient = &http.Client{Transport: tr}
 	}
 
-	c := &Client{targetURL: targetURL, opts: o, dialOpts: dialOpts}
+	c := &Client{
+		targetURL: targetURL,
+		opts:      o,
+		dialOpts:  dialOpts,
+		closedCh:  make(chan struct{}),
+	}
 	c.closeOnce = sync.OnceValue(c.closeInternal)
 	return c, nil
 }
@@ -168,6 +178,15 @@ func (c *Client) Connect(ctx context.Context) error {
 func (c *Client) dial(ctx context.Context) (*websocket.Conn, error) {
 	dialCtx, cancel := context.WithTimeout(ctx, c.opts.dialTimeout)
 	defer cancel()
+	doneWatch := make(chan struct{})
+	defer close(doneWatch)
+	go func() {
+		select {
+		case <-c.closedCh:
+			cancel()
+		case <-doneWatch:
+		}
+	}()
 
 	conn, _, err := websocket.Dial(dialCtx, c.targetURL, c.dialOpts)
 	if err != nil {
@@ -306,6 +325,8 @@ func (c *Client) shouldRetry(
 	select {
 	case <-ctx.Done():
 		return false
+	case <-c.closedCh:
+		return false
 	case <-timer.C:
 		return !c.closed.Load()
 	}
@@ -326,12 +347,17 @@ func (c *Client) clearConn(target *websocket.Conn) {
 	_ = target.CloseNow()
 }
 
+// Stop performs a graceful close and waits for workers for cx.Stopper compatibility.
+func (c *Client) Stop(context.Context) error { return c.Close() }
+
 // Close performs a graceful RFC 6455 close handshake (StatusNormalClosure) and waits for workers.
 func (c *Client) Close() error { return c.closeOnce() }
 
 func (c *Client) closeInternal() error {
 	c.mu.Lock()
-	c.closed.Store(true)
+	if c.closed.CompareAndSwap(false, true) {
+		close(c.closedCh)
+	}
 	conn := c.conn
 	cancel := c.connCancel
 	c.conn = nil

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime/debug"
 	"slices"
 	"sync"
 )
@@ -128,6 +129,11 @@ func (c *Container) healthFlight(
 	go func() {
 		checked := make(chan error, 1)
 		go func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					checked <- fmt.Errorf("health check panic: %v\n%s", recovered, debug.Stack())
+				}
+			}()
 			checked <- checker.HealthCheck(checkCtx)
 		}()
 

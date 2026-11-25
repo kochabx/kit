@@ -18,6 +18,7 @@ import (
 const (
 	defaultModuleSize = 8
 	defaultMargin     = 4
+	maxPNGSide        = 16384
 )
 
 type options struct {
@@ -121,6 +122,9 @@ type pngWriter struct {
 }
 
 func (w *pngWriter) Write(mat qrcode.Matrix) error {
+	if w.moduleSize <= 0 || w.margin < 0 || w.margin > maxPNGSide/2 || mat.Width()+2*w.margin > maxPNGSide/w.moduleSize {
+		return errors.New("qr: output dimensions exceed maximum")
+	}
 	side := (mat.Width() + 2*w.margin) * w.moduleSize
 	img := image.NewPaletted(image.Rect(0, 0, side, side), color.Palette{color.White, color.Black})
 

@@ -133,6 +133,11 @@ func (r *KeyRing) AddHMAC(kid string, secret []byte, alg ...jwa.SignatureAlgorit
 	if len(alg) > 0 && alg[0].String() != "" {
 		selected = alg[0]
 	}
+	switch selected {
+	case jwa.HS256(), jwa.HS384(), jwa.HS512():
+	default:
+		return fmt.Errorf("jwt: algorithm %q is not an HMAC algorithm", selected)
+	}
 	return r.Add(kid, selected, slices.Clone(secret))
 }
 
@@ -144,6 +149,11 @@ func (r *KeyRing) AddRSA(kid string, priv *rsa.PrivateKey, alg ...jwa.SignatureA
 	selected := jwa.RS256()
 	if len(alg) > 0 && alg[0].String() != "" {
 		selected = alg[0]
+	}
+	switch selected {
+	case jwa.RS256(), jwa.RS384(), jwa.RS512(), jwa.PS256(), jwa.PS384(), jwa.PS512():
+	default:
+		return fmt.Errorf("jwt: algorithm %q is not an RSA algorithm", selected)
 	}
 	return r.Add(kid, selected, priv)
 }
@@ -210,7 +220,11 @@ func (r *KeyRing) PublicJWKS() (jwk.Set, error) {
 		if entry.symmetric {
 			continue
 		}
-		if err := set.AddKey(entry.verifyKey); err != nil {
+		cloned, err := entry.verifyKey.Clone()
+		if err != nil {
+			return nil, fmt.Errorf("jwt: clone public jwk %q: %w", kid, err)
+		}
+		if err := set.AddKey(cloned); err != nil {
 			return nil, fmt.Errorf("jwt: export public jwk %q: %w", kid, err)
 		}
 	}

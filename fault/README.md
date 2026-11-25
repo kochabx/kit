@@ -28,13 +28,13 @@ func getUser(id string) error {
 | 构造器 | `fault.Code` | 默认 HTTP 状态码 | 默认 gRPC Code |
 |---|---|---|---|
 | `InvalidArgument(msg)` | `INVALID_ARGUMENT` | `400` | `InvalidArgument` |
-| `BadRequest(msg)` | `BAD_REQUEST` | `400` | `InvalidArgument` |
-| `Unauthorized(msg)` | `UNAUTHORIZED` | `401` | `Unauthenticated` |
-| `Forbidden(msg)` | `FORBIDDEN` | `403` | `PermissionDenied` |
+| `BadRequest(msg)` | `INVALID_ARGUMENT` | `400` | `InvalidArgument` |
+| `Unauthorized(msg)` | `UNAUTHENTICATED` | `401` | `Unauthenticated` |
+| `Forbidden(msg)` | `PERMISSION_DENIED` | `403` | `PermissionDenied` |
 | `NotFound(msg)` | `NOT_FOUND` | `404` | `NotFound` |
-| `Conflict(msg)` | `CONFLICT` | `409` | `AlreadyExists` |
-| `UnprocessableEntity(msg)` | `UNPROCESSABLE` | `422` | `InvalidArgument` |
-| `TooManyRequests(msg)` | `RATE_LIMITED` | `429` | `ResourceExhausted` |
+| `Conflict(msg)` | `CONFLICT` | `409` | `Aborted` |
+| `UnprocessableEntity(msg)` | `INVALID_ARGUMENT` | `422` | `InvalidArgument` |
+| `TooManyRequests(msg)` | `TOO_MANY_REQUESTS` | `429` | `ResourceExhausted` |
 | `Canceled(msg)` | `CANCELED` | `499` | `Canceled` |
 | `Internal(msg)` | `INTERNAL` | `500` | `Internal` |
 | `NotImplemented(msg)` | `NOT_IMPLEMENTED` | `501` | `Unimplemented` |
@@ -48,7 +48,7 @@ func getUser(id string) error {
 ## 错误提取与 RFC 9457 Problem
 
 - `fault.From(err)`：使用 `errors.AsType[*fault.Error]` 提取领域错误；
-- `fault.CodeOf(err)` / `fault.HTTPStatusOf(err)`：自动兼容包装链中的 `*fault.Error`、`context.Canceled` 与 `context.DeadlineExceeded`；
+- `fault.CodeOf(err)` / `fault.HTTPStatusOf(err)`：提取包装链中 `*fault.Error` 的错误码与 HTTP 状态码；非 `*fault.Error` 默认映射为 `CodeInternal` / `500`，`nil` 返回 `""` / `200`；
 - `err.GRPCCode()` / `status.Error` 配合传输层映射；
 - `err.Problem(instance)`：生成脱敏后的 RFC 9457 `Problem`（故意不输出底层 `cause`，避免泄露内部实现细节）。
 

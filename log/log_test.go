@@ -686,3 +686,56 @@ func TestNonStringKeyMapRedaction(t *testing.T) {
 		t.Fatalf("expected 2 redacted passwords in JSON log, got: %s", out)
 	}
 }
+
+func TestRedactTypedNilErrorCycleAndMapDepth(t *testing.T) {
+	redactor, err := NewRedactor(FieldRule("password", MaskFull("******")))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	l := wrapHandler(
+		slog.NewJSONHandler(&buf, nil),
+		&struct {
+			loggerOptions
+			levelVar *slog.LevelVar
+		}{redactor: redactor},
+		nil,
+	)
+
+	// 1. Typed-nil error must not panic.
+	var typedNilErr *os.PathError
+	l.Error("typed nil", slog.Any("err", typedNilErr), slog.Any("password", typedNilErr))
+
+	// 2. Cyclic pointer struct must redact fields without leaking unredacted self or failing JSON marshal.
+	type node struct {
+		Password string `json:"password"`
+		Next     *node  `json:"next"`
+	}
+	n := &node{Password: "super-secret"}
+	n.Next = n
+	buf.Reset()
+	l.Info("cycle", slog.Any("node", n))
+	cycleOut := buf.String()
+	if strings.Contains(cycleOut, "super-secret") {
+		t.Fatalf("cyclic pointer leaked secret: %s", cycleOut)
+	}
+	if !strings.Contains(cycleOut, redactedCycle) {
+		t.Fatalf("expected cycle sentinel %q in output: %s", redactedCycle, cycleOut)
+	}
+
+	// 3. Nested map[string]any increments depth once per level (16 levels preserved, 17th hits MAX_DEPTH).
+	deep := map[string]any{"password": "leaf-secret"}
+	for range 15 {
+		deep = map[string]any{"nested": deep}
+	}
+	buf.Reset()
+	l.Info("deep", slog.Any("root", deep))
+	deepOut := buf.String()
+	if strings.Contains(deepOut, "leaf-secret") {
+		t.Fatalf("deep map leaked secret: %s", deepOut)
+	}
+	if strings.Contains(deepOut, redactedMaxDepth) {
+		t.Fatalf("16-level map hit max depth prematurely: %s", deepOut)
+	}
+}

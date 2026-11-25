@@ -111,15 +111,15 @@ func TestEd25519AndMLDSASignatures(t *testing.T) {
 		t.Fatalf("expected ErrSignatureMismatch, got %v", err)
 	}
 
-	sk, err := GenerateMLDSA(MLDSA65)
+	sk, err := GenerateMLDSA(MLDSA65())
 	if err != nil {
 		t.Fatalf("GenerateMLDSA failed: %v", err)
 	}
-	parsedSK, err := ParseMLDSAPrivateKey(MLDSA65, sk.Bytes())
+	parsedSK, err := ParseMLDSAPrivateKey(MLDSA65(), sk.Bytes())
 	if err != nil {
 		t.Fatalf("ParseMLDSAPrivateKey failed: %v", err)
 	}
-	parsedPK, err := ParseMLDSAPublicKey(MLDSA65, sk.PublicKey().Bytes())
+	parsedPK, err := ParseMLDSAPublicKey(MLDSA65(), sk.PublicKey().Bytes())
 	if err != nil {
 		t.Fatalf("ParseMLDSAPublicKey failed: %v", err)
 	}

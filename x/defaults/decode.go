@@ -25,11 +25,9 @@ type builtinDecoder struct {
 }
 
 var (
-	timeLocType    = reflect.TypeFor[time.Location]()
-	timeLocPtrType = reflect.TypeFor[*time.Location]()
-	regexpType     = reflect.TypeFor[regexp.Regexp]()
-	regexpPtrType  = reflect.TypeFor[*regexp.Regexp]()
-	bytesType      = reflect.TypeFor[[]byte]()
+	timeLocType = reflect.TypeFor[time.Location]()
+	regexpType  = reflect.TypeFor[regexp.Regexp]()
+	bytesType   = reflect.TypeFor[[]byte]()
 )
 
 func newBuiltinDecoder(layouts []string, custom map[reflect.Type]customDecoderFunc) *builtinDecoder {
@@ -138,6 +136,10 @@ func (d *builtinDecoder) decode(value reflect.Value, raw string, cached reflect.
 		value.Set(pv)
 		return false, nil
 	}
+	if cached.IsValid() && len(d.custom) == 0 && value.Kind() != reflect.Pointer {
+		value.Set(cached)
+		return false, nil
+	}
 	if parse, ok := d.parsers[typ]; ok {
 		return false, parse(value, raw)
 	}
@@ -153,11 +155,6 @@ func (d *builtinDecoder) decode(value reflect.Value, raw string, cached reflect.
 		}
 		value.Set(decoded)
 		return comp, nil
-	}
-
-	if cached.IsValid() && len(d.custom) == 0 {
-		value.Set(cached)
-		return false, nil
 	}
 
 	if typ == bytesType {

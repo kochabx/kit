@@ -82,15 +82,33 @@ func WithHealthServer(enabled bool) Option {
 }
 
 func WithServerOptions(opts ...grpc.ServerOption) Option {
-	return func(o *options) { o.serverOpts = append(o.serverOpts, opts...) }
+	return func(o *options) {
+		for _, opt := range opts {
+			if opt != nil {
+				o.serverOpts = append(o.serverOpts, opt)
+			}
+		}
+	}
 }
 
 func WithUnaryInterceptor(ints ...grpc.UnaryServerInterceptor) Option {
-	return func(o *options) { o.unaryInts = append(o.unaryInts, ints...) }
+	return func(o *options) {
+		for _, in := range ints {
+			if in != nil {
+				o.unaryInts = append(o.unaryInts, in)
+			}
+		}
+	}
 }
 
 func WithStreamInterceptor(ints ...grpc.StreamServerInterceptor) Option {
-	return func(o *options) { o.streamInts = append(o.streamInts, ints...) }
+	return func(o *options) {
+		for _, in := range ints {
+			if in != nil {
+				o.streamInts = append(o.streamInts, in)
+			}
+		}
+	}
 }
 
 func WithShutdownTimeout(timeout time.Duration) Option {
@@ -155,14 +173,14 @@ func NewServer(opts ...Option) *Server {
 	})
 
 	unary := append([]grpc.UnaryServerInterceptor{
-		recovery.UnaryServerInterceptor(recHandler),
 		logging.UnaryServerInterceptor(logAdapter),
+		recovery.UnaryServerInterceptor(recHandler),
 		faultUnaryInterceptor(),
 	}, o.unaryInts...)
 
 	stream := append([]grpc.StreamServerInterceptor{
-		recovery.StreamServerInterceptor(recHandler),
 		logging.StreamServerInterceptor(logAdapter),
+		recovery.StreamServerInterceptor(recHandler),
 		faultStreamInterceptor(),
 	}, o.streamInts...)
 
@@ -276,6 +294,7 @@ func (s *Server) Stop(ctx context.Context) error {
 		s.mu.Lock()
 		if s.state == serverFailed {
 			s.state = serverClosed
+			s.serveErr = nil
 		}
 		s.mu.Unlock()
 		return nil
@@ -308,6 +327,7 @@ func (s *Server) Stop(ctx context.Context) error {
 
 	s.mu.Lock()
 	s.state = serverClosed
+	s.serveErr = nil
 	s.mu.Unlock()
 	return ctxErr
 }
@@ -321,11 +341,6 @@ func (s *Server) Run(ctx context.Context) error {
 	select {
 	case err := <-serveErr:
 		s.wg.Wait()
-		s.mu.Lock()
-		if s.state == serverRunning {
-			s.state = serverClosed
-		}
-		s.mu.Unlock()
 		return err
 	case <-ctx.Done():
 		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.shutdownTimeout)
@@ -358,11 +373,14 @@ func (s *Server) Done() <-chan struct{} {
 	return s.done
 }
 
-// Err returns the unexpected Serve error if Serve exited with a failure.
+// Err returns the unexpected Serve error if Serve failed.
 func (s *Server) Err() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.serveErr
+	if s.state == serverFailed {
+		return s.serveErr
+	}
+	return nil
 }
 
 func faultUnaryInterceptor() grpc.UnaryServerInterceptor {

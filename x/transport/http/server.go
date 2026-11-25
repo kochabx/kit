@@ -22,6 +22,7 @@ type serverOptions struct {
 	readTimeout     time.Duration
 	writeTimeout    time.Duration
 	idleTimeout     time.Duration
+	shutdownTimeout time.Duration
 	tlsConfig       *tls.Config
 	tlsCertFile     string
 	tlsKeyFile      string
@@ -105,9 +106,20 @@ func WithOTel(serviceName string) ServerOption {
 func WithHealthEndpoint(path string, c *cx.Container) ServerOption {
 	return func(o *serverOptions) {
 		if path != "" {
+			if path[0] != '/' {
+				path = "/" + path
+			}
 			o.healthPath = path
 		}
 		o.healthContainer = c
+	}
+}
+
+func WithShutdownTimeout(timeout time.Duration) ServerOption {
+	return func(o *serverOptions) {
+		if timeout > 0 {
+			o.shutdownTimeout = timeout
+		}
 	}
 }
 
@@ -143,12 +155,13 @@ func NewServer(handler http.Handler, opts ...ServerOption) *Server {
 		handler = http.NotFoundHandler()
 	}
 	o := serverOptions{
-		addr:         ":8080",
-		name:         "http",
-		readTimeout:  10 * time.Second,
-		writeTimeout: 30 * time.Second,
-		idleTimeout:  60 * time.Second,
-		logger:       slog.New(slog.DiscardHandler),
+		addr:            ":8080",
+		name:            "http",
+		readTimeout:     10 * time.Second,
+		writeTimeout:    30 * time.Second,
+		idleTimeout:     60 * time.Second,
+		shutdownTimeout: 30 * time.Second,
+		logger:          slog.New(slog.DiscardHandler),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -322,6 +335,22 @@ func (s *Server) Stop(ctx context.Context) error {
 	s.serveErr = nil
 	s.mu.Unlock()
 	return nil
+}
+
+// Run starts the server and blocks until ctx is canceled or Serve exits.
+func (s *Server) Run(ctx context.Context) error {
+	if err := s.Start(ctx); err != nil {
+		return err
+	}
+	select {
+	case <-s.Done():
+		return s.Err()
+	case <-ctx.Done():
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.shutdownTimeout)
+		defer cancel()
+		_ = s.Stop(stopCtx)
+		return ctx.Err()
+	}
 }
 
 // HealthCheck reports whether the server is actively listening.

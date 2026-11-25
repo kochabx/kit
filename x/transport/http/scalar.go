@@ -56,6 +56,8 @@ func mountOpenAPI(mux *http.ServeMux, cfg OpenAPIConfig) {
 		} else {
 			specPath = "/openapi.json"
 		}
+	} else if specPath[0] != '/' {
+		specPath = "/" + specPath
 	}
 	uiPath := normalizePrefix(cmp.Or(cfg.UIPath, "/docs"))
 	contentType := "application/json; charset=utf-8"
@@ -101,6 +103,9 @@ func isYAMLSpec(specPath string, spec []byte) bool {
 
 func normalizePrefix(p string) string {
 	p, _, _ = strings.Cut(p, "/*")
+	if p == "" || p[0] != '/' {
+		p = "/" + p
+	}
 	if !strings.HasSuffix(p, "/") {
 		p += "/"
 	}

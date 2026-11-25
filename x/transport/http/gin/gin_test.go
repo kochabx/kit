@@ -90,3 +90,20 @@ func TestAdaptBridgedWriterFlushCommitsBufferedStatus(t *testing.T) {
 		t.Fatalf("Flush after c.Status(202) = code:%d flushed:%v, want 202 and flushed=true", rec.Code, rec.Flushed)
 	}
 }
+
+func TestAdaptPanicAfterStatusDoesNotBypassRecovery(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.Use(Adapt(kithttp.Recovery(slog.New(slog.DiscardHandler))))
+	r.GET("/panic-after-status", func(c *gin.Context) {
+		c.Status(http.StatusCreated)
+		panic("gin boom")
+	})
+
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/panic-after-status", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 from Recovery after panic following c.Status(201), got %d (%s)", rec.Code, rec.Body.String())
+	}
+}

@@ -133,3 +133,41 @@ func TestNewWithWrappedDefaultTransport(t *testing.T) {
 		t.Fatal("expected error when applying WithTLSConfig to non-*http.Transport DefaultTransport")
 	}
 }
+
+func TestCloseInterruptsReconnectBackoffImmediately(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	srv.Close()
+
+	c, err := New(
+		wsURL,
+		WithDialTimeout(200*time.Millisecond),
+		WithReconnect(true, 10*time.Second, 10*time.Second, 5),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range c.Messages(t.Context()) {
+		}
+	}()
+
+	time.Sleep(25 * time.Millisecond)
+	start := time.Now()
+	if err := c.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not interrupt 10s reconnect backoff")
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Fatalf("Close took %v to interrupt reconnect backoff", elapsed)
+	}
+}

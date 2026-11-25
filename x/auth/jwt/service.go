@@ -190,7 +190,7 @@ func (s *Service) Issue(ctx context.Context, subject, deviceID string, extra map
 			ExpiresAtMs:  refreshExp.UnixMilli(),
 		}
 		if err := s.store.Create(ctx, session, s.maxSessions); err != nil {
-			if f, ok := errors.AsType[*fault.Error](err); ok {
+			if f, ok := fault.From(err); ok {
 				return TokenPair{}, f
 			}
 			return TokenPair{}, fault.Internal("failed to persist session").WithCause(err)
@@ -220,6 +220,7 @@ func (s *Service) Verify(ctx context.Context, tokenStr string, expectedKind Toke
 		jwxjwt.WithKeySet(verifySet, jws.WithRequireKid(true)),
 		jwxjwt.WithClock(jwxjwt.ClockFunc(s.clock)),
 		jwxjwt.WithAcceptableSkew(s.leeway),
+		jwxjwt.WithRequiredClaim(jwxjwt.ExpirationKey),
 	}
 	if s.issuer != "" {
 		parseOpts = append(parseOpts, jwxjwt.WithIssuer(s.issuer))
@@ -255,10 +256,13 @@ func (s *Service) Verify(ctx context.Context, tokenStr string, expectedKind Toke
 	if s.store != nil {
 		revoked, err := s.store.IsRevoked(ctx, subject, jti, sessionID)
 		if err != nil {
+			if f, ok := fault.From(err); ok {
+				return nil, f
+			}
 			return nil, fault.Internal("failed to check session revocation").WithCause(err)
 		}
 		if revoked {
-			return nil, fault.Unauthorized("token has been revoked")
+			return nil, ErrSessionRevoked
 		}
 	}
 
@@ -326,7 +330,13 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (TokenPair, 
 			Now:           now,
 			ExpiresAt:     refreshExp,
 		}); err != nil {
-			if f, ok := errors.AsType[*fault.Error](err); ok {
+			if errors.Is(err, ErrRefreshReused) {
+				s.logger.WarnContext(ctx, "refresh token reuse detected",
+					slog.String("subject", claims.Subject),
+					slog.String("session_id", claims.SessionID),
+				)
+			}
+			if f, ok := fault.From(err); ok {
 				return TokenPair{}, f
 			}
 			return TokenPair{}, fault.Unauthorized("refresh session failed").WithCause(err)

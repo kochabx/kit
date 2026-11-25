@@ -34,25 +34,40 @@ func VerifyEd25519(pub ed25519.PublicKey, message, signature []byte) error {
 // MLDSAParameters identifies a NIST FIPS 204 ML-DSA parameter set.
 type MLDSAParameters = mldsa.Parameters
 
-var (
-	MLDSA44 = mldsa.MLDSA44()
-	MLDSA65 = mldsa.MLDSA65()
-	MLDSA87 = mldsa.MLDSA87()
-)
+// MLDSA44 returns NIST FIPS 204 ML-DSA-44 parameters.
+func MLDSA44() MLDSAParameters { return mldsa.MLDSA44() }
 
-// GenerateMLDSA generates a FIPS 204 ML-DSA key pair for params (e.g. MLDSA65).
+// MLDSA65 returns NIST FIPS 204 ML-DSA-65 parameters.
+func MLDSA65() MLDSAParameters { return mldsa.MLDSA65() }
+
+// MLDSA87 returns NIST FIPS 204 ML-DSA-87 parameters.
+func MLDSA87() MLDSAParameters { return mldsa.MLDSA87() }
+
+// GenerateMLDSA generates a FIPS 204 ML-DSA key pair for params (e.g. MLDSA65()).
 func GenerateMLDSA(params MLDSAParameters) (*mldsa.PrivateKey, error) {
-	return mldsa.GenerateKey(params)
+	priv, err := mldsa.GenerateKey(params)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+	return priv, nil
 }
 
 // ParseMLDSAPrivateKey reconstructs an ML-DSA private key from its 32-byte seed.
 func ParseMLDSAPrivateKey(params MLDSAParameters, seed []byte) (*mldsa.PrivateKey, error) {
-	return mldsa.NewPrivateKey(params, seed)
+	priv, err := mldsa.NewPrivateKey(params, seed)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+	return priv, nil
 }
 
 // ParseMLDSAPublicKey reconstructs an ML-DSA public key from encoded bytes.
 func ParseMLDSAPublicKey(params MLDSAParameters, raw []byte) (*mldsa.PublicKey, error) {
-	return mldsa.NewPublicKey(params, raw)
+	pub, err := mldsa.NewPublicKey(params, raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+	}
+	return pub, nil
 }
 
 // SignMLDSA signs message with optional domain-separation context string (<= 255 bytes).
